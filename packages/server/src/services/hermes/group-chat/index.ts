@@ -499,6 +499,75 @@ class ChatStorage {
             'UPDATE gc_room_members SET updatedAt = ? WHERE roomId = ? AND userId = ?'
         ).run(Date.now(), roomId, userId)
     }
+
+    // ─── Workspace Layouts ─────────────────────────────────────
+    getWorkspaceLayout(roomId: string): Array<{ agentId: string; x: number; y: number; zone: string }> {
+        return (this.db()?.prepare(
+            'SELECT agentId, x, y, zone FROM gc_workspace_layouts WHERE roomId = ?'
+        ).all(roomId) || []) as any[]
+    }
+
+    saveWorkspaceLayout(roomId: string, layout: Array<{ agentId: string; x: number; y: number; zone: string }>): void {
+        const db = this.db()
+        if (!db) return
+        const now = Date.now()
+        const del = db.prepare('DELETE FROM gc_workspace_layouts WHERE roomId = ?')
+        const ins = db.prepare('INSERT INTO gc_workspace_layouts (id, roomId, agentId, x, y, zone, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        db.exec('BEGIN')
+        try {
+            del.run(roomId)
+            for (const item of layout) {
+                ins.run(`${roomId}:${item.agentId}`, roomId, item.agentId, item.x, item.y, item.zone, now)
+            }
+            db.exec('COMMIT')
+        } catch (error) {
+            db.exec('ROLLBACK')
+            throw error
+        }
+    }
+
+    // ─── Tasks ─────────────────────────────────────────────────
+    getTasks(roomId: string): Array<{ id: string; roomId: string; title: string; description: string; status: string; phase: string; assigneeAgentId: string | null; createdAt: number; updatedAt: number }> {
+        return (this.db()?.prepare(
+            'SELECT * FROM gc_tasks WHERE roomId = ? ORDER BY createdAt DESC'
+        ).all(roomId) || []) as any[]
+    }
+
+    createTask(roomId: string, title: string, description: string, assigneeAgentId?: string): { id: string; roomId: string; title: string; description: string; status: string; phase: string; assigneeAgentId: string | null; createdAt: number; updatedAt: number } {
+        const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+        const now = Date.now()
+        this.db()?.prepare(
+            'INSERT INTO gc_tasks (id, roomId, title, description, status, phase, assigneeAgentId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(id, roomId, title, description || '', 'draft', 'requirement', assigneeAgentId || null, now, now)
+        return { id, roomId, title, description: description || '', status: 'draft', phase: 'requirement', assigneeAgentId: assigneeAgentId || null, createdAt: now, updatedAt: now }
+    }
+
+    updateTask(taskId: string, patch: { title?: string; description?: string; status?: string; phase?: string; assigneeAgentId?: string }): void {
+        const sets: string[] = ['updatedAt = ?']
+        const vals: any[] = [Date.now()]
+        if (patch.title !== undefined) { sets.push('title = ?'); vals.push(patch.title) }
+        if (patch.description !== undefined) { sets.push('description = ?'); vals.push(patch.description) }
+        if (patch.status !== undefined) { sets.push('status = ?'); vals.push(patch.status) }
+        if (patch.phase !== undefined) { sets.push('phase = ?'); vals.push(patch.phase) }
+        if (patch.assigneeAgentId !== undefined) { sets.push('assigneeAgentId = ?'); vals.push(patch.assigneeAgentId) }
+        vals.push(taskId)
+        this.db()?.prepare(`UPDATE gc_tasks SET ${sets.join(', ')} WHERE id = ?`).run(...vals)
+    }
+
+    // ─── Artifacts ─────────────────────────────────────────────
+    getArtifacts(roomId: string): Array<{ id: string; roomId: string; taskId: string | null; agentId: string | null; name: string; type: string; path: string | null; contentPreview: string | null; createdAt: number }> {
+        return (this.db()?.prepare(
+            'SELECT * FROM gc_artifacts WHERE roomId = ? ORDER BY createdAt DESC'
+        ).all(roomId) || []) as any[]
+    }
+
+    createArtifact(roomId: string, name: string, type: string, opts?: { taskId?: string; agentId?: string; path?: string; contentPreview?: string }): { id: string } {
+        const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+        this.db()?.prepare(
+            'INSERT INTO gc_artifacts (id, roomId, taskId, agentId, name, type, path, contentPreview, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(id, roomId, opts?.taskId || null, opts?.agentId || null, name, type, opts?.path || null, opts?.contentPreview || null, Date.now())
+        return { id }
+    }
 }
 
 export async function drainPendingSessionDeletes(profileName: string): Promise<PendingSessionDeleteDrainResult> {
@@ -619,6 +688,7 @@ export class GroupChatServer {
         })
         this.agentClients.setContextEngine(contextEngine)
         this.agentClients.setStorage(this.storage)
+        this.agentClients.setIO(this.io)
         this._contextEngine = contextEngine
 
         // Restore agent connections — call restoreAgents() after server is listening

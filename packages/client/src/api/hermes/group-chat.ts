@@ -213,3 +213,79 @@ export async function putAgentOverride(roomId: string, agentId: string, override
     return res.override
 }
 
+// ─── Workspace API ──────────────────────────────────────────
+
+export interface WorkspaceLayoutItem {
+    agentId: string
+    x: number
+    y: number
+    zone: string
+}
+
+export interface GroupTask {
+    id: string
+    roomId: string
+    title: string
+    description: string
+    status: 'draft' | 'planning' | 'running' | 'reviewing' | 'done' | 'failed'
+    phase: 'requirement' | 'planning' | 'execution' | 'review' | 'delivery'
+    assigneeAgentId: string | null
+    createdAt: number
+    updatedAt: number
+}
+
+export interface GroupArtifact {
+    id: string
+    roomId: string
+    taskId: string | null
+    agentId: string | null
+    name: string
+    type: string
+    path: string | null
+    contentPreview: string | null
+    createdAt: number
+}
+
+export interface WorkspaceState {
+    layout: WorkspaceLayoutItem[]
+    tasks: GroupTask[]
+    artifacts: GroupArtifact[]
+}
+
+export async function getWorkspaceState(roomId: string): Promise<WorkspaceState> {
+    return request(`/api/hermes/group-chat/rooms/${roomId}/workspace`)
+}
+
+export async function updateWorkspaceLayout(roomId: string, layout: WorkspaceLayoutItem[]): Promise<void> {
+    await request(`/api/hermes/group-chat/rooms/${roomId}/workspace/layout`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ layout }),
+    })
+}
+
+export async function createGroupTask(roomId: string, data: {
+    title: string
+    description?: string
+    assigneeAgentId?: string
+}): Promise<{ task: GroupTask }> {
+    return request(`/api/hermes/group-chat/rooms/${roomId}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    })
+}
+
+export async function updateGroupTask(roomId: string, taskId: string, patch: {
+    title?: string
+    description?: string
+    status?: string
+    phase?: string
+    assigneeAgentId?: string
+}): Promise<void> {
+    await request(`/api/hermes/group-chat/rooms/${roomId}/tasks/${taskId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+    })
+}

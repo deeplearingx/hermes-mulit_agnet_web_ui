@@ -190,6 +190,43 @@ export const GC_SESSION_PROFILES_SCHEMA: Record<string, string> = {
   created_at: 'INTEGER NOT NULL',
 }
 
+export const GC_WORKSPACE_LAYOUTS_TABLE = 'gc_workspace_layouts'
+export const GC_WORKSPACE_LAYOUTS_SCHEMA: Record<string, string> = {
+  id: 'TEXT PRIMARY KEY',
+  roomId: 'TEXT NOT NULL',
+  agentId: 'TEXT NOT NULL',
+  x: 'INTEGER NOT NULL DEFAULT 0',
+  y: 'INTEGER NOT NULL DEFAULT 0',
+  zone: "TEXT NOT NULL DEFAULT 'coding'",
+  updatedAt: 'INTEGER NOT NULL',
+}
+
+export const GC_TASKS_TABLE = 'gc_tasks'
+export const GC_TASKS_SCHEMA: Record<string, string> = {
+  id: 'TEXT PRIMARY KEY',
+  roomId: 'TEXT NOT NULL',
+  title: 'TEXT NOT NULL',
+  description: "TEXT NOT NULL DEFAULT ''",
+  status: "TEXT NOT NULL DEFAULT 'draft'",
+  phase: "TEXT NOT NULL DEFAULT 'requirement'",
+  assigneeAgentId: 'TEXT',
+  createdAt: 'INTEGER NOT NULL',
+  updatedAt: 'INTEGER NOT NULL',
+}
+
+export const GC_ARTIFACTS_TABLE = 'gc_artifacts'
+export const GC_ARTIFACTS_SCHEMA: Record<string, string> = {
+  id: 'TEXT PRIMARY KEY',
+  roomId: 'TEXT NOT NULL',
+  taskId: 'TEXT',
+  agentId: 'TEXT',
+  name: 'TEXT NOT NULL',
+  type: 'TEXT NOT NULL',
+  path: 'TEXT',
+  contentPreview: 'TEXT',
+  createdAt: 'INTEGER NOT NULL',
+}
+
 // ============================================================================
 // Unified Initializer
 // ============================================================================
@@ -351,6 +388,11 @@ export function initAllHermesTables(): void {
   // Create without PK first, then add PK constraint
   ensureTable(GC_ROOM_AGENTS_TABLE, GC_ROOM_AGENTS_SCHEMA)
   ensureTable(GC_ROOM_MEMBERS_TABLE, GC_ROOM_MEMBERS_SCHEMA)
+
+  // Workspace tables
+  ensureTable(GC_WORKSPACE_LAYOUTS_TABLE, GC_WORKSPACE_LAYOUTS_SCHEMA)
+  ensureTable(GC_TASKS_TABLE, GC_TASKS_SCHEMA)
+  ensureTable(GC_ARTIFACTS_TABLE, GC_ARTIFACTS_SCHEMA)
 
   // Add composite primary keys (SQLite doesn't support ADD PK, so we recreate if needed)
   try {

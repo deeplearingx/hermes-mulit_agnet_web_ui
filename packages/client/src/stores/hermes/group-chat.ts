@@ -11,6 +11,9 @@ import {
     type ChatMessage,
     type MemberInfo,
     type AgentOverride,
+    type WorkspaceLayoutItem,
+    type GroupTask,
+    type GroupArtifact,
     createRoom,
     listRooms,
     getRoomDetail,
@@ -21,7 +24,21 @@ import {
     deleteRoom as deleteRoomApi,
     getAgentOverride,
     putAgentOverride,
+    getWorkspaceState,
+    updateWorkspaceLayout,
+    createGroupTask,
+    updateGroupTask,
 } from '@/api/hermes/group-chat'
+
+export interface GroupRuntimeEvent {
+    id: string
+    roomId: string
+    agentId: string
+    agentName: string
+    type: 'run_started' | 'context_compressing' | 'replying' | 'tool_call' | 'run_completed' | 'run_failed'
+    payload: Record<string, any>
+    timestamp: number
+}
 
 export const useGroupChatStore = defineStore('groupChat', () => {
     // ─── State ─────────────────────────────────────────────
@@ -36,6 +53,11 @@ export const useGroupChatStore = defineStore('groupChat', () => {
     const error = ref<string | null>(null)
     const typingUsers = ref<Map<string, { name: string; timer: ReturnType<typeof setTimeout> }>>(new Map())
     const contextStatuses = ref<Map<string, { agentName: string; status: string }>>(new Map())
+    const workspaceLayout = ref<WorkspaceLayoutItem[]>([])
+    const tasks = ref<GroupTask[]>([])
+    const artifacts = ref<GroupArtifact[]>([])
+    const liveEvents = ref<GroupRuntimeEvent[]>([])
+    const maxLiveEvents = 100
 
     // Computed: returns first active status for backward compat
     const contextStatus = computed(() => {
@@ -142,6 +164,16 @@ export const useGroupChatStore = defineStore('groupChat', () => {
             const room = rooms.value.find(r => r.id === data.roomId)
             if (room) room.totalTokens = data.totalTokens
         })
+
+        socket.on('agent_event', (event: GroupRuntimeEvent) => {
+            if (event.roomId === currentRoomId.value) {
+                liveEvents.value.unshift(event)
+                // Keep only last N events
+                if (liveEvents.value.length > maxLiveEvents) {
+                    liveEvents.value = liveEvents.value.slice(0, maxLiveEvents)
+                }
+            }
+        })
     }
 
     function disconnect() {
@@ -154,6 +186,10 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         roomName.value = ''
         typingUsers.value.clear()
         contextStatuses.value.clear()
+        workspaceLayout.value = []
+        tasks.value = []
+        artifacts.value = []
+        liveEvents.value = []
     }
 
     function setUserInfo(name: string, description: string) {
@@ -211,6 +247,13 @@ export const useGroupChatStore = defineStore('groupChat', () => {
                 })
             })
         }
+
+        // Load workspace data (optional, non-blocking)
+        getWorkspaceState(roomId).then(ws => {
+            workspaceLayout.value = ws.layout
+            tasks.value = ws.tasks
+            artifacts.value = ws.artifacts
+        }).catch(() => { /* workspace data is optional */ })
     }
 
     async function sendMessage(content: string) {
@@ -321,6 +364,29 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         return putAgentOverride(roomId, agentId, override)
     }
 
+    // ─── Workspace Actions ──────────────────────────────────
+    async function saveWorkspaceLayout(layout: WorkspaceLayoutItem[]) {
+        if (!currentRoomId.value) return
+        workspaceLayout.value = layout
+        await updateWorkspaceLayout(currentRoomId.value, layout)
+    }
+
+    async function addTask(title: string, description?: string, assigneeAgentId?: string) {
+        if (!currentRoomId.value) return
+        const res = await createGroupTask(currentRoomId.value, { title, description, assigneeAgentId })
+        tasks.value.unshift(res.task)
+        return res.task
+    }
+
+    async function patchTask(taskId: string, patch: Parameters<typeof updateGroupTask>[2]) {
+        if (!currentRoomId.value) return
+        await updateGroupTask(currentRoomId.value, taskId, patch)
+        const idx = tasks.value.findIndex(t => t.id === taskId)
+        if (idx >= 0) {
+            tasks.value[idx] = { ...tasks.value[idx], ...patch, updatedAt: Date.now() } as GroupTask
+        }
+    }
+
     // ─── Typing ────────────────────────────────────────────
     let _typingTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -352,6 +418,10 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         error,
         contextStatus,
         contextStatuses,
+        workspaceLayout,
+        tasks,
+        artifacts,
+        liveEvents,
         userId,
         userName,
         // Computed
@@ -376,5 +446,8 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         removeAgentFromRoom,
         loadAgentOverride,
         saveAgentOverride,
+        saveWorkspaceLayout,
+        addTask,
+        patchTask,
     }
 })

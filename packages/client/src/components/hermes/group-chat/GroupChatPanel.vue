@@ -9,12 +9,14 @@ import { updateRoomConfig, forceCompress, type RoomAgent } from '@/api/hermes/gr
 import GroupMessageList from './GroupMessageList.vue'
 import GroupChatInput from './GroupChatInput.vue'
 import AgentSettingsModal from './AgentSettingsModal.vue'
+import WorkspaceMain from './workspace/WorkspaceMain.vue'
 
 const { t } = useI18n()
 const message = useMessage()
 const store = useGroupChatStore()
 const profilesStore = useProfilesStore()
 
+const viewMode = ref<'chat' | 'workspace'>('chat')
 const showSidebar = ref(true)
 const showCreateModal = ref(false)
 const showAddAgentModal = ref(false)
@@ -235,6 +237,17 @@ watch(() => store.sortedMessages.length, async () => {
                 </button>
                 <span class="room-title-text">{{ store.roomName || (store.currentRoomId || t('groupChat.title')) }}</span>
                 <div class="header-info">
+                    <!-- View mode toggle -->
+                    <button
+                        v-if="hasRoom"
+                        class="icon-btn view-mode-btn"
+                        :class="{ active: viewMode === 'workspace' }"
+                        :title="viewMode === 'chat' ? '切换到工作台' : '切换到聊天'"
+                        @click="viewMode = viewMode === 'chat' ? 'workspace' : 'chat'"
+                    >
+                        <span v-if="viewMode === 'chat'">🖥️</span>
+                        <span v-else>💬</span>
+                    </button>
                     <!-- Stacked avatars (user + agents) -->
                     <NPopover v-if="store.agents.length" trigger="click" placement="bottom-end" :width="220">
                         <template #trigger>
@@ -298,29 +311,45 @@ watch(() => store.sortedMessages.length, async () => {
             </div>
 
             <template v-if="hasRoom">
-                <GroupMessageList ref="messageListRef" />
-                <div v-if="store.contextStatuses.size > 0 || (store.typingText && store.contextStatuses.size === 0)" class="status-bar">
-                    <div v-if="store.contextStatuses.size > 0" class="context-status-list">
-                        <div v-for="[name, status] in store.contextStatuses" :key="name" class="context-status">
+                <!-- Workspace mode -->
+                <WorkspaceMain
+                    v-if="viewMode === 'workspace'"
+                    :room-id="store.currentRoomId!"
+                    :agents="store.agents"
+                    :members="store.members"
+                    :messages="store.sortedMessages"
+                    :context-statuses="store.contextStatuses"
+                    :typing-names="store.typingNames"
+                    :tasks="store.tasks"
+                    :artifacts="store.artifacts"
+                    :live-events="store.liveEvents"
+                />
+                <!-- Chat mode -->
+                <template v-else>
+                    <GroupMessageList ref="messageListRef" />
+                    <div v-if="store.contextStatuses.size > 0 || (store.typingText && store.contextStatuses.size === 0)" class="status-bar">
+                        <div v-if="store.contextStatuses.size > 0" class="context-status-list">
+                            <div v-for="[name, status] in store.contextStatuses" :key="name" class="context-status">
+                                <span class="typing-dots">
+                                    <span /><span /><span />
+                                </span>
+                                <span v-if="status.status === 'compressing'">
+                                    @{{ status.agentName }} {{ t('groupChat.agentCompressing') }}
+                                </span>
+                                <span v-else>
+                                    @{{ status.agentName }} {{ t('groupChat.agentReplying') }}
+                                </span>
+                            </div>
+                        </div>
+                        <div v-else-if="store.typingText" class="typing-indicator">
                             <span class="typing-dots">
                                 <span /><span /><span />
                             </span>
-                            <span v-if="status.status === 'compressing'">
-                                @{{ status.agentName }} {{ t('groupChat.agentCompressing') }}
-                            </span>
-                            <span v-else>
-                                @{{ status.agentName }} {{ t('groupChat.agentReplying') }}
-                            </span>
+                            {{ store.typingText }}
                         </div>
                     </div>
-                    <div v-else-if="store.typingText" class="typing-indicator">
-                        <span class="typing-dots">
-                            <span /><span /><span />
-                        </span>
-                        {{ store.typingText }}
-                    </div>
-                </div>
-                <GroupChatInput @send="handleSendMessage" />
+                    <GroupChatInput @send="handleSendMessage" />
+                </template>
             </template>
 
             <div v-else class="no-room">
@@ -866,6 +895,15 @@ export default defineComponent({ components: { CreateRoomForm } })
     }
 }
 
+.view-mode-btn {
+    font-size: 16px;
+    line-height: 1;
+
+    &.active {
+        background-color: rgba(var(--accent-primary-rgb), 0.15);
+        color: $text-primary;
+    }
+}
 .modal-backdrop {
     position: fixed;
     inset: 0;

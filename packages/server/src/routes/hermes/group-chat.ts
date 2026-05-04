@@ -297,3 +297,45 @@ groupChatRoutes.post('/api/hermes/group-chat/rooms/:roomId/compress', async (ctx
         ctx.body = { error: err.message }
     }
 })
+
+// ─── Workspace API ──────────────────────────────────────────
+groupChatRoutes.get('/api/hermes/group-chat/rooms/:roomId/workspace', async (ctx) => {
+    if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }
+    const roomId = ctx.params.roomId
+    const storage = chatServer.getStorage()
+    ctx.body = {
+        layout: storage.getWorkspaceLayout(roomId),
+        tasks: storage.getTasks(roomId),
+        artifacts: storage.getArtifacts(roomId),
+    }
+})
+
+groupChatRoutes.put('/api/hermes/group-chat/rooms/:roomId/workspace/layout', async (ctx) => {
+    if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }
+    const roomId = ctx.params.roomId
+    const { layout } = ctx.request.body as { layout: Array<{ agentId: string; x: number; y: number; zone: string }> }
+    const storage = chatServer.getStorage()
+    storage.saveWorkspaceLayout(roomId, layout)
+    // Broadcast to room
+    chatServer.getIO().of('/group-chat').to(roomId).emit('workspace_updated', { roomId, layout })
+    ctx.body = { success: true }
+})
+
+groupChatRoutes.post('/api/hermes/group-chat/rooms/:roomId/tasks', async (ctx) => {
+    if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }
+    const roomId = ctx.params.roomId
+    const { title, description, assigneeAgentId } = ctx.request.body as { title: string; description?: string; assigneeAgentId?: string }
+    if (!title) { ctx.status = 400; ctx.body = { error: 'title is required' }; return }
+    const storage = chatServer.getStorage()
+    const task = storage.createTask(roomId, title, description || '', assigneeAgentId)
+    ctx.body = { task }
+})
+
+groupChatRoutes.put('/api/hermes/group-chat/rooms/:roomId/tasks/:taskId', async (ctx) => {
+    if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }
+    const { taskId } = ctx.params
+    const patch = ctx.request.body as { title?: string; description?: string; status?: string; phase?: string; assigneeAgentId?: string }
+    const storage = chatServer.getStorage()
+    storage.updateTask(taskId, patch)
+    ctx.body = { success: true }
+})

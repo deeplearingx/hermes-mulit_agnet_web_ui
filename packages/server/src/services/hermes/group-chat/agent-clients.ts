@@ -1,4 +1,5 @@
 import { io, Socket } from 'socket.io-client'
+import type { Server } from 'socket.io'
 import { EventSource } from 'eventsource'
 import { getToken } from '../../../services/auth'
 import type { GatewayManager } from '../gateway-manager'
@@ -46,12 +47,23 @@ interface JoinResult {
     rooms: string[]
 }
 
+export interface GroupRuntimeEvent {
+    id: string
+    roomId: string
+    agentId: string
+    agentName: string
+    type: 'run_started' | 'context_compressing' | 'replying' | 'tool_call' | 'run_completed' | 'run_failed'
+    payload: Record<string, any>
+    timestamp: number
+}
+
 export interface AgentEventHandler {
     onMessage?: (data: { roomId: string; msg: MessageData }) => void
     onTyping?: (data: { roomId: string; userId: string; userName: string }) => void
     onStopTyping?: (data: { roomId: string; userId: string; userName: string }) => void
     onMemberJoined?: (data: { roomId: string; memberId: string; memberName: string; members: MemberData[] }) => void
     onMemberLeft?: (data: { roomId: string; memberId: string; memberName: string; members: MemberData[] }) => void
+    onRuntimeEvent?: (event: GroupRuntimeEvent) => void
 }
 
 // ─── Agent Client (single connection) ─────────────────────────
@@ -187,6 +199,19 @@ class AgentClient {
         this.socket!.emit('context_status', { roomId, agentName: this.name, status })
     }
 
+    private emitRuntimeEvent(roomId: string, type: GroupRuntimeEvent['type'], payload: Record<string, any> = {}): void {
+        const event: GroupRuntimeEvent = {
+            id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+            roomId,
+            agentId: this.agentId,
+            agentName: this.name,
+            type,
+            payload,
+            timestamp: Date.now(),
+        }
+        this.handlers.onRuntimeEvent?.(event)
+    }
+
     getJoinedRooms(): string[] {
         return Array.from(this.joinedRooms)
     }
@@ -259,6 +284,7 @@ class AgentClient {
             if (this.contextEngine && this.storage) {
                 try {
                     logger.debug(`[AgentClients] ${this.name}: building context...`)
+                    this.emitRuntimeEvent(roomId, 'context_compressing', {})
                     onStatus?.('compressing')
                     // Get room members with descriptions for context
                     const roomMembers: Array<{ userId: string; name: string; description: string }> = this.storage.getRoomMembers(roomId) || []
@@ -352,6 +378,13 @@ class AgentClient {
                 logger.debug(`[AgentClients] ${this.name}: saved session profile ${actualSessionId} → profile=${this.profile}`)
             }
 
+            this.emitRuntimeEvent(roomId, 'run_started', {
+                runId: run_id,
+                sessionId: actualSessionId,
+                profile: this.profile,
+                model: overrideModel,
+            })
+
             // Stream events from Hermes
             const eventsUrl = new URL(`${upstream}/v1/runs/${run_id}/events`)
             logger.debug(`[AgentClients] ${this.name}: streaming events from ${eventsUrl}`)
@@ -407,6 +440,10 @@ class AgentClient {
                             this.sendMessage(roomId, fullContent)
                         }
                         this.deleteSession(actualSessionId).catch(() => { })
+                        this.emitRuntimeEvent(roomId, 'run_completed', {
+                            sessionId: actualSessionId,
+                            contentLength: fullContent.length,
+                        })
                         onStatus?.('ready')
                         return
                     }
@@ -416,6 +453,7 @@ class AgentClient {
                         logger.error(`[AgentClients] ${this.name}: run failed`)
                         this.stopTyping(roomId)
                         this.deleteSession(actualSessionId).catch(() => { })
+                        this.emitRuntimeEvent(roomId, 'run_failed', { error: 'run.failed' })
                         onStatus?.('ready')
                         return
                     }
@@ -440,6 +478,7 @@ class AgentClient {
             logger.error(`[AgentClients] ${this.name}: error handling message: ${err.message}`)
             this.stopTyping(roomId)
             this.deleteSession(sessionId).catch(() => { })
+            this.emitRuntimeEvent(roomId, 'run_failed', { error: err.message })
             onStatus?.('ready')
         }
     }
@@ -488,6 +527,11 @@ export class AgentClients {
     private _gatewayManager: GatewayManager | null = null
     private _contextEngine: any = null
     private _storage: any = null
+    private _io: Server | null = null
+
+    setIO(io: Server): void {
+        this._io = io
+    }
 
     // Per-room processing lock + mention queue
     private _processingRooms = new Set<string>()
@@ -498,7 +542,15 @@ export class AgentClients {
      * The agent will NOT auto-join any room — call addAgentToRoom separately.
      */
     async createAgent(config: AgentConfig, handlers?: AgentEventHandler, port?: number): Promise<AgentClient> {
-        const client = new AgentClient(config, handlers)
+        const mergedHandlers: AgentEventHandler = {
+            ...handlers,
+            onRuntimeEvent: (event) => {
+                if (this._io) {
+                    this._io.of('/group-chat').to(event.roomId).emit('agent_event', event)
+                }
+            },
+        }
+        const client = new AgentClient(config, mergedHandlers)
         await client.connect(port)
 
         // Auto-apply stored references (fixes propagation for agents created after set*)
