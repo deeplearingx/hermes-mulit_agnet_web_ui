@@ -3,7 +3,7 @@ import type { Server as HttpServer } from 'http'
 import { getToken } from '../../../services/auth'
 import { logger } from '../../../services/logger'
 import { getDb } from '../../../db'
-import { GC_ROOMS_TABLE, GC_MESSAGES_TABLE, GC_ROOM_AGENTS_TABLE, GC_CONTEXT_SNAPSHOTS_TABLE, GC_ROOM_MEMBERS_TABLE, GC_PENDING_SESSION_DELETES_TABLE, GC_SESSION_PROFILES_TABLE } from '../../../db/hermes/schemas'
+import { GC_ROOMS_TABLE, GC_MESSAGES_TABLE, GC_ROOM_AGENTS_TABLE, GC_CONTEXT_SNAPSHOTS_TABLE, GC_ROOM_MEMBERS_TABLE, GC_PENDING_SESSION_DELETES_TABLE, GC_SESSION_PROFILES_TABLE, GC_AGENT_OVERRIDES_TABLE } from '../../../db/hermes/schemas'
 import { AgentClients } from './agent-clients'
 import { ContextEngine } from '../context-engine/compressor'
 import { SessionDeleter } from '../session-deleter'
@@ -27,6 +27,21 @@ interface RoomAgent {
     name: string
     description: string
     invited: number
+}
+
+export interface AgentOverride {
+    id: string
+    roomId: string
+    agentId: string
+    model?: string | null
+    provider?: string | null
+    systemPrompt?: string | null
+    skillsAllowList?: string[] | null
+    contextEnabled?: boolean | null
+    triggerTokens?: number | null
+    maxHistoryTokens?: number | null
+    tailMessageCount?: number | null
+    updatedAt: number
 }
 
 interface Member {
@@ -148,6 +163,24 @@ class ChatStorage {
         try { db.exec('CREATE INDEX IF NOT EXISTS idx_gc_pending_session_deletes_profile ON gc_pending_session_deletes(profile_name, status, next_attempt_at, created_at)') } catch { /* ignore */ }
         try { db.exec('CREATE INDEX IF NOT EXISTS idx_gc_session_profiles_profile ON gc_session_profiles(profile_name, created_at)') } catch { /* ignore */ }
         _tablesEnsured = true
+        // BUG-009b migration: fix gc_agent_overrides rows where agentId was stored as
+        // gc_room_agents.id (table PK) instead of gc_room_agents.agentId (business ID).
+        // Safe to run repeatedly — only updates rows where a mismatch is detected.
+        try {
+            const rows = db.prepare(
+                `SELECT o.id AS oid, o.agentId AS wrongId, a.agentId AS correctId
+                 FROM gc_agent_overrides o
+                 JOIN gc_room_agents a ON a.id = o.agentId AND a.roomId = o.roomId
+                 WHERE o.agentId != a.agentId`
+            ).all() as Array<{ oid: string; wrongId: string; correctId: string }>
+            if (rows.length > 0) {
+                const upd = db.prepare('UPDATE gc_agent_overrides SET agentId = ? WHERE id = ?')
+                for (const r of rows) upd.run(r.correctId, r.oid)
+                logger.info(`[GroupChat] BUG-009b migration: fixed ${rows.length} override row(s)`)
+            }
+        } catch (err: any) {
+            logger.warn(`[GroupChat] BUG-009b migration skipped: ${err.message}`)
+        }
     }
 
     saveSessionProfile(sessionId: string, roomId: string, agentId: string, profileName: string): void {
@@ -362,7 +395,73 @@ class ChatStorage {
         db.prepare('DELETE FROM gc_room_agents WHERE roomId = ?').run(roomId)
         db.prepare('DELETE FROM gc_room_members WHERE roomId = ?').run(roomId)
         db.prepare('DELETE FROM gc_context_snapshots WHERE roomId = ?').run(roomId)
+        db.prepare('DELETE FROM gc_agent_overrides WHERE roomId = ?').run(roomId)
         db.prepare('DELETE FROM gc_rooms WHERE id = ?').run(roomId)
+    }
+
+    // ─── Agent Overrides ──────────────────────────────────────
+
+    private _parseOverrideRow(row: any): AgentOverride {
+        return {
+            id: row.id,
+            roomId: row.roomId,
+            agentId: row.agentId,
+            model: row.model ?? null,
+            provider: row.provider ?? null,
+            systemPrompt: row.systemPrompt ?? null,
+            skillsAllowList: row.skillsAllowList ? JSON.parse(row.skillsAllowList) : null,
+            contextEnabled: row.contextEnabled == null ? null : Boolean(row.contextEnabled),
+            triggerTokens: row.triggerTokens ?? null,
+            maxHistoryTokens: row.maxHistoryTokens ?? null,
+            tailMessageCount: row.tailMessageCount ?? null,
+            updatedAt: row.updatedAt,
+        }
+    }
+
+    getAgentOverride(roomId: string, agentId: string): AgentOverride | null {
+        const row = this.db()?.prepare(
+            'SELECT * FROM gc_agent_overrides WHERE roomId = ? AND agentId = ?'
+        ).get(roomId, agentId) as any
+        return row ? this._parseOverrideRow(row) : null
+    }
+
+    upsertAgentOverride(roomId: string, agentId: string, patch: Partial<Omit<AgentOverride, 'id' | 'roomId' | 'agentId' | 'updatedAt'>>): AgentOverride {
+        const existing = this.getAgentOverride(roomId, agentId)
+        const now = Date.now()
+        if (existing) {
+            const sets: string[] = []
+            const vals: any[] = []
+            if ('model' in patch) { sets.push('model = ?'); vals.push(patch.model ?? null) }
+            if ('provider' in patch) { sets.push('provider = ?'); vals.push(patch.provider ?? null) }
+            if ('systemPrompt' in patch) { sets.push('systemPrompt = ?'); vals.push(patch.systemPrompt ?? null) }
+            if ('skillsAllowList' in patch) { sets.push('skillsAllowList = ?'); vals.push(patch.skillsAllowList ? JSON.stringify(patch.skillsAllowList) : null) }
+            if ('contextEnabled' in patch) { sets.push('contextEnabled = ?'); vals.push(patch.contextEnabled == null ? null : (patch.contextEnabled ? 1 : 0)) }
+            if ('triggerTokens' in patch) { sets.push('triggerTokens = ?'); vals.push(patch.triggerTokens ?? null) }
+            if ('maxHistoryTokens' in patch) { sets.push('maxHistoryTokens = ?'); vals.push(patch.maxHistoryTokens ?? null) }
+            if ('tailMessageCount' in patch) { sets.push('tailMessageCount = ?'); vals.push(patch.tailMessageCount ?? null) }
+            sets.push('updatedAt = ?'); vals.push(now)
+            vals.push(existing.id)
+            if (sets.length > 1) {
+                this.db()?.prepare(`UPDATE gc_agent_overrides SET ${sets.join(', ')} WHERE id = ?`).run(...vals)
+            }
+            return this.getAgentOverride(roomId, agentId)!
+        }
+        const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+        this.db()?.prepare(
+            'INSERT INTO gc_agent_overrides (id, roomId, agentId, model, provider, systemPrompt, skillsAllowList, contextEnabled, triggerTokens, maxHistoryTokens, tailMessageCount, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(
+            id, roomId, agentId,
+            patch.model ?? null,
+            patch.provider ?? null,
+            patch.systemPrompt ?? null,
+            patch.skillsAllowList ? JSON.stringify(patch.skillsAllowList) : null,
+            patch.contextEnabled == null ? null : (patch.contextEnabled ? 1 : 0),
+            patch.triggerTokens ?? null,
+            patch.maxHistoryTokens ?? null,
+            patch.tailMessageCount ?? null,
+            now,
+        )
+        return this.getAgentOverride(roomId, agentId)!
     }
 
     // ─── Room Members ──────────────────────────────────────
@@ -562,11 +661,14 @@ export class GroupChatServer {
             const agents = this.storage.getRoomAgents(room.id)
             for (const agent of agents) {
                 try {
+                    const override = this.storage.getAgentOverride(room.id, agent.agentId) ?? undefined
                     const client = await this.agentClients.createAgent({
                         profile: agent.profile,
                         name: agent.name,
                         description: agent.description,
                         invited: agent.invited,
+                        override: override ?? undefined,
+                        dbAgentId: agent.agentId,
                     })
                     await this.agentClients.addAgentToRoom(room.id, client)
                     total++

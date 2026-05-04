@@ -97,6 +97,17 @@ export interface MemberInfo {
     description: string
 }
 
+export interface AgentOverrideConfig {
+    model?: string | null
+    provider?: string | null
+    systemPrompt?: string | null
+    skillsAllowList?: string[] | null
+    contextEnabled?: boolean | null
+    triggerTokens?: number | null
+    maxHistoryTokens?: number | null
+    tailMessageCount?: number | null
+}
+
 export interface BuildContextInput {
     roomId: string
     agentId: string
@@ -111,4 +122,5 @@ export interface BuildContextInput {
     currentMessage: StoredMessage
     compression?: Partial<CompressionConfig>
     profile?: string
+    agentOverride?: AgentOverrideConfig
 }

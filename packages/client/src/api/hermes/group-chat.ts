@@ -186,3 +186,30 @@ export async function forceCompress(roomId: string): Promise<{ success: boolean;
     })
 }
 
+// ─── Agent Override ─────────────────────────────────────
+
+export interface AgentOverride {
+    model?: string
+    provider?: string
+    skillsAllowList?: string[]
+    systemPrompt?: string
+    contextEnabled?: boolean
+    triggerTokens?: number
+    maxHistoryTokens?: number
+    tailMessageCount?: number
+}
+
+export async function getAgentOverride(roomId: string, agentId: string): Promise<AgentOverride> {
+    const res = await request<{ override: AgentOverride | null }>(`/api/hermes/group-chat/rooms/${roomId}/agents/${agentId}/override`)
+    return res.override ?? {}
+}
+
+export async function putAgentOverride(roomId: string, agentId: string, override: AgentOverride): Promise<AgentOverride> {
+    const res = await request<{ override: AgentOverride }>(`/api/hermes/group-chat/rooms/${roomId}/agents/${agentId}/override`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(override),
+    })
+    return res.override
+}
+

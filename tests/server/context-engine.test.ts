@@ -459,3 +459,108 @@ describe('ContextEngine.buildContext', () => {
         expect(mockFetcher.deleteContextSnapshot).toHaveBeenCalledWith('room-1')
     })
 })
+
+// ─── Agent Override ────────────────────────────────────────────
+
+describe('ContextEngine agent override', () => {
+    let mockSummarize = vi.fn().mockResolvedValue({ summary: 'Summary.', sessionId: 'comp-1' })
+    let mockFetcher: MessageFetcher
+    let engine: ContextEngine
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        mockFetcher = {
+            getMessages: vi.fn().mockReturnValue([]),
+            getContextSnapshot: vi.fn().mockReturnValue(null),
+            saveContextSnapshot: vi.fn(),
+            deleteContextSnapshot: vi.fn(),
+        }
+        engine = new ContextEngine({
+            config: { triggerTokens: 100_000, maxHistoryTokens: 4000, tailMessageCount: 10, charsPerToken: 4, summarizationTimeoutMs: 30_000 },
+            messageFetcher: mockFetcher,
+            gatewayCaller: { summarize: mockSummarize },
+        })
+    })
+
+    it('contextEnabled=false returns empty history and skips context build', async () => {
+        const messages = makeMessages(5)
+        mockFetcher.getMessages = vi.fn().mockReturnValue(messages)
+
+        const result = await engine.buildContext({
+            roomId: 'room-1', agentId: 'agent-1', agentName: 'Claude',
+            agentDescription: 'Helper', agentSocketId: 'agent-socket', roomName: 'general',
+            memberNames: [], members: [], upstream: 'http://localhost:8642', apiKey: null,
+            currentMessage: messages[messages.length - 1],
+            agentOverride: { contextEnabled: false },
+        })
+
+        expect(result.conversationHistory).toHaveLength(0)
+        expect(result.meta.totalMessages).toBe(0)
+        expect(mockFetcher.getMessages).not.toHaveBeenCalled()
+    })
+
+    it('agent-level triggerTokens overrides room-level compression config', async () => {
+        const messages = makeMessages(20)
+        mockFetcher.getMessages = vi.fn().mockReturnValue(messages)
+
+        // room-level: triggerTokens=100_000 (no compression), agent-level: triggerTokens=1 (force compression)
+        const result = await engine.buildContext({
+            roomId: 'room-1', agentId: 'agent-1', agentName: 'Claude',
+            agentDescription: '', agentSocketId: 'agent-socket', roomName: 'general',
+            memberNames: [], members: [], upstream: 'http://localhost:8642', apiKey: null,
+            currentMessage: messages[messages.length - 1],
+            agentOverride: { triggerTokens: 1 },
+        })
+
+        expect(result.meta.compressed).toBe(true)
+        expect(mockSummarize).toHaveBeenCalledTimes(1)
+    })
+
+    it('systemPrompt override is prepended to agent instructions', async () => {
+        const messages = makeMessages(1)
+        mockFetcher.getMessages = vi.fn().mockReturnValue(messages)
+
+        const result = await engine.buildContext({
+            roomId: 'room-1', agentId: 'agent-1', agentName: 'Claude',
+            agentDescription: 'Helper', agentSocketId: 'agent-socket', roomName: 'general',
+            memberNames: [], members: [], upstream: 'http://localhost:8642', apiKey: null,
+            currentMessage: messages[0],
+            agentOverride: { systemPrompt: 'CUSTOM_SYSTEM_PROMPT' },
+        })
+
+        expect(result.instructions.startsWith('CUSTOM_SYSTEM_PROMPT')).toBe(true)
+        expect(result.instructions).toContain('"Claude"')
+    })
+
+    it('skillsAllowList is appended as soft constraint to instructions', async () => {
+        const messages = makeMessages(1)
+        mockFetcher.getMessages = vi.fn().mockReturnValue(messages)
+
+        const result = await engine.buildContext({
+            roomId: 'room-1', agentId: 'agent-1', agentName: 'Claude',
+            agentDescription: '', agentSocketId: 'agent-socket', roomName: 'general',
+            memberNames: [], members: [], upstream: 'http://localhost:8642', apiKey: null,
+            currentMessage: messages[0],
+            agentOverride: { skillsAllowList: ['search', 'code'] },
+        })
+
+        expect(result.instructions).toContain('search')
+        expect(result.instructions).toContain('code')
+    })
+
+    it('no override: falls back to room-level compression config', async () => {
+        const messages = makeMessages(5)
+        mockFetcher.getMessages = vi.fn().mockReturnValue(messages)
+
+        const result = await engine.buildContext({
+            roomId: 'room-1', agentId: 'agent-1', agentName: 'Claude',
+            agentDescription: '', agentSocketId: 'agent-socket', roomName: 'general',
+            memberNames: [], members: [], upstream: 'http://localhost:8642', apiKey: null,
+            currentMessage: messages[messages.length - 1],
+            compression: { triggerTokens: 100_000 },
+        })
+
+        expect(result.meta.compressed).toBe(false)
+        expect(mockSummarize).not.toHaveBeenCalled()
+    })
+})

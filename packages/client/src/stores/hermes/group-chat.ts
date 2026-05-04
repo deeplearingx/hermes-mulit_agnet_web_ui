@@ -10,6 +10,7 @@ import {
     type RoomAgent,
     type ChatMessage,
     type MemberInfo,
+    type AgentOverride,
     createRoom,
     listRooms,
     getRoomDetail,
@@ -18,6 +19,8 @@ import {
     listAgents,
     removeAgent,
     deleteRoom as deleteRoomApi,
+    getAgentOverride,
+    putAgentOverride,
 } from '@/api/hermes/group-chat'
 
 export const useGroupChatStore = defineStore('groupChat', () => {
@@ -308,6 +311,16 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         }
     }
 
+    // ─── Agent Override ────────────────────────────────────
+    // Lightweight: load on demand, no long-term cache across rooms
+    async function loadAgentOverride(roomId: string, agentId: string): Promise<AgentOverride> {
+        return getAgentOverride(roomId, agentId)
+    }
+
+    async function saveAgentOverride(roomId: string, agentId: string, override: AgentOverride): Promise<AgentOverride> {
+        return putAgentOverride(roomId, agentId, override)
+    }
+
     // ─── Typing ────────────────────────────────────────────
     let _typingTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -361,5 +374,7 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         loadAgents,
         addAgentToRoom,
         removeAgentFromRoom,
+        loadAgentOverride,
+        saveAgentOverride,
     }
 })

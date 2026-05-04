@@ -1,0 +1,52 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// Mock config-helpers to control custom_providers
+vi.mock('../../packages/server/src/services/config-helpers', () => ({
+    readConfigYaml: vi.fn(),
+}))
+
+import { readConfigYaml } from '../../packages/server/src/services/config-helpers'
+import { inferProvider } from '../../packages/server/src/services/hermes/group-chat/infer-provider'
+
+const mockReadConfig = readConfigYaml as ReturnType<typeof vi.fn>
+
+describe('inferProvider', () => {
+    beforeEach(() => {
+        mockReadConfig.mockResolvedValue({})
+    })
+
+    it('returns undefined for empty model name', async () => {
+        expect(await inferProvider('')).toBeUndefined()
+    })
+
+    it('matches built-in provider from PROVIDER_PRESETS', async () => {
+        // deepseek is in PROVIDER_PRESETS with models ['deepseek-v4-flash', 'deepseek-v4-pro']
+        const result = await inferProvider('deepseek-v4-flash')
+        expect(result).toBe('deepseek')
+    })
+
+    it('matches custom provider by model field', async () => {
+        mockReadConfig.mockResolvedValue({
+            custom_providers: [
+                { name: 'my-ark', model: 'MiniMax-M2.7', base_url: 'https://ark.example.com' },
+            ],
+        })
+        const result = await inferProvider('MiniMax-M2.7')
+        expect(result).toBe('custom:my-ark')
+    })
+
+    it('matches custom provider by models object keys', async () => {
+        mockReadConfig.mockResolvedValue({
+            custom_providers: [
+                { name: 'my-provider', models: { 'custom-model-x': {} }, base_url: 'https://example.com' },
+            ],
+        })
+        const result = await inferProvider('custom-model-x')
+        expect(result).toBe('custom:my-provider')
+    })
+
+    it('returns undefined for unknown model', async () => {
+        const result = await inferProvider('totally-unknown-model-xyz')
+        expect(result).toBeUndefined()
+    })
+})

@@ -73,21 +73,51 @@ export class ContextEngine {
     }
 
     private async _buildContextImpl(input: BuildContextInput): Promise<CompressedContext> {
-        const config = { ...this.config, ...input.compression }
-        const allMessages = this.messageFetcher.getMessages(input.roomId)
-        // Filter out messages newer than the current one
-        const messages = allMessages.filter(m => m.timestamp <= input.currentMessage.timestamp)
-        const total = messages.length
+        const override = input.agentOverride
 
-        logger.debug(`[ContextEngine] buildContext START — room=${input.roomId}, agent=${input.agentName}, totalMessagesInDb=${allMessages.length}, afterFilter=${total}`)
+        // Agent-level compression config overrides room-level, which overrides defaults
+        const agentCompressionOverride: Partial<import('./types').CompressionConfig> = {}
+        if (override?.triggerTokens != null) agentCompressionOverride.triggerTokens = override.triggerTokens
+        if (override?.maxHistoryTokens != null) agentCompressionOverride.maxHistoryTokens = override.maxHistoryTokens
+        if (override?.tailMessageCount != null) agentCompressionOverride.tailMessageCount = override.tailMessageCount
 
-        const instructions = buildAgentInstructions({
+        const config = { ...this.config, ...input.compression, ...agentCompressionOverride }
+
+        // Build base instructions
+        let instructions = buildAgentInstructions({
             agentName: input.agentName,
             roomName: input.roomName,
             agentDescription: input.agentDescription,
             memberNames: input.memberNames,
             members: input.members,
         })
+
+        // Prepend agent-level systemPrompt override (override first, then identity)
+        if (override?.systemPrompt) {
+            instructions = override.systemPrompt + '\n\n' + instructions
+        }
+
+        // Append skillsAllowList as soft constraint instruction
+        if (override?.skillsAllowList && override.skillsAllowList.length > 0) {
+            instructions += `\n\n仅使用以下工具/技能（skills）：${override.skillsAllowList.join('、')}。不要使用列表之外的工具。`
+        }
+
+        // contextEnabled=false: skip context building, return minimal context
+        if (override?.contextEnabled === false) {
+            logger.debug(`[ContextEngine] contextEnabled=false for agent=${input.agentName}, skipping context build`)
+            return {
+                conversationHistory: [],
+                instructions,
+                meta: { totalMessages: 0, verbatimCount: 0, hadSnapshot: false, compressed: false, summaryTokenEstimate: 0 },
+            }
+        }
+
+        const allMessages = this.messageFetcher.getMessages(input.roomId)
+        // Filter out messages newer than the current one
+        const messages = allMessages.filter(m => m.timestamp <= input.currentMessage.timestamp)
+        const total = messages.length
+
+        logger.debug(`[ContextEngine] buildContext START — room=${input.roomId}, agent=${input.agentName}, totalMessagesInDb=${allMessages.length}, afterFilter=${total}`)
 
         const meta: CompressedContext['meta'] = {
             totalMessages: total,

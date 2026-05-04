@@ -7,14 +7,20 @@ import { getActiveProfileName } from '../hermes-profile'
 import { logger } from '../../../services/logger'
 import { updateUsage } from '../../../db/hermes/usage-store'
 import { getSessionDetailFromDbWithProfile } from '../../../db/hermes/sessions-db'
+import { inferProvider } from './infer-provider'
 
 // ─── Types ────────────────────────────────────────────────────
+
+import type { AgentOverrideConfig } from '../context-engine/types'
 
 interface AgentConfig {
     profile: string
     name: string
     description: string
     invited: number
+    override?: AgentOverrideConfig
+    /** Stable DB-side agentId — used as the in-memory map key so override lookups match */
+    dbAgentId?: string
 }
 
 interface MessageData {
@@ -62,13 +68,19 @@ class AgentClient {
     private gatewayManager: GatewayManager | null = null
     private contextEngine: any = null
     private storage: any = null
+    private _override: AgentOverrideConfig | undefined
 
     constructor(config: AgentConfig, handlers: AgentEventHandler = {}) {
-        this.agentId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+        this.agentId = config.dbAgentId || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8))
         this.profile = config.profile
         this.name = config.name
         this.description = config.description
         this.handlers = handlers
+        this._override = config.override
+    }
+
+    setOverride(override: AgentOverrideConfig | undefined): void {
+        this._override = override
     }
 
     get connected(): boolean {
@@ -275,6 +287,7 @@ class AgentClient {
                         currentMessage: msg,
                         compression,
                         profile: this.profile,
+                        agentOverride: this._override,
                     })
                     conversationHistory = ctx.conversationHistory
                     instructions = ctx.instructions
@@ -290,6 +303,12 @@ class AgentClient {
             // Strip @mention from input — agent already knows it was mentioned
             const input = msg.content.replace(new RegExp(`@${this.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'gi'), '').trim() || msg.content
 
+            // Resolve model/provider override before starting the run
+            const overrideModel = this._override?.model || undefined
+            const overrideProvider = this._override?.provider ||
+                (overrideModel ? await inferProvider(overrideModel) : undefined)
+            logger.info(`[AgentClients] ${this.name}: overrideModel=${overrideModel}, overrideProvider=${overrideProvider}, profile=${this.profile}`)
+
             // Start a run on Hermes gateway
             const runRes = await fetch(`${upstream}/v1/runs`, {
                 method: 'POST',
@@ -302,6 +321,8 @@ class AgentClient {
                     session_id: sessionId,
                     ...(conversationHistory.length > 0 ? { conversation_history: conversationHistory } : {}),
                     ...(instructions ? { instructions } : {}),
+                    ...(overrideModel ? { model: overrideModel } : {}),
+                    ...(overrideProvider ? { provider: overrideProvider } : {}),
                 }),
                 signal: AbortSignal.timeout(120000),
             })
@@ -630,19 +651,40 @@ export class AgentClients {
 
 
     /**
+     * Update override config for a specific agent in a room.
+     */
+    updateAgentOverride(roomId: string, agentId: string, override: AgentOverrideConfig | undefined): void {
+        const client = this.getAgent(roomId, agentId)
+        if (client) {
+            client.setOverride(override)
+            logger.info(`[AgentClients] updateAgentOverride: room=${roomId} agent=${agentId} model=${override?.model ?? 'null'} provider=${override?.provider ?? 'null'} → FOUND client "${client.name}"`)
+        } else {
+            const room = this.rooms.get(roomId)
+            const keys = room ? Array.from(room.keys()) : []
+            logger.warn(`[AgentClients] updateAgentOverride: room=${roomId} agent=${agentId} → CLIENT NOT FOUND! Available keys: [${keys.join(', ')}]`)
+        }
+    }
+
+    /**
      * Server-side: parse @mentions and forward to matching agents directly.
      * If the room is already processing (compressing/replying), queue the mention.
      */
     async processMentions(roomId: string, msg: { content: string; senderName: string; senderId: string; timestamp: number }): Promise<void> {
-        if (!this._gatewayManager) return
+        if (!this._gatewayManager) {
+            logger.warn(`[AgentClients] processMentions: _gatewayManager is null, skipping mention processing for room=${roomId}`)
+            return
+        }
 
         const content = msg.content.toLowerCase()
         const agents = this.getAgents(roomId)
 
         const mentioned = agents.filter(a => content.includes(`@${a.name.toLowerCase()}`))
-        if (mentioned.length === 0) return
+        if (mentioned.length === 0) {
+            logger.debug(`[AgentClients] processMentions: no agents mentioned in room=${roomId}, content="${content.slice(0, 50)}", agents=[${agents.map(a => a.name).join(', ')}]`)
+            return
+        }
 
-        logger.debug(`[AgentClients] ${mentioned.map(a => a.name).join(', ')} mentioned by ${msg.senderName}`)
+        logger.info(`[AgentClients] ${mentioned.map(a => a.name).join(', ')} mentioned by ${msg.senderName} in room=${roomId}`)
 
         for (const agent of mentioned) {
             this._processAgentMention(roomId, agent, msg).catch((err) => {

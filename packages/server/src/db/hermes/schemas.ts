@@ -128,6 +128,23 @@ export const GC_ROOM_AGENTS_SCHEMA: Record<string, string> = {
   invited: 'INTEGER NOT NULL DEFAULT 0',
 }
 
+export const GC_AGENT_OVERRIDES_TABLE = 'gc_agent_overrides'
+
+export const GC_AGENT_OVERRIDES_SCHEMA: Record<string, string> = {
+  id: 'TEXT PRIMARY KEY',
+  roomId: 'TEXT NOT NULL',
+  agentId: 'TEXT NOT NULL',
+  model: 'TEXT',
+  provider: 'TEXT',
+  systemPrompt: 'TEXT',
+  skillsAllowList: 'TEXT',
+  contextEnabled: 'INTEGER',
+  triggerTokens: 'INTEGER',
+  maxHistoryTokens: 'INTEGER',
+  tailMessageCount: 'INTEGER',
+  updatedAt: 'INTEGER NOT NULL',
+}
+
 export const GC_CONTEXT_SNAPSHOTS_TABLE = 'gc_context_snapshots'
 
 export const GC_CONTEXT_SNAPSHOTS_SCHEMA: Record<string, string> = {
@@ -328,6 +345,7 @@ export function initAllHermesTables(): void {
   ensureTable(GC_CONTEXT_SNAPSHOTS_TABLE, GC_CONTEXT_SNAPSHOTS_SCHEMA)
   ensureTable(GC_PENDING_SESSION_DELETES_TABLE, GC_PENDING_SESSION_DELETES_SCHEMA)
   ensureTable(GC_SESSION_PROFILES_TABLE, GC_SESSION_PROFILES_SCHEMA)
+  ensureTable(GC_AGENT_OVERRIDES_TABLE, GC_AGENT_OVERRIDES_SCHEMA)
 
   // Group chat - composite primary key tables
   // Create without PK first, then add PK constraint

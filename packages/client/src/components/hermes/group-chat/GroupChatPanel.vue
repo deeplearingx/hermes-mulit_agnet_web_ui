@@ -5,9 +5,10 @@ import { useMessage, NInput, NButton, NSpace, NSelect, NPopover, NPopconfirm, NI
 import multiavatar from '@multiavatar/multiavatar'
 import { useGroupChatStore } from '@/stores/hermes/group-chat'
 import { useProfilesStore } from '@/stores/hermes/profiles'
-import { updateRoomConfig, forceCompress } from '@/api/hermes/group-chat'
+import { updateRoomConfig, forceCompress, type RoomAgent } from '@/api/hermes/group-chat'
 import GroupMessageList from './GroupMessageList.vue'
 import GroupChatInput from './GroupChatInput.vue'
+import AgentSettingsModal from './AgentSettingsModal.vue'
 
 const { t } = useI18n()
 const message = useMessage()
@@ -18,6 +19,7 @@ const showSidebar = ref(true)
 const showCreateModal = ref(false)
 const showAddAgentModal = ref(false)
 const showCompressionModal = ref(false)
+const agentSettingsTarget = ref<RoomAgent | null>(null)
 const compressionConfig = ref({ triggerTokens: 100000, maxHistoryTokens: 32000, tailMessageCount: 20 })
 const isCompressing = ref(false)
 const selectedProfile = ref<string | null>(null)
@@ -155,6 +157,10 @@ async function handleForceCompress() {
     }
 }
 
+function handleOpenAgentSettings(agent: RoomAgent) {
+    agentSettingsTarget.value = agent
+}
+
 async function handleRemoveAgent(agentId: string) {
     if (!store.currentRoomId) return
     try {
@@ -263,6 +269,9 @@ watch(() => store.sortedMessages.length, async () => {
                                     <span class="agent-popover-name">{{ agent.name }}</span>
                                     <span class="agent-popover-profile">{{ agent.profile }}</span>
                                 </div>
+                                <button class="agent-popover-settings" :title="t('groupChat.agentSettings')" @click="handleOpenAgentSettings(agent)">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                                </button>
                                 <button class="agent-popover-remove" @click="handleRemoveAgent(agent.id)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                                 </button>
@@ -407,6 +416,12 @@ watch(() => store.sortedMessages.length, async () => {
                 </div>
             </div>
         </Teleport>
+
+        <AgentSettingsModal
+            :agent="agentSettingsTarget"
+            :room-id="store.currentRoomId || ''"
+            @close="agentSettingsTarget = null"
+        />
     </div>
 </template>
 
@@ -783,6 +798,7 @@ export default defineComponent({ components: { CreateRoomForm } })
         text-overflow: ellipsis;
     }
 
+    .agent-popover-settings,
     .agent-popover-remove {
         display: flex;
         align-items: center;
@@ -796,11 +812,16 @@ export default defineComponent({ components: { CreateRoomForm } })
         cursor: pointer;
         flex-shrink: 0;
         transition: all $transition-fast;
+    }
 
-        &:hover {
-            color: $error;
-            background-color: rgba(200, 50, 50, 0.08);
-        }
+    .agent-popover-settings:hover {
+        color: var(--accent-primary, #6366f1);
+        background-color: rgba(var(--accent-primary-rgb), 0.08);
+    }
+
+    .agent-popover-remove:hover {
+        color: $error;
+        background-color: rgba(200, 50, 50, 0.08);
     }
 }
 

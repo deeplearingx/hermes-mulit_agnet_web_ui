@@ -54,6 +54,7 @@ groupChatRoutes.post('/api/hermes/group-chat/rooms', async (ctx) => {
                 name: agent.name,
                 description: agent.description,
                 invited: agent.invited,
+                dbAgentId: agent.agentId,
             })
             await chatServer.agentClients.addAgentToRoom(roomId, client)
         } catch (err: any) {
@@ -168,6 +169,7 @@ groupChatRoutes.post('/api/hermes/group-chat/rooms/:roomId/agents', async (ctx) 
             name: agent.name,
             description: agent.description,
             invited: agent.invited,
+            dbAgentId: agent.agentId,
         })
         await chatServer.agentClients.addAgentToRoom(ctx.params.roomId, client)
     } catch (err: any) {
@@ -187,6 +189,33 @@ groupChatRoutes.get('/api/hermes/group-chat/rooms/:roomId/agents', async (ctx) =
 
     const agents = chatServer.getStorage().getRoomAgents(ctx.params.roomId)
     ctx.body = { agents }
+})
+
+// Get agent override settings
+groupChatRoutes.get('/api/hermes/group-chat/rooms/:roomId/agents/:agentId/override', async (ctx) => {
+    if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }
+    const override = chatServer.getStorage().getAgentOverride(ctx.params.roomId, ctx.params.agentId)
+    ctx.body = { override: override ?? null }
+})
+
+// Update agent override settings
+groupChatRoutes.put('/api/hermes/group-chat/rooms/:roomId/agents/:agentId/override', async (ctx) => {
+    if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }
+    const { roomId, agentId } = ctx.params
+    const body = ctx.request.body as {
+        model?: string | null
+        provider?: string | null
+        systemPrompt?: string | null
+        skillsAllowList?: string[] | null
+        contextEnabled?: boolean | null
+        triggerTokens?: number | null
+        maxHistoryTokens?: number | null
+        tailMessageCount?: number | null
+    }
+    const override = chatServer.getStorage().upsertAgentOverride(roomId, agentId, body)
+    // Propagate to in-memory agent client
+    chatServer.agentClients.updateAgentOverride(roomId, agentId, override)
+    ctx.body = { override }
 })
 
 // Remove agent from room
