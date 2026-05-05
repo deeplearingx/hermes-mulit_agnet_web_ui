@@ -25,11 +25,12 @@ export function runtimeEventToStatus(eventType: string): AgentWorkStatus | null 
  */
 export function deriveAgentStates(
     agents: RoomAgent[],
-    contextStatuses: Map<string, { agentName: string; status: string }>,
+    contextStatuses: Map<string, { agentId: string; agentName: string; status: string }>,
     workspaceLayout?: WorkspaceLayoutItem[],
 ): AgentWorkspaceState[] {
     return agents.map((agent, index) => {
-        const statusEntry = contextStatuses.get(agent.name)
+        // P0-2: use agentId as primary lookup key, fallback to agent.name
+        const statusEntry = contextStatuses.get(agent.agentId) ?? contextStatuses.get(agent.name)
         let status: AgentWorkStatus = 'idle'
         if (statusEntry?.status === 'compressing') status = 'compressing'
         else if (statusEntry?.status === 'replying') status = 'replying'

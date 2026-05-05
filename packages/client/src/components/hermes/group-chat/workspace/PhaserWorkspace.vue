@@ -6,7 +6,8 @@ import { deriveAgentStates } from './runtime/agent-state'
 
 const props = defineProps<{
     agents: RoomAgent[]
-    contextStatuses: Map<string, { agentName: string; status: string }>
+    // P0-2: key is agentId
+    contextStatuses: Map<string, { agentId: string; agentName: string; status: string }>
 }>()
 
 const store = useGroupChatStore()
@@ -59,7 +60,8 @@ function onLayoutChanged(e: Event) {
     const { agentId, x, y, zone } = (e as CustomEvent).detail
     pendingLayoutChanges.value.set(agentId, { agentId, x, y, zone })
     // Bug 3 fix: mark dragging state to prevent workspace_updated from overwriting
-    store.isDragging.value = true
+    // P0-4 fix: use store action instead of direct .value access (Pinia auto-unwraps)
+    store.setDragging(true)
 
     // Debounce: save layout after 1 second of no changes
     if (layoutDebounceTimer) clearTimeout(layoutDebounceTimer)
@@ -76,7 +78,7 @@ function onLayoutChanged(e: Event) {
         }
         pendingLayoutChanges.value.clear()
         await store.saveWorkspaceLayout(existing)
-        store.isDragging.value = false
+        store.setDragging(false)
     }, 1000)
 }
 

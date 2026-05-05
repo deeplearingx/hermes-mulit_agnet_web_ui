@@ -33,25 +33,29 @@ export interface AgentSeat {
     label: string
 }
 
-/** Default office layout — 4 zones with 2 seats each */
+/** Default office layout — 5 zones with 2 seats each (P0-3: unified with task phases) */
 export const DEFAULT_SEATS: AgentSeat[] = [
     // 需求区 (Requirement Zone) — top-left
-    { zone: 'requirement', x: 160, y: 130, label: '需求区' },
-    { zone: 'requirement', x: 160, y: 230, label: '需求区' },
+    { zone: 'requirement', x: 120, y: 130, label: '需求区' },
+    { zone: 'requirement', x: 120, y: 230, label: '需求区' },
+    // 规划区 (Planning Zone) — top-center
+    { zone: 'planning', x: 300, y: 130, label: '规划区' },
+    { zone: 'planning', x: 300, y: 230, label: '规划区' },
     // 开发区 (Development Zone) — top-right
-    { zone: 'coding', x: 440, y: 130, label: '开发区' },
-    { zone: 'coding', x: 440, y: 230, label: '开发区' },
+    { zone: 'coding', x: 480, y: 130, label: '开发区' },
+    { zone: 'coding', x: 480, y: 230, label: '开发区' },
     // 评审区 (Review Zone) — bottom-left
-    { zone: 'review', x: 160, y: 370, label: '评审区' },
-    { zone: 'review', x: 160, y: 470, label: '评审区' },
+    { zone: 'review', x: 180, y: 370, label: '评审区' },
+    { zone: 'review', x: 180, y: 470, label: '评审区' },
     // 产出区 (Delivery Zone) — bottom-right
-    { zone: 'delivery', x: 440, y: 370, label: '产出区' },
-    { zone: 'delivery', x: 440, y: 470, label: '产出区' },
+    { zone: 'delivery', x: 420, y: 370, label: '产出区' },
+    { zone: 'delivery', x: 420, y: 470, label: '产出区' },
 ]
 
-/** Zone color palette (pixel-art friendly) */
+/** Zone color palette (pixel-art friendly) — P0-3: added planning zone */
 export const ZONE_COLORS: Record<string, { bg: number; border: number; label: string }> = {
     requirement: { bg: 0x1a2744, border: 0x3b82f6, label: '📋 需求区' },
+    planning:    { bg: 0x1a2a33, border: 0x06b6d4, label: '📐 规划区' },
     coding:      { bg: 0x1a3320, border: 0x22c55e, label: '💻 开发区' },
     review:      { bg: 0x332a1a, border: 0xf59e0b, label: '🔍 评审区' },
     delivery:    { bg: 0x2a1a33, border: 0xa855f7, label: '📦 产出区' },

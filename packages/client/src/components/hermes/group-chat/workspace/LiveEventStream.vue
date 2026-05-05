@@ -5,7 +5,8 @@ import type { GroupRuntimeEvent } from '@/stores/hermes/group-chat'
 
 const props = defineProps<{
     messages: ChatMessage[]
-    contextStatuses: Map<string, { agentName: string; status: string }>
+    // P0-2: key is agentId
+    contextStatuses: Map<string, { agentId: string; agentName: string; status: string }>
     liveEvents?: GroupRuntimeEvent[]
 }>()
 
@@ -39,15 +40,15 @@ const events = computed<StreamEvent[]>(() => {
         })
     }
 
-    // Context status changes
-    for (const [name, status] of props.contextStatuses) {
+    // Context status changes (P0-2: key is agentId, use agentName for display)
+    for (const [key, status] of props.contextStatuses) {
         const icon = status.status === 'compressing' ? '⚙️' : '✍️'
         const label = status.status === 'compressing' ? '正在压缩上下文' : '正在生成回复'
         result.push({
-            id: `ctx-${name}-${status.status}`,
+            id: `ctx-${key}-${status.status}`,
             type: 'status',
             icon,
-            sender: name,
+            sender: status.agentName || key,
             content: label,
             time: Date.now(),
             color: status.status === 'compressing' ? '#f59e0b' : '#3b82f6',
@@ -64,7 +65,8 @@ const events = computed<StreamEvent[]>(() => {
             run_completed: { icon: '✅', label: '运行完成', color: '#22c55e' },
             run_failed: { icon: '❌', label: '运行失败', color: '#ef4444' },
         }
-        for (const evt of props.liveEvents.slice(-20)) {
+        // P0-1a fix: store uses unshift (newest at index 0), so slice(0, 20) gets newest
+        for (const evt of props.liveEvents.slice(0, 20)) {
             const meta = typeMap[evt.type] || { icon: '📌', label: evt.type, color: '#94a3b8' }
             result.push({
                 id: `evt-${evt.id}`,

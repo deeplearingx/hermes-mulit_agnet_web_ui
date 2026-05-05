@@ -10,7 +10,8 @@ defineProps<{
     agents: RoomAgent[]
     members: MemberInfo[]
     messages: ChatMessage[]
-    contextStatuses: Map<string, { agentName: string; status: string }>
+    // P0-2: key is agentId
+    contextStatuses: Map<string, { agentId: string; agentName: string; status: string }>
     typingNames: string[]
     tasks: GroupTask[]
     artifacts: GroupArtifact[]

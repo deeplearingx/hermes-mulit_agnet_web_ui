@@ -47,6 +47,12 @@ export const FX = {
     sparkle: `${ASSET_BASE}/ninja-adventure/fx/2.png`,
 }
 
+// TODO: desk/monitor/chair assets not available in group_assets/office/.
+// Currently using code-drawn fallback in GroupOfficeScene.drawFurniture().
+// When pixel art assets are provided, add:
+//   export const OFFICE_PROPS = { desk: '...', monitor: '...', chair: '...' }
+// and load them in loadWorkspaceAssets().
+
 /**
  * Load all workspace assets into a Phaser scene.
  * Call this in a BootScene's preload() method.

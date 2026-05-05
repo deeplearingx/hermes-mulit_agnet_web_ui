@@ -7,7 +7,8 @@ import type { AgentWorkStatus } from './runtime/types'
 
 const props = defineProps<{
     agents: RoomAgent[]
-    contextStatuses: Map<string, { agentName: string; status: string }>
+    // P0-2: key is agentId
+    contextStatuses: Map<string, { agentId: string; agentName: string; status: string }>
 }>()
 
 const selectedAgentId = ref<string | null>(null)

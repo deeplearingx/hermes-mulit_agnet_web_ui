@@ -196,7 +196,8 @@ class AgentClient {
 
     emitContextStatus(roomId: string, status: 'compressing' | 'replying' | 'ready'): void {
         this.ensureConnected()
-        this.socket!.emit('context_status', { roomId, agentName: this.name, status })
+        // P0-2: include agentId for stable identification (agentName may be user-customized)
+        this.socket!.emit('context_status', { roomId, agentId: this.agentId, agentName: this.name, status })
     }
 
     private emitRuntimeEvent(roomId: string, type: GroupRuntimeEvent['type'], payload: Record<string, any> = {}): void {

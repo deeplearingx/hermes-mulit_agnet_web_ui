@@ -152,10 +152,12 @@ export class GroupOfficeScene extends Phaser.Scene {
 
     private drawZones() {
         const g = this.add.graphics()
+        // P0-3: 5-zone layout — requirement | planning | coding (top), review | delivery (bottom)
         const zones = [
-            { key: 'requirement', x: TILE * 2, y: TILE * 3, w: TILE * 20, h: TILE * 16 },
-            { key: 'coding',      x: TILE * 24, y: TILE * 3, w: TILE * 20, h: TILE * 16 },
-            { key: 'review',      x: TILE * 2, y: TILE * 21, w: TILE * 20, h: TILE * 14 },
+            { key: 'requirement', x: TILE * 2,  y: TILE * 3,  w: TILE * 14, h: TILE * 16 },
+            { key: 'planning',    x: TILE * 17, y: TILE * 3,  w: TILE * 12, h: TILE * 16 },
+            { key: 'coding',      x: TILE * 30, y: TILE * 3,  w: TILE * 14, h: TILE * 16 },
+            { key: 'review',      x: TILE * 2,  y: TILE * 21, w: TILE * 20, h: TILE * 14 },
             { key: 'delivery',    x: TILE * 24, y: TILE * 21, w: TILE * 20, h: TILE * 14 },
         ]
 
@@ -233,20 +235,23 @@ export class GroupOfficeScene extends Phaser.Scene {
     }
 
     private drawZoneDecorations() {
-        // Add decorative items in zones using loaded assets
+        // Add decorative items in zones using loaded assets (P0-3: updated for 5-zone layout)
         const decorations: Array<{ texture: string; x: number; y: number; scale: number }> = [
-            // Requirement zone — scrolls and keys
-            { texture: 'item_scroll', x: TILE * 4, y: TILE * 5, scale: 0.8 },
-            { texture: 'item_gold_key', x: TILE * 8, y: TILE * 8, scale: 0.6 },
-            // Coding zone — weapons/tools
-            { texture: 'weapon_sword', x: TILE * 26, y: TILE * 5, scale: 0.7 },
-            { texture: 'weapon_katana', x: TILE * 30, y: TILE * 8, scale: 0.7 },
-            // Review zone — hearts and potions
-            { texture: 'item_heart', x: TILE * 4, y: TILE * 23, scale: 0.6 },
-            { texture: 'item_life_pot', x: TILE * 8, y: TILE * 26, scale: 0.6 },
-            // Delivery zone — coins and keys
-            { texture: 'item_gold_coin', x: TILE * 26, y: TILE * 23, scale: 0.6 },
-            { texture: 'item_silver_coin', x: TILE * 30, y: TILE * 26, scale: 0.6 },
+            // Requirement zone (x: TILE*2..16) — scrolls and keys
+            { texture: 'item_scroll', x: TILE * 5, y: TILE * 5, scale: 0.8 },
+            { texture: 'item_gold_key', x: TILE * 10, y: TILE * 8, scale: 0.6 },
+            // Planning zone (x: TILE*17..29) — hearts and potions
+            { texture: 'item_heart', x: TILE * 20, y: TILE * 5, scale: 0.6 },
+            { texture: 'item_life_pot', x: TILE * 25, y: TILE * 8, scale: 0.6 },
+            // Coding zone (x: TILE*30..44) — weapons/tools
+            { texture: 'weapon_sword', x: TILE * 33, y: TILE * 5, scale: 0.7 },
+            { texture: 'weapon_katana', x: TILE * 38, y: TILE * 8, scale: 0.7 },
+            // Review zone (x: TILE*2..22) — hearts and potions
+            { texture: 'item_gold_coin', x: TILE * 5, y: TILE * 23, scale: 0.6 },
+            { texture: 'item_silver_coin', x: TILE * 12, y: TILE * 26, scale: 0.6 },
+            // Delivery zone (x: TILE*24..44) — coins and keys
+            { texture: 'item_gold_key', x: TILE * 28, y: TILE * 23, scale: 0.6 },
+            { texture: 'item_scroll', x: TILE * 35, y: TILE * 26, scale: 0.6 },
         ]
 
         for (const d of decorations) {
@@ -424,10 +429,12 @@ export class GroupOfficeScene extends Phaser.Scene {
     }
 
     private detectZone(x: number, y: number): string {
+        // P0-3: must match drawZones layout
         const zones = [
-            { key: 'requirement', x: TILE * 2, y: TILE * 3, w: TILE * 20, h: TILE * 16 },
-            { key: 'coding',      x: TILE * 24, y: TILE * 3, w: TILE * 20, h: TILE * 16 },
-            { key: 'review',      x: TILE * 2, y: TILE * 21, w: TILE * 20, h: TILE * 14 },
+            { key: 'requirement', x: TILE * 2,  y: TILE * 3,  w: TILE * 14, h: TILE * 16 },
+            { key: 'planning',    x: TILE * 17, y: TILE * 3,  w: TILE * 12, h: TILE * 16 },
+            { key: 'coding',      x: TILE * 30, y: TILE * 3,  w: TILE * 14, h: TILE * 16 },
+            { key: 'review',      x: TILE * 2,  y: TILE * 21, w: TILE * 20, h: TILE * 14 },
             { key: 'delivery',    x: TILE * 24, y: TILE * 21, w: TILE * 20, h: TILE * 14 },
         ]
         for (const z of zones) {

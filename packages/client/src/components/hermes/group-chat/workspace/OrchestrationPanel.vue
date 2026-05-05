@@ -7,7 +7,8 @@ import AgentStatusList from './AgentStatusList.vue'
 
 const props = defineProps<{
     agents: RoomAgent[]
-    contextStatuses: Map<string, { agentName: string; status: string }>
+    // P0-2: key is agentId
+    contextStatuses: Map<string, { agentId: string; agentName: string; status: string }>
     messages: ChatMessage[]
     typingNames: string[]
     tasks: GroupTask[]
@@ -25,15 +26,8 @@ const activeCount = computed(() => {
     return count
 })
 
-const activeRuns = computed(() => {
-    if (!props.liveEvents) return 0
-    const running = new Set<string>()
-    for (const evt of props.liveEvents.slice(0, 20)) {
-        if (evt.type === 'run_started') running.add(evt.agentId)
-        if (evt.type === 'run_completed' || evt.type === 'run_failed') running.delete(evt.agentId)
-    }
-    return running.size
-})
+// P0-1b: use store-level activeRunAgentIds instead of deriving from event list
+const activeRuns = computed(() => store.activeRunAgentIds.size)
 
 // ─── Task management ──────────────────────────────────────
 const showNewTaskForm = ref(false)
@@ -60,10 +54,11 @@ const STATUS_COLORS: Record<string, string> = {
     failed: '#ef4444',
 }
 
+// P0-3: unified with workspace zones (execution → coding)
 const PHASE_LABELS: Record<string, string> = {
     requirement: '需求',
     planning: '规划',
-    execution: '执行',
+    coding: '开发',
     review: '审核',
     delivery: '交付',
 }
@@ -183,7 +178,7 @@ function artifactIcon(type: string): string {
                 <select v-model="newTaskPhase" class="op-input op-select">
                     <option value="requirement">📋 需求</option>
                     <option value="planning">📐 规划</option>
-                    <option value="execution">⚡ 执行</option>
+                    <option value="coding">⚡ 开发</option>
                     <option value="review">🔍 审核</option>
                     <option value="delivery">📦 交付</option>
                 </select>

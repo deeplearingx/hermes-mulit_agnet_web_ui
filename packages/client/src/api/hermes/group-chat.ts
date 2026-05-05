@@ -228,7 +228,7 @@ export interface GroupTask {
     title: string
     description: string
     status: 'draft' | 'planning' | 'running' | 'reviewing' | 'done' | 'failed'
-    phase: 'requirement' | 'planning' | 'execution' | 'review' | 'delivery'
+    phase: 'requirement' | 'planning' | 'coding' | 'review' | 'delivery'
     assigneeAgentId: string | null
     createdAt: number
     updatedAt: number

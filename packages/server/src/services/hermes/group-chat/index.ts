@@ -668,8 +668,8 @@ export class GroupChatServer {
     private _restoreScheduled = false
     /** roomId -> (userId -> { userName, timer }) */
     private typingState = new Map<string, Map<string, { userName: string; timer: ReturnType<typeof setTimeout> }>>()
-    /** roomId -> (agentName -> { agentName, status }) */
-    private contextStatusState = new Map<string, Map<string, { agentName: string; status: string }>>()
+    /** roomId -> (key -> { agentId, agentName, status }) — key is agentId or agentName */
+    private contextStatusState = new Map<string, Map<string, { agentId: string; agentName: string; status: string }>>()
 
     setGatewayManager(manager: any): void {
         this.agentClients.setGatewayManager(manager)
@@ -955,12 +955,15 @@ export class GroupChatServer {
         })
     }
 
-    private handleContextStatus(socket: Socket, data: { roomId?: string; agentName?: string; status?: string }): void {
+    private handleContextStatus(socket: Socket, data: { roomId?: string; agentId?: string; agentName?: string; status?: string }): void {
         const roomId = data.roomId || 'general'
+        const agentId = data.agentId || ''
         const agentName = data.agentName || ''
         const status = data.status || ''
 
-        if (!agentName) return
+        // P0-2: use agentId as primary key, fallback to agentName for backward compat
+        const key = agentId || agentName
+        if (!key) return
 
         let roomStatuses = this.contextStatusState.get(roomId)
         if (!roomStatuses) {
@@ -969,15 +972,16 @@ export class GroupChatServer {
         }
 
         if (status === 'ready') {
-            roomStatuses.delete(agentName)
+            roomStatuses.delete(key)
             if (roomStatuses.size === 0) this.contextStatusState.delete(roomId)
         } else {
-            roomStatuses.set(agentName, { agentName, status })
+            roomStatuses.set(key, { agentId, agentName, status })
         }
 
-        // Relay to all other sockets in the room
+        // Relay to all other sockets in the room (include both agentId and agentName)
         socket.to(roomId).emit('context_status', {
             roomId,
+            agentId,
             agentName,
             status,
         })
@@ -1013,7 +1017,7 @@ export class GroupChatServer {
         return Array.from(roomTyping.entries()).map(([userId, entry]) => ({ userId, userName: entry.userName }))
     }
 
-    private getContextStatuses(roomId: string): Array<{ agentName: string; status: string }> {
+    private getContextStatuses(roomId: string): Array<{ agentId: string; agentName: string; status: string }> {
         const roomStatuses = this.contextStatusState.get(roomId)
         if (!roomStatuses) return []
         return Array.from(roomStatuses.values())

@@ -55,7 +55,8 @@ export const useGroupChatStore = defineStore('groupChat', () => {
     const isJoining = ref(false)
     const error = ref<string | null>(null)
     const typingUsers = ref<Map<string, { name: string; timer: ReturnType<typeof setTimeout> }>>(new Map())
-    const contextStatuses = ref<Map<string, { agentName: string; status: string }>>(new Map())
+    // P0-2: key is agentId (fallback to agentName for backward compat)
+    const contextStatuses = ref<Map<string, { agentId: string; agentName: string; status: string }>>(new Map())
     const workspaceLayout = ref<WorkspaceLayoutItem[]>([])
     const tasks = ref<GroupTask[]>([])
     const artifacts = ref<GroupArtifact[]>([])
@@ -65,6 +66,8 @@ export const useGroupChatStore = defineStore('groupChat', () => {
     const statusClearTimers = new Map<string, ReturnType<typeof setTimeout>>()
     // Bug 3 fix: track drag state to prevent layout overwrite during drag
     const isDragging = ref(false)
+    // P0-1b: track active run agent IDs directly (not derived from event list)
+    const activeRunAgentIds = ref<Set<string>>(new Set())
 
     // Computed: returns first active status for backward compat
     const contextStatus = computed(() => {
@@ -155,12 +158,14 @@ export const useGroupChatStore = defineStore('groupChat', () => {
             }
         })
 
-        socket.on('context_status', (data: { roomId: string; agentName: string; status: string }) => {
+        // P0-2: accept agentId from backend, use as Map key
+        socket.on('context_status', (data: { roomId: string; agentId?: string; agentName: string; status: string }) => {
             if (data.roomId === currentRoomId.value) {
+                const key = data.agentId || data.agentName
                 if (data.status === 'ready') {
-                    contextStatuses.value.delete(data.agentName)
+                    contextStatuses.value.delete(key)
                 } else {
-                    contextStatuses.value.set(data.agentName, { agentName: data.agentName, status: data.status })
+                    contextStatuses.value.set(key, { agentId: data.agentId || '', agentName: data.agentName, status: data.status })
                 }
                 // Trigger reactivity
                 contextStatuses.value = new Map(contextStatuses.value)
@@ -179,10 +184,20 @@ export const useGroupChatStore = defineStore('groupChat', () => {
                 if (liveEvents.value.length > maxLiveEvents) {
                     liveEvents.value = liveEvents.value.slice(0, maxLiveEvents)
                 }
-                // Sync runtime event → contextStatuses for canvas state
+                // P0-1b: maintain activeRunAgentIds directly
+                if (event.type === 'run_started') {
+                    activeRunAgentIds.value.add(event.agentId)
+                    activeRunAgentIds.value = new Set(activeRunAgentIds.value)
+                }
+                if (event.type === 'run_completed' || event.type === 'run_failed') {
+                    activeRunAgentIds.value.delete(event.agentId)
+                    activeRunAgentIds.value = new Set(activeRunAgentIds.value)
+                }
+                // Sync runtime event → contextStatuses for canvas state (P0-2: use agentId as key)
                 const mappedStatus = runtimeEventToStatus(event.type)
                 if (mappedStatus) {
-                    contextStatuses.value.set(event.agentName, {
+                    contextStatuses.value.set(event.agentId, {
+                        agentId: event.agentId,
                         agentName: event.agentName,
                         status: mappedStatus,
                     })
@@ -191,20 +206,20 @@ export const useGroupChatStore = defineStore('groupChat', () => {
                 // Auto-clear completed/failed after 5s
                 // Bug 1 fix: cancel previous timer for this agent before setting new one
                 if (event.type === 'run_completed' || event.type === 'run_failed') {
-                    const existingTimer = statusClearTimers.get(event.agentName)
+                    const existingTimer = statusClearTimers.get(event.agentId)
                     if (existingTimer) clearTimeout(existingTimer)
                     const timer = setTimeout(() => {
-                        contextStatuses.value.delete(event.agentName)
+                        contextStatuses.value.delete(event.agentId)
                         contextStatuses.value = new Map(contextStatuses.value)
-                        statusClearTimers.delete(event.agentName)
+                        statusClearTimers.delete(event.agentId)
                     }, 5000)
-                    statusClearTimers.set(event.agentName, timer)
+                    statusClearTimers.set(event.agentId, timer)
                 } else {
                     // If agent starts a new run, cancel any pending clear timer
-                    const existingTimer = statusClearTimers.get(event.agentName)
+                    const existingTimer = statusClearTimers.get(event.agentId)
                     if (existingTimer) {
                         clearTimeout(existingTimer)
-                        statusClearTimers.delete(event.agentName)
+                        statusClearTimers.delete(event.agentId)
                     }
                 }
             }
@@ -236,6 +251,7 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         tasks.value = []
         artifacts.value = []
         liveEvents.value = []
+        activeRunAgentIds.value.clear()
     }
 
     function setUserInfo(name: string, description: string) {
@@ -489,6 +505,11 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         if (_typingTimer) { clearTimeout(_typingTimer); _typingTimer = null }
     }
 
+    // P0-4: Pinia setup store auto-unwraps refs, so expose as action
+    function setDragging(value: boolean) {
+        isDragging.value = value
+    }
+
     return {
         // State
         connected,
@@ -506,6 +527,7 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         tasks,
         artifacts,
         liveEvents,
+        activeRunAgentIds,
         userId,
         userName,
         // Computed
@@ -536,5 +558,6 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         addArtifact,
         removeArtifact,
         isDragging,
+        setDragging,
     }
 })
