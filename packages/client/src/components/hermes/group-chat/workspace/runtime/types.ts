@@ -2,6 +2,7 @@
 // Types for the pixel-style workspace visualization mode.
 
 export type AgentWorkStatus = 'idle' | 'compressing' | 'replying' | 'thinking'
+    | 'calling_tool' | 'completed' | 'failed'
 
 export interface AgentWorkspaceState {
     agentId: string
@@ -10,6 +11,8 @@ export interface AgentWorkspaceState {
     status: AgentWorkStatus
     seatIndex: number
     zone: string
+    x?: number   // 从 workspaceLayout 恢复的坐标
+    y?: number
     lastEventAt: number
 }
 
@@ -56,8 +59,11 @@ export const ZONE_COLORS: Record<string, { bg: number; border: number; label: st
 
 /** Agent status → visual mapping */
 export const STATUS_VISUALS: Record<AgentWorkStatus, { color: number; label: string; emoji: string }> = {
-    idle:        { color: 0x6b7280, label: '空闲',   emoji: '💤' },
-    compressing: { color: 0xf59e0b, label: '压缩中', emoji: '⚙️' },
-    replying:    { color: 0x3b82f6, label: '回复中', emoji: '✍️' },
-    thinking:    { color: 0xa855f7, label: '思考中', emoji: '🤔' },
+    idle:        { color: 0x6b7280, label: '空闲',     emoji: '💤' },
+    compressing: { color: 0xf59e0b, label: '压缩中',   emoji: '⚙️' },
+    replying:    { color: 0x3b82f6, label: '回复中',   emoji: '✍️' },
+    thinking:    { color: 0xa855f7, label: '思考中',   emoji: '🤔' },
+    calling_tool:{ color: 0x8b5cf6, label: '调用工具', emoji: '🔧' },
+    completed:   { color: 0x22c55e, label: '已完成',   emoji: '✅' },
+    failed:      { color: 0xef4444, label: '失败',     emoji: '❌' },
 }

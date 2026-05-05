@@ -39,6 +39,8 @@ const activeRuns = computed(() => {
 const showNewTaskForm = ref(false)
 const newTaskTitle = ref('')
 const newTaskDesc = ref('')
+const newTaskAssignee = ref('')
+const newTaskPhase = ref<string>('requirement')
 
 const STATUS_LABELS: Record<string, string> = {
     draft: '📝 草稿',
@@ -68,9 +70,16 @@ const PHASE_LABELS: Record<string, string> = {
 
 async function onCreateTask() {
     if (!newTaskTitle.value.trim()) return
-    await store.addTask(newTaskTitle.value.trim(), newTaskDesc.value.trim() || undefined)
+    await store.addTask(
+        newTaskTitle.value.trim(),
+        newTaskDesc.value.trim() || undefined,
+        newTaskAssignee.value || undefined,
+        newTaskPhase.value || undefined,
+    )
     newTaskTitle.value = ''
     newTaskDesc.value = ''
+    newTaskAssignee.value = ''
+    newTaskPhase.value = 'requirement'
     showNewTaskForm.value = false
 }
 
@@ -167,6 +176,17 @@ function artifactIcon(type: string): string {
                     placeholder="描述（可选）"
                     @keyup.enter="onCreateTask"
                 />
+                <select v-model="newTaskAssignee" class="op-input op-select">
+                    <option value="">未指定负责人</option>
+                    <option v-for="a in agents" :key="a.agentId" :value="a.agentId">{{ a.name }}</option>
+                </select>
+                <select v-model="newTaskPhase" class="op-input op-select">
+                    <option value="requirement">📋 需求</option>
+                    <option value="planning">📐 规划</option>
+                    <option value="execution">⚡ 执行</option>
+                    <option value="review">🔍 审核</option>
+                    <option value="delivery">📦 交付</option>
+                </select>
                 <button class="op-submit-btn" @click="onCreateTask">创建</button>
             </div>
 

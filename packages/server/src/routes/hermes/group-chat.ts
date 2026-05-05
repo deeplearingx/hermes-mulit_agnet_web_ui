@@ -324,18 +324,86 @@ groupChatRoutes.put('/api/hermes/group-chat/rooms/:roomId/workspace/layout', asy
 groupChatRoutes.post('/api/hermes/group-chat/rooms/:roomId/tasks', async (ctx) => {
     if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }
     const roomId = ctx.params.roomId
-    const { title, description, assigneeAgentId } = ctx.request.body as { title: string; description?: string; assigneeAgentId?: string }
+    const { title, description, assigneeAgentId, phase } = ctx.request.body as { title: string; description?: string; assigneeAgentId?: string; phase?: string }
     if (!title) { ctx.status = 400; ctx.body = { error: 'title is required' }; return }
     const storage = chatServer.getStorage()
-    const task = storage.createTask(roomId, title, description || '', assigneeAgentId)
+    const task = storage.createTask(roomId, title, description || '', assigneeAgentId, phase)
+    // Broadcast workspace update to room
+    chatServer.getIO().of('/group-chat').to(roomId).emit('workspace_updated', {
+        roomId,
+        tasks: storage.getTasks(roomId),
+    })
     ctx.body = { task }
 })
 
 groupChatRoutes.put('/api/hermes/group-chat/rooms/:roomId/tasks/:taskId', async (ctx) => {
     if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }
+    const roomId = ctx.params.roomId
     const { taskId } = ctx.params
     const patch = ctx.request.body as { title?: string; description?: string; status?: string; phase?: string; assigneeAgentId?: string }
     const storage = chatServer.getStorage()
     storage.updateTask(taskId, patch)
+    // Return updated task and broadcast
+    const updated = storage.getTasks(roomId).find(t => t.id === taskId) || null
+    chatServer.getIO().of('/group-chat').to(roomId).emit('workspace_updated', {
+        roomId,
+        tasks: storage.getTasks(roomId),
+    })
+    ctx.body = { task: updated }
+})
+
+// ─── Artifact API ──────────────────────────────────────────
+groupChatRoutes.post('/api/hermes/group-chat/rooms/:roomId/artifacts', async (ctx) => {
+    if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }
+    const roomId = ctx.params.roomId
+    const { name, type, taskId, agentId, path, contentPreview } = ctx.request.body as {
+        name: string; type: string; taskId?: string; agentId?: string; path?: string; contentPreview?: string
+    }
+    if (!name || !type) { ctx.status = 400; ctx.body = { error: 'name and type are required' }; return }
+    const storage = chatServer.getStorage()
+    const result = storage.createArtifact(roomId, name, type, { taskId, agentId, path, contentPreview })
+    const artifact = { id: result.id, roomId, taskId: taskId || null, agentId: agentId || null, name, type, path: path || null, contentPreview: contentPreview || null, createdAt: Date.now() }
+    // Broadcast workspace update
+    chatServer.getIO().of('/group-chat').to(roomId).emit('workspace_updated', {
+        roomId,
+        artifacts: storage.getArtifacts(roomId),
+    })
+    ctx.body = { artifact }
+})
+
+groupChatRoutes.get('/api/hermes/group-chat/rooms/:roomId/artifacts/:artifactId', async (ctx) => {
+    if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }
+    const { artifactId } = ctx.params
+    const storage = chatServer.getStorage()
+    const artifact = storage.getArtifact(artifactId)
+    if (!artifact) { ctx.status = 404; ctx.body = { error: 'Artifact not found' }; return }
+    ctx.body = { artifact }
+})
+
+groupChatRoutes.patch('/api/hermes/group-chat/rooms/:roomId/artifacts/:artifactId', async (ctx) => {
+    if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }
+    const roomId = ctx.params.roomId
+    const { artifactId } = ctx.params
+    const patch = ctx.request.body as { name?: string; type?: string; path?: string; contentPreview?: string }
+    const storage = chatServer.getStorage()
+    storage.updateArtifact(artifactId, patch)
+    const updated = storage.getArtifact(artifactId)
+    chatServer.getIO().of('/group-chat').to(roomId).emit('workspace_updated', {
+        roomId,
+        artifacts: storage.getArtifacts(roomId),
+    })
+    ctx.body = { artifact: updated }
+})
+
+groupChatRoutes.delete('/api/hermes/group-chat/rooms/:roomId/artifacts/:artifactId', async (ctx) => {
+    if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }
+    const roomId = ctx.params.roomId
+    const { artifactId } = ctx.params
+    const storage = chatServer.getStorage()
+    storage.deleteArtifact(artifactId)
+    chatServer.getIO().of('/group-chat').to(roomId).emit('workspace_updated', {
+        roomId,
+        artifacts: storage.getArtifacts(roomId),
+    })
     ctx.body = { success: true }
 })

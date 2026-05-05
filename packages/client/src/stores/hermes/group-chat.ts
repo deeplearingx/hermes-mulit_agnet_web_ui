@@ -28,7 +28,10 @@ import {
     updateWorkspaceLayout,
     createGroupTask,
     updateGroupTask,
+    createGroupArtifact,
+    deleteGroupArtifact,
 } from '@/api/hermes/group-chat'
+import { runtimeEventToStatus } from '@/components/hermes/group-chat/workspace/runtime/agent-state'
 
 export interface GroupRuntimeEvent {
     id: string
@@ -58,6 +61,10 @@ export const useGroupChatStore = defineStore('groupChat', () => {
     const artifacts = ref<GroupArtifact[]>([])
     const liveEvents = ref<GroupRuntimeEvent[]>([])
     const maxLiveEvents = 100
+    // Bug 1 fix: track auto-clear timers per agent to avoid stale clears
+    const statusClearTimers = new Map<string, ReturnType<typeof setTimeout>>()
+    // Bug 3 fix: track drag state to prevent layout overwrite during drag
+    const isDragging = ref(false)
 
     // Computed: returns first active status for backward compat
     const contextStatus = computed(() => {
@@ -172,7 +179,43 @@ export const useGroupChatStore = defineStore('groupChat', () => {
                 if (liveEvents.value.length > maxLiveEvents) {
                     liveEvents.value = liveEvents.value.slice(0, maxLiveEvents)
                 }
+                // Sync runtime event → contextStatuses for canvas state
+                const mappedStatus = runtimeEventToStatus(event.type)
+                if (mappedStatus) {
+                    contextStatuses.value.set(event.agentName, {
+                        agentName: event.agentName,
+                        status: mappedStatus,
+                    })
+                    contextStatuses.value = new Map(contextStatuses.value)
+                }
+                // Auto-clear completed/failed after 5s
+                // Bug 1 fix: cancel previous timer for this agent before setting new one
+                if (event.type === 'run_completed' || event.type === 'run_failed') {
+                    const existingTimer = statusClearTimers.get(event.agentName)
+                    if (existingTimer) clearTimeout(existingTimer)
+                    const timer = setTimeout(() => {
+                        contextStatuses.value.delete(event.agentName)
+                        contextStatuses.value = new Map(contextStatuses.value)
+                        statusClearTimers.delete(event.agentName)
+                    }, 5000)
+                    statusClearTimers.set(event.agentName, timer)
+                } else {
+                    // If agent starts a new run, cancel any pending clear timer
+                    const existingTimer = statusClearTimers.get(event.agentName)
+                    if (existingTimer) {
+                        clearTimeout(existingTimer)
+                        statusClearTimers.delete(event.agentName)
+                    }
+                }
             }
+        })
+
+        socket.on('workspace_updated', (data: { roomId: string; layout?: WorkspaceLayoutItem[]; tasks?: GroupTask[]; artifacts?: GroupArtifact[] }) => {
+            if (data.roomId !== currentRoomId.value) return
+            // Bug 3 fix: don't overwrite layout while user is dragging (pending changes exist)
+            if (data.layout && !isDragging.value) workspaceLayout.value = data.layout
+            if (data.tasks) tasks.value = data.tasks
+            if (data.artifacts) artifacts.value = data.artifacts
         })
     }
 
@@ -186,6 +229,9 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         roomName.value = ''
         typingUsers.value.clear()
         contextStatuses.value.clear()
+        // Bug 1 fix: clear all pending timers on disconnect
+        for (const timer of statusClearTimers.values()) clearTimeout(timer)
+        statusClearTimers.clear()
         workspaceLayout.value = []
         tasks.value = []
         artifacts.value = []
@@ -367,23 +413,61 @@ export const useGroupChatStore = defineStore('groupChat', () => {
     // ─── Workspace Actions ──────────────────────────────────
     async function saveWorkspaceLayout(layout: WorkspaceLayoutItem[]) {
         if (!currentRoomId.value) return
+        const oldLayout = [...workspaceLayout.value]
         workspaceLayout.value = layout
-        await updateWorkspaceLayout(currentRoomId.value, layout)
+        try {
+            await updateWorkspaceLayout(currentRoomId.value, layout)
+        } catch (e) {
+            workspaceLayout.value = oldLayout
+            throw e
+        }
     }
 
-    async function addTask(title: string, description?: string, assigneeAgentId?: string) {
+    async function addTask(title: string, description?: string, assigneeAgentId?: string, phase?: string) {
         if (!currentRoomId.value) return
-        const res = await createGroupTask(currentRoomId.value, { title, description, assigneeAgentId })
+        const res = await createGroupTask(currentRoomId.value, { title, description, assigneeAgentId, phase })
         tasks.value.unshift(res.task)
         return res.task
     }
 
     async function patchTask(taskId: string, patch: Parameters<typeof updateGroupTask>[2]) {
         if (!currentRoomId.value) return
-        await updateGroupTask(currentRoomId.value, taskId, patch)
         const idx = tasks.value.findIndex(t => t.id === taskId)
+        const oldTask = idx >= 0 ? { ...tasks.value[idx] } : null
+        // Optimistic update
         if (idx >= 0) {
             tasks.value[idx] = { ...tasks.value[idx], ...patch, updatedAt: Date.now() } as GroupTask
+        }
+        try {
+            const res = await updateGroupTask(currentRoomId.value, taskId, patch)
+            if (idx >= 0 && res.task) {
+                tasks.value[idx] = res.task
+            }
+        } catch (e) {
+            // Rollback on failure
+            if (idx >= 0 && oldTask) {
+                tasks.value[idx] = oldTask
+            }
+            throw e
+        }
+    }
+
+    async function addArtifact(name: string, type: string, opts?: { taskId?: string; agentId?: string; path?: string; contentPreview?: string }) {
+        if (!currentRoomId.value) return
+        const res = await createGroupArtifact(currentRoomId.value, { name, type, ...opts })
+        artifacts.value.unshift(res.artifact)
+        return res.artifact
+    }
+
+    async function removeArtifact(artifactId: string) {
+        if (!currentRoomId.value) return
+        const oldArtifacts = [...artifacts.value]
+        artifacts.value = artifacts.value.filter(a => a.id !== artifactId)
+        try {
+            await deleteGroupArtifact(currentRoomId.value, artifactId)
+        } catch (e) {
+            artifacts.value = oldArtifacts
+            throw e
         }
     }
 
@@ -449,5 +533,8 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         saveWorkspaceLayout,
         addTask,
         patchTask,
+        addArtifact,
+        removeArtifact,
+        isDragging,
     }
 })

@@ -1,6 +1,6 @@
 // ─── Group Office Scene ──────────────────────────────────────
 // Phaser scene that renders a pixel-art office with agent workstations.
-// Pure code rendering — no external assets needed for MVP.
+// Uses real pixel assets from group_assets/ loaded via BootScene.
 
 import Phaser from 'phaser'
 import type { AgentWorkspaceState, AgentWorkStatus } from '../runtime/types'
@@ -10,8 +10,6 @@ import { agentColor } from '../runtime/agent-state'
 const SCENE_W = 720
 const SCENE_H = 560
 const TILE = 16
-const GRID_COLS = SCENE_W / TILE
-const GRID_ROWS = SCENE_H / TILE
 
 // ─── Color constants ────────────────────────────────────────
 const C = {
@@ -19,23 +17,42 @@ const C = {
     floorGrid:   0x1a2744,
     wall:        0x1e293b,
     wallTop:     0x334155,
-    desk:        0x374151,
-    deskTop:     0x4b5563,
-    chair:       0x6b7280,
-    monitor:     0x111827,
-    monitorGlow: 0x3b82f6,
     labelBg:     0x000000,
     labelText:   0xe2e8f0,
     bubbleBg:    0x1e293b,
     bubbleBorder:0x475569,
 }
 
+/** Status → icon texture key mapping */
+const STATUS_ICON_MAP: Record<AgentWorkStatus, string | null> = {
+    idle: null,
+    compressing: 'item_life_pot',
+    replying: 'item_scroll',
+    thinking: 'item_heart',
+    calling_tool: 'weapon_hammer',
+    completed: 'item_gold_coin',
+    failed: 'fx_fail',
+}
+
+/** Status → tint color for the icon */
+const STATUS_TINT_MAP: Record<AgentWorkStatus, number> = {
+    idle: 0x6b7280,
+    compressing: 0xf59e0b,
+    replying: 0x3b82f6,
+    thinking: 0xa855f7,
+    calling_tool: 0x8b5cf6,
+    completed: 0x22c55e,
+    failed: 0xef4444,
+}
+
 export class GroupOfficeScene extends Phaser.Scene {
     private agentSprites: Map<string, Phaser.GameObjects.Container> = new Map()
     private agentBubbles: Map<string, Phaser.GameObjects.Container> = new Map()
+    private agentIcons: Map<string, Phaser.GameObjects.Image> = new Map()
     private agentStates: Map<string, AgentWorkspaceState> = new Map()
     private selectedAgentId: string | null = null
     private pulseTimers: Map<string, Phaser.Time.TimerEvent> = new Map()
+    private idleTweens: Map<string, Phaser.Tweens.Tween> = new Map()
     private dragEnabled = false
 
     constructor() {
@@ -47,6 +64,7 @@ export class GroupOfficeScene extends Phaser.Scene {
         this.drawWalls()
         this.drawZones()
         this.drawFurniture()
+        this.drawZoneDecorations()
 
         // Environment animations
         this.addScanline()
@@ -63,13 +81,18 @@ export class GroupOfficeScene extends Phaser.Scene {
         this.input.on('drag', (_pointer: Phaser.Input.Pointer, gameObject: Phaser.GameObjects.Container, dragX: number, dragY: number) => {
             gameObject.x = dragX
             gameObject.y = dragY
-            // Move bubble with agent
+            // Move bubble and icon with agent
             const agentId = this.findAgentIdBySprite(gameObject)
             if (agentId) {
                 const bubble = this.agentBubbles.get(agentId)
                 if (bubble) {
                     bubble.x = dragX
-                    bubble.y = dragY - 24
+                    bubble.y = dragY - 28
+                }
+                const icon = this.agentIcons.get(agentId)
+                if (icon) {
+                    icon.x = dragX + 16
+                    icon.y = dragY - 8
                 }
             }
         })
@@ -77,7 +100,6 @@ export class GroupOfficeScene extends Phaser.Scene {
         this.input.on('dragend', (_pointer: Phaser.Input.Pointer, gameObject: Phaser.GameObjects.Container) => {
             const agentId = this.findAgentIdBySprite(gameObject)
             if (agentId) {
-                // Determine zone based on position
                 const zone = this.detectZone(gameObject.x, gameObject.y)
                 window.dispatchEvent(new CustomEvent('workspace:layout:changed', {
                     detail: {
@@ -94,11 +116,17 @@ export class GroupOfficeScene extends Phaser.Scene {
     // ─── Drawing ─────────────────────────────────────────────
 
     private drawFloor() {
+        // Use office tilemap as background if loaded, otherwise fallback to code
+        if (this.textures.exists('office_tilemap')) {
+            const tilemap = this.add.image(SCENE_W / 2, SCENE_H / 2, 'office_tilemap')
+            tilemap.setDisplaySize(SCENE_W, SCENE_H)
+            tilemap.setAlpha(0.3)
+        }
+
+        // Grid overlay
         const g = this.add.graphics()
-        // Base floor
-        g.fillStyle(C.floor)
+        g.fillStyle(C.floor, 0.85)
         g.fillRect(0, 0, SCENE_W, SCENE_H)
-        // Grid lines
         g.lineStyle(1, C.floorGrid, 0.3)
         for (let x = 0; x <= SCENE_W; x += TILE * 4) {
             g.lineBetween(x, 0, x, SCENE_H)
@@ -161,30 +189,82 @@ export class GroupOfficeScene extends Phaser.Scene {
     }
 
     private drawFurniture() {
-        const g = this.add.graphics()
-
         for (const seat of DEFAULT_SEATS) {
             const x = seat.x
             const y = seat.y
 
-            // Desk (pixel rectangle)
-            g.fillStyle(C.desk)
-            g.fillRect(x - 24, y - 8, 48, 16)
-            g.fillStyle(C.deskTop)
-            g.fillRect(x - 24, y - 8, 48, 3)
+            // Use loaded desk texture or fallback to code
+            if (this.textures.exists('desk')) {
+                const desk = this.add.image(x, y, 'desk')
+                desk.setScale(0.8)
+            } else {
+                const g = this.add.graphics()
+                g.fillStyle(0x374151)
+                g.fillRect(x - 24, y - 8, 48, 16)
+                g.fillStyle(0x4b5563)
+                g.fillRect(x - 24, y - 8, 48, 3)
+            }
 
-            // Monitor
-            g.fillStyle(C.monitor)
-            g.fillRect(x - 8, y - 20, 16, 12)
-            g.fillStyle(C.monitorGlow, 0.3)
-            g.fillRect(x - 6, y - 18, 12, 8)
-            // Monitor stand
-            g.fillStyle(C.monitor)
-            g.fillRect(x - 2, y - 8, 4, 4)
+            // Monitor — use loaded texture or code
+            if (this.textures.exists('monitor')) {
+                const monitor = this.add.image(x, y - 14, 'monitor')
+                monitor.setScale(0.7)
+            } else {
+                const g = this.add.graphics()
+                g.fillStyle(0x111827)
+                g.fillRect(x - 8, y - 20, 16, 12)
+                g.fillStyle(0x3b82f6, 0.3)
+                g.fillRect(x - 6, y - 18, 12, 8)
+                g.fillStyle(0x111827)
+                g.fillRect(x - 2, y - 8, 4, 4)
+            }
 
             // Chair
-            g.fillStyle(C.chair, 0.5)
-            g.fillRect(x - 6, y + 12, 12, 8)
+            if (this.textures.exists('chair')) {
+                const chair = this.add.image(x, y + 16, 'chair')
+                chair.setScale(0.6)
+                chair.setAlpha(0.7)
+            } else {
+                const g = this.add.graphics()
+                g.fillStyle(0x6b7280, 0.5)
+                g.fillRect(x - 6, y + 12, 12, 8)
+            }
+        }
+    }
+
+    private drawZoneDecorations() {
+        // Add decorative items in zones using loaded assets
+        const decorations: Array<{ texture: string; x: number; y: number; scale: number }> = [
+            // Requirement zone — scrolls and keys
+            { texture: 'item_scroll', x: TILE * 4, y: TILE * 5, scale: 0.8 },
+            { texture: 'item_gold_key', x: TILE * 8, y: TILE * 8, scale: 0.6 },
+            // Coding zone — weapons/tools
+            { texture: 'weapon_sword', x: TILE * 26, y: TILE * 5, scale: 0.7 },
+            { texture: 'weapon_katana', x: TILE * 30, y: TILE * 8, scale: 0.7 },
+            // Review zone — hearts and potions
+            { texture: 'item_heart', x: TILE * 4, y: TILE * 23, scale: 0.6 },
+            { texture: 'item_life_pot', x: TILE * 8, y: TILE * 26, scale: 0.6 },
+            // Delivery zone — coins and keys
+            { texture: 'item_gold_coin', x: TILE * 26, y: TILE * 23, scale: 0.6 },
+            { texture: 'item_silver_coin', x: TILE * 30, y: TILE * 26, scale: 0.6 },
+        ]
+
+        for (const d of decorations) {
+            if (this.textures.exists(d.texture)) {
+                const img = this.add.image(d.x, d.y, d.texture)
+                img.setScale(d.scale)
+                img.setAlpha(0.4)
+                // Gentle float animation
+                this.tweens.add({
+                    targets: img,
+                    y: d.y - 4,
+                    duration: 2000 + Math.random() * 1000,
+                    yoyo: true,
+                    repeat: -1,
+                    ease: 'Sine.easeInOut',
+                    delay: Math.random() * 2000,
+                })
+            }
         }
     }
 
@@ -216,7 +296,6 @@ export class GroupOfficeScene extends Phaser.Scene {
             particle.fillCircle(0, 0, size)
             particle.setPosition(x, y)
             
-            // Float animation
             this.tweens.add({
                 targets: particle,
                 y: y - Phaser.Math.Between(20, 60),
@@ -244,7 +323,6 @@ export class GroupOfficeScene extends Phaser.Scene {
                     glow.fillStyle(color, 0.15)
                     glow.fillRect(seat.x - 6, seat.y - 18, 12, 8)
                     colorIdx++
-                    // Fade out after 500ms
                     this.time.delayedCall(500, () => {
                         glow.clear()
                     })
@@ -309,8 +387,12 @@ export class GroupOfficeScene extends Phaser.Scene {
                 this.agentSprites.delete(id)
                 this.agentBubbles.get(id)?.destroy()
                 this.agentBubbles.delete(id)
+                this.agentIcons.get(id)?.destroy()
+                this.agentIcons.delete(id)
                 this.pulseTimers.get(id)?.destroy()
                 this.pulseTimers.delete(id)
+                this.idleTweens.get(id)?.destroy()
+                this.idleTweens.delete(id)
                 this.agentStates.delete(id)
             }
         }
@@ -329,13 +411,8 @@ export class GroupOfficeScene extends Phaser.Scene {
     private onDragEnable = (e: Event) => {
         const { enabled } = (e as CustomEvent).detail as { enabled: boolean }
         this.dragEnabled = enabled
-        // Update all existing sprites
         for (const [, container] of this.agentSprites) {
-            if (enabled) {
-                container.setInteractive({ draggable: true })
-            } else {
-                container.setInteractive({ draggable: false })
-            }
+            container.setInteractive({ draggable: enabled })
         }
     }
 
@@ -363,19 +440,34 @@ export class GroupOfficeScene extends Phaser.Scene {
 
     private createAgentSprite(agent: AgentWorkspaceState) {
         const seat = DEFAULT_SEATS[agent.seatIndex % DEFAULT_SEATS.length]
-        const color = agentColor(agent.agentName)
-        const container = this.add.container(seat.x, seat.y - 32)
+        const x = agent.x ?? seat.x
+        const y = agent.y ?? seat.y
+        const container = this.add.container(x, y - 32)
 
-        // Body (pixel circle)
-        const body = this.add.graphics()
-        body.fillStyle(color)
-        body.fillCircle(0, 0, 12)
-        // Body highlight
-        body.fillStyle(0xffffff, 0.2)
-        body.fillCircle(-3, -3, 4)
+        // Character sprite — use loaded character or fallback to colored circle
+        const charIndex = (agent.seatIndex % 25) + 1
+        const charKey = `char_${charIndex}`
+        let bodyDisplay: Phaser.GameObjects.Image | Phaser.GameObjects.Graphics
+
+        if (this.textures.exists(charKey)) {
+            const charImg = this.add.image(0, 0, charKey)
+            charImg.setScale(1.2)
+            // Tint with agent color for differentiation
+            charImg.setTint(agentColor(agent.agentName))
+            bodyDisplay = charImg
+        } else {
+            // Fallback: colored circle
+            const color = agentColor(agent.agentName)
+            const body = this.add.graphics()
+            body.fillStyle(color)
+            body.fillCircle(0, 0, 12)
+            body.fillStyle(0xffffff, 0.2)
+            body.fillCircle(-3, -3, 4)
+            bodyDisplay = body
+        }
 
         // Name label
-        const nameText = this.add.text(0, 18, agent.agentName, {
+        const nameText = this.add.text(0, 22, agent.agentName, {
             fontSize: '10px',
             fontFamily: 'monospace',
             color: '#e2e8f0',
@@ -386,8 +478,8 @@ export class GroupOfficeScene extends Phaser.Scene {
         const statusDot = this.add.graphics()
         this.drawStatusDot(statusDot, agent.status)
 
-        container.add([body, nameText, statusDot])
-        container.setSize(32, 40)
+        container.add([bodyDisplay, nameText, statusDot])
+        container.setSize(32, 44)
         container.setInteractive({ draggable: this.dragEnabled })
 
         container.on('pointerdown', () => {
@@ -400,9 +492,18 @@ export class GroupOfficeScene extends Phaser.Scene {
         this.agentSprites.set(agent.agentId, container)
 
         // Create bubble container
-        const bubble = this.add.container(seat.x, seat.y - 56)
+        const bubble = this.add.container(x, y - 60)
         bubble.setVisible(false)
         this.agentBubbles.set(agent.agentId, bubble)
+
+        // Status icon (floating above agent)
+        const iconKey = STATUS_ICON_MAP[agent.status]
+        if (iconKey && this.textures.exists(iconKey)) {
+            const icon = this.add.image(x + 16, y - 40, iconKey)
+            icon.setScale(0.5)
+            icon.setVisible(false)
+            this.agentIcons.set(agent.agentId, icon)
+        }
 
         // Entrance animation
         container.setAlpha(0)
@@ -417,7 +518,7 @@ export class GroupOfficeScene extends Phaser.Scene {
         })
 
         // Idle breathing animation
-        this.tweens.add({
+        const idleTween = this.tweens.add({
             targets: container,
             y: container.y - 2,
             duration: 1500 + Math.random() * 500,
@@ -425,6 +526,7 @@ export class GroupOfficeScene extends Phaser.Scene {
             repeat: -1,
             ease: 'Sine.easeInOut',
         })
+        this.idleTweens.set(agent.agentId, idleTween)
     }
 
     private updateAgentVisual(agent: AgentWorkspaceState) {
@@ -438,17 +540,63 @@ export class GroupOfficeScene extends Phaser.Scene {
             this.drawStatusDot(statusDot, agent.status)
         }
 
-        // Update bubble
+        // Bug 2 fix: only setTint on Image, not Graphics (Graphics also has setTint in Phaser 3)
+        const charDisplay = container.getAt(0)
+        if (charDisplay instanceof Phaser.GameObjects.Image) {
+            const tint = STATUS_TINT_MAP[agent.status]
+            if (agent.status !== 'idle') {
+                charDisplay.setTint(tint)
+            } else {
+                charDisplay.setTint(agentColor(agent.agentName))
+            }
+        }
+
+        // Update status icon
+        const iconKey = STATUS_ICON_MAP[agent.status]
+        let icon = this.agentIcons.get(agent.agentId)
+        if (iconKey && this.textures.exists(iconKey)) {
+            if (!icon) {
+                icon = this.add.image(container.x + 16, container.y - 8, iconKey)
+                icon.setScale(0.5)
+                this.agentIcons.set(agent.agentId, icon)
+            }
+            icon.setTexture(iconKey)
+            icon.setVisible(true)
+            // Icon bounce animation
+            this.tweens.add({
+                targets: icon,
+                y: icon.y - 4,
+                duration: 300,
+                yoyo: true,
+                ease: 'Sine.easeInOut',
+            })
+        } else if (icon) {
+            icon.setVisible(false)
+        }
+
+        // Bug 7 fix: only rebuild bubble when status actually changes
+        const prev = this.agentStates.get(agent.agentId)
+        const statusChanged = !prev || prev.status !== agent.status
         const bubble = this.agentBubbles.get(agent.agentId)
-        if (bubble) {
+        if (bubble && statusChanged) {
             bubble.removeAll(true)
             if (agent.status !== 'idle') {
                 const visual = STATUS_VISUALS[agent.status]
-                const bg = this.add.graphics()
-                bg.fillStyle(C.bubbleBg, 0.9)
-                bg.fillRoundedRect(-30, -12, 60, 20, 4)
-                bg.lineStyle(1, C.bubbleBorder, 0.8)
-                bg.strokeRoundedRect(-30, -12, 60, 20, 4)
+
+                // Use loaded bubble texture or fallback
+                if (this.textures.exists('hud_bubble')) {
+                    const bubbleImg = this.add.image(0, 0, 'hud_bubble')
+                    bubbleImg.setScale(0.6)
+                    bubbleImg.setAlpha(0.9)
+                    bubble.add(bubbleImg)
+                } else {
+                    const bg = this.add.graphics()
+                    bg.fillStyle(C.bubbleBg, 0.9)
+                    bg.fillRoundedRect(-30, -12, 60, 20, 4)
+                    bg.lineStyle(1, C.bubbleBorder, 0.8)
+                    bg.strokeRoundedRect(-30, -12, 60, 20, 4)
+                    bubble.add(bg)
+                }
 
                 const text = this.add.text(0, -2, `${visual.emoji} ${visual.label}`, {
                     fontSize: '10px',
@@ -456,8 +604,7 @@ export class GroupOfficeScene extends Phaser.Scene {
                     color: '#e2e8f0',
                     align: 'center',
                 }).setOrigin(0.5)
-
-                bubble.add([bg, text])
+                bubble.add(text)
                 bubble.setVisible(true)
 
                 // Pulse animation for active states
@@ -483,14 +630,96 @@ export class GroupOfficeScene extends Phaser.Scene {
             }
         }
 
-        // Working animation — slight bounce
-        if (agent.status === 'replying') {
+        // Bug 7 fix: only trigger status animations on actual status change
+        if (!statusChanged) return
+
+        // Status-specific animations
+        if (agent.status === 'replying' || agent.status === 'thinking') {
+            // Working animation — slight bounce
             this.tweens.add({
                 targets: container,
                 y: container.y - 2,
                 duration: 200,
                 yoyo: true,
                 repeat: 2,
+            })
+        } else if (agent.status === 'calling_tool') {
+            // Tool call — shake animation
+            this.tweens.add({
+                targets: container,
+                x: container.x + 2,
+                duration: 50,
+                yoyo: true,
+                repeat: 4,
+            })
+            // FX sparkle if available
+            if (this.textures.exists('fx_sparkle')) {
+                const sparkle = this.add.image(container.x, container.y - 10, 'fx_sparkle')
+                sparkle.setScale(0.5)
+                sparkle.setAlpha(0.8)
+                this.tweens.add({
+                    targets: sparkle,
+                    alpha: 0,
+                    scaleX: 1.5,
+                    scaleY: 1.5,
+                    duration: 800,
+                    onComplete: () => sparkle.destroy(),
+                })
+            }
+        } else if (agent.status === 'completed') {
+            // Completed — gold coin flash
+            if (this.textures.exists('fx_success')) {
+                const fx = this.add.image(container.x, container.y - 10, 'fx_success')
+                fx.setScale(0.4)
+                this.tweens.add({
+                    targets: fx,
+                    alpha: 0,
+                    y: fx.y - 20,
+                    scaleX: 0.8,
+                    scaleY: 0.8,
+                    duration: 1500,
+                    onComplete: () => fx.destroy(),
+                })
+            } else {
+                const flash = this.add.graphics()
+                flash.fillStyle(0x22c55e, 0.3)
+                flash.fillCircle(container.x, container.y, 20)
+                this.tweens.add({
+                    targets: flash,
+                    alpha: 0,
+                    duration: 1500,
+                    onComplete: () => flash.destroy(),
+                })
+            }
+        } else if (agent.status === 'failed') {
+            // Failed — red flash + shake
+            if (this.textures.exists('fx_fail')) {
+                const fx = this.add.image(container.x, container.y - 10, 'fx_fail')
+                fx.setScale(0.4)
+                this.tweens.add({
+                    targets: fx,
+                    alpha: 0,
+                    y: fx.y - 20,
+                    duration: 2000,
+                    onComplete: () => fx.destroy(),
+                })
+            } else {
+                const flash = this.add.graphics()
+                flash.fillStyle(0xef4444, 0.3)
+                flash.fillCircle(container.x, container.y, 20)
+                this.tweens.add({
+                    targets: flash,
+                    alpha: 0,
+                    duration: 2000,
+                    onComplete: () => flash.destroy(),
+                })
+            }
+            this.tweens.add({
+                targets: container,
+                x: container.x + 3,
+                duration: 60,
+                yoyo: true,
+                repeat: 5,
             })
         }
     }
@@ -509,9 +738,12 @@ export class GroupOfficeScene extends Phaser.Scene {
         window.removeEventListener('workspace:agents:update', this.onAgentsUpdate as EventListener)
         window.removeEventListener('workspace:drag:enable', this.onDragEnable as EventListener)
         for (const timer of this.pulseTimers.values()) timer.destroy()
+        for (const tween of this.idleTweens.values()) tween.destroy()
         this.pulseTimers.clear()
+        this.idleTweens.clear()
         this.agentSprites.clear()
         this.agentBubbles.clear()
+        this.agentIcons.clear()
         this.agentStates.clear()
     }
 }

@@ -1,25 +1,44 @@
 // ─── Agent State Derivation ──────────────────────────────────
 // Derives workspace agent states from existing Pinia store data.
 
-import type { RoomAgent } from '@/api/hermes/group-chat'
+import type { RoomAgent, WorkspaceLayoutItem } from '@/api/hermes/group-chat'
 import type { AgentWorkspaceState, AgentWorkStatus } from './types'
 import { DEFAULT_SEATS } from './types'
 
+/** Map runtime event type to visual agent status */
+export function runtimeEventToStatus(eventType: string): AgentWorkStatus | null {
+    const map: Record<string, AgentWorkStatus> = {
+        run_started: 'replying',
+        context_compressing: 'compressing',
+        replying: 'replying',
+        tool_call: 'calling_tool',
+        run_completed: 'completed',
+        run_failed: 'failed',
+    }
+    return map[eventType] ?? null
+}
+
 /**
- * Derive workspace states from store.agents + store.contextStatuses.
+ * Derive workspace states from store.agents + store.contextStatuses + workspaceLayout.
  * Maps each agent to a seat and derives work status from context_status events.
+ * When workspaceLayout is provided, uses saved x/y coordinates instead of defaults.
  */
 export function deriveAgentStates(
     agents: RoomAgent[],
     contextStatuses: Map<string, { agentName: string; status: string }>,
+    workspaceLayout?: WorkspaceLayoutItem[],
 ): AgentWorkspaceState[] {
     return agents.map((agent, index) => {
         const statusEntry = contextStatuses.get(agent.name)
         let status: AgentWorkStatus = 'idle'
         if (statusEntry?.status === 'compressing') status = 'compressing'
         else if (statusEntry?.status === 'replying') status = 'replying'
+        else if (statusEntry?.status === 'calling_tool') status = 'calling_tool'
+        else if (statusEntry?.status === 'completed') status = 'completed'
+        else if (statusEntry?.status === 'failed') status = 'failed'
 
         const seat = DEFAULT_SEATS[index % DEFAULT_SEATS.length]
+        const layout = workspaceLayout?.find(l => l.agentId === agent.agentId)
 
         return {
             agentId: agent.agentId,
@@ -27,7 +46,9 @@ export function deriveAgentStates(
             profile: agent.profile,
             status,
             seatIndex: index,
-            zone: seat.zone,
+            zone: layout?.zone ?? seat.zone,
+            x: layout?.x ?? seat.x,
+            y: layout?.y ?? seat.y,
             lastEventAt: Date.now(),
         }
     })

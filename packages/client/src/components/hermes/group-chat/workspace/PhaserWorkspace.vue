@@ -19,6 +19,7 @@ onMounted(async () => {
     if (!containerRef.value) return
 
     const Phaser = (await import('phaser')).default
+    const { BootScene } = await import('./scenes/BootScene')
     const { GroupOfficeScene } = await import('./scenes/GroupOfficeScene')
 
     game = new Phaser.Game({
@@ -28,7 +29,7 @@ onMounted(async () => {
         height: 560,
         pixelArt: true,
         backgroundColor: '#0f1729',
-        scene: [GroupOfficeScene],
+        scene: [BootScene, GroupOfficeScene],
         scale: {
             mode: Phaser.Scale.FIT,
             autoCenter: Phaser.Scale.CENTER_BOTH,
@@ -37,13 +38,7 @@ onMounted(async () => {
         audio: { noAudio: true },
     })
 
-    // Enable drag mode after game is ready
-    setTimeout(() => {
-        window.dispatchEvent(new CustomEvent('workspace:drag:enable', {
-            detail: { enabled: true },
-        }))
-    }, 500)
-
+    // Bug 6 fix: drag enable is now handled by BootScene.create() after assets load
     // Listen for layout changes from Phaser drag events
     window.addEventListener('workspace:layout:changed', onLayoutChanged as EventListener)
 })
@@ -63,6 +58,8 @@ onBeforeUnmount(() => {
 function onLayoutChanged(e: Event) {
     const { agentId, x, y, zone } = (e as CustomEvent).detail
     pendingLayoutChanges.value.set(agentId, { agentId, x, y, zone })
+    // Bug 3 fix: mark dragging state to prevent workspace_updated from overwriting
+    store.isDragging.value = true
 
     // Debounce: save layout after 1 second of no changes
     if (layoutDebounceTimer) clearTimeout(layoutDebounceTimer)
@@ -79,14 +76,15 @@ function onLayoutChanged(e: Event) {
         }
         pendingLayoutChanges.value.clear()
         await store.saveWorkspaceLayout(existing)
+        store.isDragging.value = false
     }, 1000)
 }
 
 // Bridge: Vue props → Phaser scene via CustomEvent
 watch(
-    () => [props.agents, props.contextStatuses],
+    () => [props.agents, props.contextStatuses, store.workspaceLayout],
     () => {
-        const states = deriveAgentStates(props.agents, props.contextStatuses)
+        const states = deriveAgentStates(props.agents, props.contextStatuses, store.workspaceLayout)
         window.dispatchEvent(new CustomEvent('workspace:agents:update', {
             detail: { agents: states },
         }))

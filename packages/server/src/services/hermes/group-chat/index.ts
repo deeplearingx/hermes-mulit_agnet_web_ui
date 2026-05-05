@@ -533,13 +533,14 @@ class ChatStorage {
         ).all(roomId) || []) as any[]
     }
 
-    createTask(roomId: string, title: string, description: string, assigneeAgentId?: string): { id: string; roomId: string; title: string; description: string; status: string; phase: string; assigneeAgentId: string | null; createdAt: number; updatedAt: number } {
+    createTask(roomId: string, title: string, description: string, assigneeAgentId?: string, phase?: string): { id: string; roomId: string; title: string; description: string; status: string; phase: string; assigneeAgentId: string | null; createdAt: number; updatedAt: number } {
         const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
         const now = Date.now()
+        const taskPhase = phase || 'requirement'
         this.db()?.prepare(
             'INSERT INTO gc_tasks (id, roomId, title, description, status, phase, assigneeAgentId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        ).run(id, roomId, title, description || '', 'draft', 'requirement', assigneeAgentId || null, now, now)
-        return { id, roomId, title, description: description || '', status: 'draft', phase: 'requirement', assigneeAgentId: assigneeAgentId || null, createdAt: now, updatedAt: now }
+        ).run(id, roomId, title, description || '', 'draft', taskPhase, assigneeAgentId || null, now, now)
+        return { id, roomId, title, description: description || '', status: 'draft', phase: taskPhase, assigneeAgentId: assigneeAgentId || null, createdAt: now, updatedAt: now }
     }
 
     updateTask(taskId: string, patch: { title?: string; description?: string; status?: string; phase?: string; assigneeAgentId?: string }): void {
@@ -567,6 +568,28 @@ class ChatStorage {
             'INSERT INTO gc_artifacts (id, roomId, taskId, agentId, name, type, path, contentPreview, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
         ).run(id, roomId, opts?.taskId || null, opts?.agentId || null, name, type, opts?.path || null, opts?.contentPreview || null, Date.now())
         return { id }
+    }
+
+    getArtifact(artifactId: string): { id: string; roomId: string; taskId: string | null; agentId: string | null; name: string; type: string; path: string | null; contentPreview: string | null; createdAt: number } | null {
+        return (this.db()?.prepare(
+            'SELECT * FROM gc_artifacts WHERE id = ?'
+        ).get(artifactId) || null) as any
+    }
+
+    updateArtifact(artifactId: string, patch: { name?: string; type?: string; path?: string; contentPreview?: string }): void {
+        const sets: string[] = []
+        const vals: any[] = []
+        if (patch.name !== undefined) { sets.push('name = ?'); vals.push(patch.name) }
+        if (patch.type !== undefined) { sets.push('type = ?'); vals.push(patch.type) }
+        if (patch.path !== undefined) { sets.push('path = ?'); vals.push(patch.path) }
+        if (patch.contentPreview !== undefined) { sets.push('contentPreview = ?'); vals.push(patch.contentPreview) }
+        if (sets.length === 0) return
+        vals.push(artifactId)
+        this.db()?.prepare(`UPDATE gc_artifacts SET ${sets.join(', ')} WHERE id = ?`).run(...vals)
+    }
+
+    deleteArtifact(artifactId: string): void {
+        this.db()?.prepare('DELETE FROM gc_artifacts WHERE id = ?').run(artifactId)
     }
 }
 

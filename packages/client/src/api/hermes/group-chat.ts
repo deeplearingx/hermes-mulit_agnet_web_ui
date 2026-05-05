@@ -268,6 +268,7 @@ export async function createGroupTask(roomId: string, data: {
     title: string
     description?: string
     assigneeAgentId?: string
+    phase?: string
 }): Promise<{ task: GroupTask }> {
     return request(`/api/hermes/group-chat/rooms/${roomId}/tasks`, {
         method: 'POST',
@@ -282,10 +283,48 @@ export async function updateGroupTask(roomId: string, taskId: string, patch: {
     status?: string
     phase?: string
     assigneeAgentId?: string
-}): Promise<void> {
-    await request(`/api/hermes/group-chat/rooms/${roomId}/tasks/${taskId}`, {
+}): Promise<{ task: GroupTask }> {
+    return request(`/api/hermes/group-chat/rooms/${roomId}/tasks/${taskId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch),
+    })
+}
+
+export async function createGroupArtifact(roomId: string, data: {
+    name: string
+    type: string
+    taskId?: string
+    agentId?: string
+    path?: string
+    contentPreview?: string
+}): Promise<{ artifact: GroupArtifact }> {
+    return request(`/api/hermes/group-chat/rooms/${roomId}/artifacts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    })
+}
+
+export async function getGroupArtifact(roomId: string, artifactId: string): Promise<{ artifact: GroupArtifact }> {
+    return request(`/api/hermes/group-chat/rooms/${roomId}/artifacts/${artifactId}`)
+}
+
+export async function updateGroupArtifact(roomId: string, artifactId: string, patch: {
+    name?: string
+    type?: string
+    path?: string
+    contentPreview?: string
+}): Promise<{ artifact: GroupArtifact }> {
+    return request(`/api/hermes/group-chat/rooms/${roomId}/artifacts/${artifactId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+    })
+}
+
+export async function deleteGroupArtifact(roomId: string, artifactId: string): Promise<void> {
+    await request(`/api/hermes/group-chat/rooms/${roomId}/artifacts/${artifactId}`, {
+        method: 'DELETE',
     })
 }
