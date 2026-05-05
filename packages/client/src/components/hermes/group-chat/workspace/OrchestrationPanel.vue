@@ -38,12 +38,12 @@ const PHASE_LABELS: Record<string, string> = {
     delivery: '交付',
 }
 
-// P8-1: Use displayTask prop (shows draft tasks too, unlike activeTask)
-const activeTask = computed(() => props.displayTask)
+// P11-6: Main task for the task card — use displayTask (shows draft/done too)
+const mainTask = computed(() => props.displayTask)
 
 const activePhaseIndex = computed(() => {
-    if (!activeTask.value) return -1
-    return PHASES.findIndex(p => p.key === activeTask.value!.phase)
+    if (!mainTask.value) return -1
+    return PHASES.findIndex(p => p.key === mainTask.value!.phase)
 })
 
 // ─── Stats ───────────────────────────────────────────────
@@ -97,22 +97,42 @@ async function onCreateTask() {
     showNewTaskForm.value = false
 }
 
-// P8-6: STATUS_TO_PHASE mapping
-const STATUS_TO_PHASE: Record<string, string> = {
-    draft: 'requirement',
-    planning: 'planning',
-    running: 'coding',
-    reviewing: 'review',
-    done: 'delivery',
+// P11-6: Explicit task action buttons (replaces cycleTaskStatus)
+const TASK_ACTIONS: Record<string, Array<{
+    label: string
+    nextStatus: string
+    nextPhase?: string
+    keepPhase?: boolean
+    icon: string
+}>> = {
+    draft: [
+        { label: '开始规划', nextStatus: 'planning', nextPhase: 'planning', icon: '📐' },
+    ],
+    planning: [
+        { label: '开始开发', nextStatus: 'running', nextPhase: 'coding', icon: '⚡' },
+    ],
+    running: [
+        { label: '提交审核', nextStatus: 'reviewing', nextPhase: 'review', icon: '🔍' },
+        { label: '标记失败', nextStatus: 'failed', keepPhase: true, icon: '❌' },
+    ],
+    reviewing: [
+        { label: '审核通过', nextStatus: 'done', nextPhase: 'delivery', icon: '✅' },
+        { label: '打回修改', nextStatus: 'running', nextPhase: 'coding', icon: '↩️' },
+    ],
+    done: [
+        { label: '重新打开', nextStatus: 'running', nextPhase: 'coding', icon: '🔄' },
+    ],
+    failed: [
+        { label: '重新开始', nextStatus: 'draft', nextPhase: 'requirement', icon: '🔄' },
+    ],
 }
 
-async function cycleTaskStatus(task: GroupTask) {
-    const order = ['draft', 'planning', 'running', 'reviewing', 'done'] as const
-    const idx = order.indexOf(task.status as any)
-    const next = order[(idx + 1) % order.length]
-    // P8-6: Sync phase with status (failed keeps original phase)
-    const phase = next === 'failed' ? task.phase : (STATUS_TO_PHASE[next] ?? task.phase)
-    await store.patchTask(task.id, { status: next, phase })
+async function executeTaskAction(
+    task: GroupTask,
+    action: { nextStatus: string; nextPhase?: string; keepPhase?: boolean },
+) {
+    const phase = action.keepPhase ? task.phase : (action.nextPhase ?? task.phase)
+    await store.patchTask(task.id, { status: action.nextStatus, phase })
 }
 
 function artifactIcon(type: string): string {
@@ -140,24 +160,35 @@ const recentIssues = computed(() => {
                 <span class="op-mt-title">🎯 主任务</span>
                 <button class="op-add-btn" @click="showNewTaskForm = !showNewTaskForm">+</button>
             </div>
-            <div v-if="activeTask" class="op-mt-card">
+            <!-- P11-6: Show mainTask (displayTask) with explicit action buttons -->
+            <div v-if="mainTask" class="op-mt-card">
                 <div class="op-mt-card-top">
-                    <span class="op-mt-name">{{ activeTask.title }}</span>
-                    <button
-                        class="op-task-status-btn"
-                        :style="{ color: STATUS_COLORS[activeTask.status] }"
-                        @click="cycleTaskStatus(activeTask!)"
+                    <span class="op-mt-name">{{ mainTask.title }}</span>
+                    <span
+                        class="op-task-status-badge"
+                        :style="{ color: STATUS_COLORS[mainTask.status] }"
                     >
-                        {{ STATUS_LABELS[activeTask.status] || activeTask.status }}
-                    </button>
+                        {{ STATUS_LABELS[mainTask.status] || mainTask.status }}
+                    </span>
                 </div>
-                <div v-if="activeTask.description" class="op-mt-desc">
-                    {{ activeTask.description }}
+                <div v-if="mainTask.description" class="op-mt-desc">
+                    {{ mainTask.description }}
                 </div>
                 <div class="op-mt-meta">
-                    <span v-if="activeTask.assigneeAgentId" class="op-mt-assignee">
-                        → {{ agents.find(a => a.agentId === activeTask!.assigneeAgentId)?.name || activeTask.assigneeAgentId }}
+                    <span v-if="mainTask.assigneeAgentId" class="op-mt-assignee">
+                        → {{ agents.find(a => a.agentId === mainTask.assigneeAgentId)?.name || mainTask.assigneeAgentId }}
                     </span>
+                </div>
+                <!-- P11-6: Explicit action buttons -->
+                <div v-if="TASK_ACTIONS[mainTask.status]" class="op-mt-actions">
+                    <button
+                        v-for="action in TASK_ACTIONS[mainTask.status]"
+                        :key="action.nextStatus + action.label"
+                        class="op-action-btn"
+                        @click="executeTaskAction(mainTask, action)"
+                    >
+                        {{ action.icon }} {{ action.label }}
+                    </button>
                 </div>
             </div>
             <div v-else class="op-placeholder">
@@ -289,25 +320,35 @@ const recentIssues = computed(() => {
             </div>
             <div class="op-task-list">
                 <div
-                    v-for="task in tasks.filter(t => t.id !== activeTask?.id)"
+                    v-for="task in tasks.filter(t => t.id !== mainTask?.id)"
                     :key="task.id"
                     class="op-task-card"
                 >
                     <div class="op-task-header">
                         <span class="op-task-title">{{ task.title }}</span>
-                        <button
-                            class="op-task-status-btn"
+                        <span
+                            class="op-task-status-badge"
                             :style="{ color: STATUS_COLORS[task.status] }"
-                            @click="cycleTaskStatus(task)"
                         >
                             {{ STATUS_LABELS[task.status] || task.status }}
-                        </button>
+                        </span>
                     </div>
                     <div class="op-task-meta">
                         <span class="op-task-phase">{{ PHASE_LABELS[task.phase] || task.phase }}</span>
                         <span v-if="task.assigneeAgentId" class="op-task-assignee">
                             → {{ agents.find(a => a.agentId === task.assigneeAgentId)?.name || task.assigneeAgentId }}
                         </span>
+                    </div>
+                    <!-- P11-6: Explicit action buttons for other tasks too -->
+                    <div v-if="TASK_ACTIONS[task.status]" class="op-task-actions">
+                        <button
+                            v-for="action in TASK_ACTIONS[task.status]"
+                            :key="action.nextStatus + action.label"
+                            class="op-action-btn-sm"
+                            @click="executeTaskAction(task, action)"
+                        >
+                            {{ action.icon }} {{ action.label }}
+                        </button>
                     </div>
                 </div>
             </div>
@@ -693,19 +734,60 @@ const recentIssues = computed(() => {
     text-overflow: ellipsis;
 }
 
-.op-task-status-btn {
-    background: none;
-    border: 1px solid #1e293b;
-    border-radius: 4px;
-    padding: 2px 6px;
+.op-task-status-badge {
     font-size: 9px;
     font-family: 'Courier New', monospace;
-    cursor: pointer;
     white-space: nowrap;
     flex-shrink: 0;
+}
+
+.op-mt-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+
+.op-action-btn {
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 10px;
+    font-family: 'Courier New', monospace;
+    color: #93c5fd;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
 
     &:hover {
-        border-color: #334155;
+        background: rgba(59, 130, 246, 0.2);
+        border-color: rgba(59, 130, 246, 0.5);
+    }
+}
+
+.op-task-actions {
+    display: flex;
+    gap: 4px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+}
+
+.op-action-btn-sm {
+    background: rgba(59, 130, 246, 0.08);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    border-radius: 3px;
+    padding: 2px 8px;
+    font-size: 9px;
+    font-family: 'Courier New', monospace;
+    color: #93c5fd;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+
+    &:hover {
+        background: rgba(59, 130, 246, 0.15);
+        border-color: rgba(59, 130, 246, 0.4);
     }
 }
 

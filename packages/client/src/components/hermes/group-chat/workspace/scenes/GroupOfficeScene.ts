@@ -134,6 +134,9 @@ export class GroupOfficeScene extends Phaser.Scene {
             }
         })
 
+        // P11-4: Debug seat visualization (opt-in via localStorage)
+        this.drawDebugSeats()
+
         // P8-2: Signal that scene is ready to receive state
         window.dispatchEvent(new CustomEvent('workspace:scene:ready'))
     }
@@ -183,15 +186,22 @@ export class GroupOfficeScene extends Phaser.Scene {
         for (const z of ZONE_RECTS) {
             const colors = ZONE_COLORS[z.key]
             const g = this.add.graphics()
+            const active = this.activePhase === z.key
 
             if (!hasTilemap) {
                 // 无 tilemap：画完整区域背景 + 边框
-                g.fillStyle(colors.bg, 0.12)
+                g.fillStyle(colors.bg, active ? 0.16 : 0.06)
                 g.fillRect(z.x, z.y, z.w, z.h)
-                g.lineStyle(1, colors.border, 0.15)
+                g.lineStyle(active ? 2 : 1, colors.border, active ? 0.55 : 0.18)
+                g.strokeRect(z.x, z.y, z.w, z.h)
+            } else {
+                // P11-3: 有 tilemap 时也画弱背景 + 边框，让分区语义可见
+                // active 区域更明显，非 active 更弱
+                g.fillStyle(colors.bg, active ? 0.07 : 0.025)
+                g.fillRect(z.x, z.y, z.w, z.h)
+                g.lineStyle(active ? 2 : 1, colors.border, active ? 0.65 : 0.18)
                 g.strokeRect(z.x, z.y, z.w, z.h)
             }
-            // P9-2: 有 tilemap 时不画大面积区域，只保留引用用于高亮
 
             // Save reference for dynamic highlighting
             this.zoneGraphics.set(z.key, g)
@@ -502,8 +512,12 @@ export class GroupOfficeScene extends Phaser.Scene {
             bodyDisplay = body
         }
 
-        // Name label
-        const nameText = this.add.text(0, 22, agent.agentName, {
+        // P11-8: Name label with semi-transparent background for readability
+        const nameBg = this.add.graphics()
+        nameBg.fillStyle(0x020617, 0.65)
+        nameBg.fillRoundedRect(-28, 10, 56, 14, 3)
+
+        const nameText = this.add.text(0, 12, agent.agentName, {
             fontSize: '10px',
             fontFamily: 'monospace',
             color: '#e2e8f0',
@@ -514,7 +528,7 @@ export class GroupOfficeScene extends Phaser.Scene {
         const statusDot = this.add.graphics()
         this.drawStatusDot(statusDot, agent.status)
 
-        container.add([bodyDisplay, nameText, statusDot])
+        container.add([bodyDisplay, nameBg, nameText, statusDot])
         container.setSize(32, 44)
         container.setInteractive({ draggable: this.dragEnabled })
 
@@ -577,12 +591,29 @@ export class GroupOfficeScene extends Phaser.Scene {
         this.idleTweens.set(agent.agentId, idleTween)
     }
 
+    // Container child index mapping (must match createAgentSprite order):
+    //   0: bodyDisplay (Sprite | Graphics)
+    //   1: nameBg      (Graphics) — P11-8
+    //   2: nameText    (Text)     — P11-8
+    //   3: statusDot   (Graphics)
+    private static readonly CIDX_BODY = 0
+    private static readonly CIDX_NAME_BG = 1
+    private static readonly CIDX_NAME_TEXT = 2
+    private static readonly CIDX_STATUS_DOT = 3
+
     private updateAgentVisual(agent: AgentWorkspaceState) {
         const container = this.agentSprites.get(agent.agentId)
         if (!container) return
 
-        // Update status dot (3rd child)
-        const statusDot = container.getAt(2) as Phaser.GameObjects.Graphics
+        // P11-8: Update name label alpha based on selection
+        const isSelected = this.selectedAgentId === agent.agentId
+        const nameBg = container.getAt(GroupOfficeScene.CIDX_NAME_BG) as Phaser.GameObjects.Graphics
+        const nameText = container.getAt(GroupOfficeScene.CIDX_NAME_TEXT) as Phaser.GameObjects.Text
+        if (nameBg) nameBg.setAlpha(isSelected ? 0.75 : 0.5)
+        if (nameText) nameText.setAlpha(isSelected ? 1.0 : 0.7)
+
+        // Update status dot
+        const statusDot = container.getAt(GroupOfficeScene.CIDX_STATUS_DOT) as Phaser.GameObjects.Graphics
         if (statusDot) {
             statusDot.clear()
             this.drawStatusDot(statusDot, agent.status)
@@ -812,7 +843,7 @@ export class GroupOfficeScene extends Phaser.Scene {
         }
     }
 
-    // P9-2: 统一重绘，不能 clear 后只 setAlpha
+    // P11-3: 统一重绘，每次 clear 后完整重绘 fill + border
     private updateZoneHighlights() {
         const hasTilemap = this.textures.exists('office_tilemap')
 
@@ -826,19 +857,36 @@ export class GroupOfficeScene extends Phaser.Scene {
             g.clear()
 
             if (hasTilemap) {
-                // tilemap 模式：只画当前活跃 zone 的高亮边框
-                if (active) {
-                    g.lineStyle(2, colors.border, 0.65)
-                    g.strokeRect(z.x, z.y, z.w, z.h)
-                }
-                continue
+                // P11-3: tilemap 模式也画弱背景 + 边框，active 更明显
+                g.fillStyle(colors.bg, active ? 0.07 : 0.025)
+                g.fillRect(z.x, z.y, z.w, z.h)
+                g.lineStyle(active ? 2 : 1, colors.border, active ? 0.65 : 0.18)
+                g.strokeRect(z.x, z.y, z.w, z.h)
+            } else {
+                // 非 tilemap 模式：重绘区域背景 + 边框
+                g.fillStyle(colors.bg, active ? 0.16 : 0.06)
+                g.fillRect(z.x, z.y, z.w, z.h)
+                g.lineStyle(active ? 2 : 1, colors.border, active ? 0.55 : 0.18)
+                g.strokeRect(z.x, z.y, z.w, z.h)
             }
+        }
+    }
 
-            // 非 tilemap 模式：重绘区域背景 + 边框
-            g.fillStyle(colors.bg, active ? 0.18 : 0.06)
-            g.fillRect(z.x, z.y, z.w, z.h)
-            g.lineStyle(1, colors.border, active ? 0.45 : 0.15)
-            g.strokeRect(z.x, z.y, z.w, z.h)
+    // P11-4: Debug seat visualization — opt-in via localStorage
+    private drawDebugSeats() {
+        const DEBUG_SEATS =
+            import.meta.env.DEV &&
+            localStorage.getItem('hermes.debugSeats') === '1'
+        if (!DEBUG_SEATS) return
+        for (const seat of DEFAULT_SEATS) {
+            this.add.text(seat.x + 4, seat.y, `${seat.x},${seat.y}`, {
+                fontSize: '8px',
+                fontFamily: 'monospace',
+                color: '#facc15',
+            })
+            const marker = this.add.graphics()
+            marker.fillStyle(0xfacc15, 0.6)
+            marker.fillRect(seat.x - 2, seat.y - 2, 4, 4)
         }
     }
 

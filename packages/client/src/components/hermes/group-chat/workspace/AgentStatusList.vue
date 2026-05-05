@@ -65,14 +65,19 @@ const selectedAgent = computed(() =>
                 </div>
                 <div class="asl-info">
                     <div class="asl-name">{{ agent.agentName }}</div>
-                    <div class="asl-profile">{{ agent.profile }}</div>
+                    <div class="asl-meta">
+                        {{ ROLE_LABELS[agent.roleType] || agent.roleType }}
+                        <span v-if="agent.currentTaskTitle"> · {{ agent.currentTaskTitle }}</span>
+                    </div>
+                    <div class="asl-work">
+                        {{ agent.runtimeLabel || agent.workLabel }}
+                    </div>
                 </div>
                 <div class="asl-status">
                     <span
                         class="asl-status-dot"
                         :style="{ background: statusColor(agent.status) }"
                     />
-                    <span class="asl-status-label">{{ STATUS_VISUALS[agent.status].emoji }} {{ STATUS_VISUALS[agent.status].label }}</span>
                 </div>
             </div>
             <div v-if="agentStates.length === 0" class="asl-empty">
@@ -224,7 +229,15 @@ const selectedAgent = computed(() =>
     white-space: nowrap;
 }
 
-.asl-profile {
+.asl-meta {
+    font-size: 10px;
+    color: #94a3b8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.asl-work {
     font-size: 10px;
     color: #64748b;
     overflow: hidden;

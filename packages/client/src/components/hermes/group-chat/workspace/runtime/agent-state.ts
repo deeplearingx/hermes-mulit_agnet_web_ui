@@ -5,9 +5,11 @@
 // P10-3: Per-agent task binding with source tracking (no global fallback).
 // P10-7: Seat overflow clamped to zone bounds.
 // P10-9: Decomposed into 4-layer helper functions.
+// P11-1: observer as weak default (allow text inference to override).
+// P11-2: Two-layer state: workMode (long-term) + runtimeLabel (transient).
 
 import type { RoomAgent, WorkspaceLayoutItem, GroupTask, GroupArtifact } from '@/api/hermes/group-chat'
-import type { AgentWorkspaceState, AgentWorkStatus, AgentRoleType } from './types'
+import type { AgentWorkspaceState, AgentWorkStatus, AgentRoleType, AgentWorkMode } from './types'
 import { DEFAULT_SEATS, ROLE_DEFAULT_ZONE } from './types'
 import { ZONE_RECTS } from './map-config'
 
@@ -56,16 +58,25 @@ export function runtimeEventToStatus(eventType: string): AgentWorkStatus | null 
 }
 
 /**
- * Infer agent role with three-layer fallback (P8-5):
- * 1. Explicit roleType from database
- * 2. Keyword inference from name/profile/description
- * 3. Default 'observer'
+ * P11-1: Infer agent role with observer-as-weak-default logic.
+ * - Non-observer explicit roleType always wins
+ * - observer is a weak default: text inference can override it
+ * - If text inference also returns observer, keep observer
+ *
+ * ⚠️ Short-term compat: if user manually selected observer but name contains "测试",
+ * it will be overridden to tester. Future: add roleTypeSource: 'manual' | 'auto'.
  */
 export function inferAgentRole(agent: RoomAgent): AgentRoleType {
-    // Layer 1: Explicit configuration
-    if (agent.roleType) return agent.roleType as AgentRoleType
-    // Layer 2: Keyword inference
-    return inferRoleByText(agent.name, agent.profile, agent.description)
+    // Non-observer explicit configuration always wins
+    if (agent.roleType && agent.roleType !== 'observer') {
+        return agent.roleType as AgentRoleType
+    }
+    // observer is weak default — allow text inference to override
+    const inferred = inferRoleByText(agent.name, agent.profile, agent.description)
+    if (inferred !== 'observer') {
+        return inferred
+    }
+    return 'observer'
 }
 
 function inferRoleByText(name: string, profile: string, description?: string): AgentRoleType {
@@ -212,6 +223,64 @@ function deriveAgentRuntimeStatus(
     return 'idle'
 }
 
+// ─── P11-2: Work Mode Derivation ─────────────────────────────
+
+const WORK_MODES: AgentWorkMode[] = [
+    'idle', 'requirement', 'planning', 'coding', 'review', 'delivery',
+]
+
+function isAgentWorkMode(value: unknown): value is AgentWorkMode {
+    return typeof value === 'string' && WORK_MODES.includes(value as AgentWorkMode)
+}
+
+const WORK_MODE_LABELS: Record<AgentWorkMode, string> = {
+    idle: '空闲',
+    requirement: '负责需求',
+    planning: '正在规划',
+    coding: '负责开发',
+    review: '等待审核',
+    delivery: '等待交付',
+}
+
+/**
+ * P11-2: Derive work mode and runtime label.
+ * - workMode: long-term task phase (from binding), not affected by transient status
+ * - workLabel: human-readable work mode label
+ * - runtimeLabel: transient behavior (replying/calling_tool/compressing/thinking)
+ *
+ * Key constraint: runtimeLabel does NOT map to workMode.
+ * A planner replying is still "正在规划", not "负责开发".
+ */
+function deriveWorkMode(
+    status: AgentWorkStatus,
+    binding: AgentTaskBinding | null,
+): { workMode: AgentWorkMode; workLabel: string; runtimeLabel?: string } {
+    // Transient runtime label — independent of workMode
+    const runtimeLabel =
+        status === 'replying' ? '生成回复' :
+        status === 'calling_tool' ? '调用工具' :
+        status === 'compressing' ? '压缩上下文' :
+        status === 'thinking' ? '思考中' :
+        undefined
+
+    // workMode determined by task phase, with validity guard
+    const phase = binding?.task?.phase
+    if (isAgentWorkMode(phase)) {
+        return {
+            workMode: phase,
+            workLabel: WORK_MODE_LABELS[phase],
+            runtimeLabel,
+        }
+    }
+
+    // No task binding → idle; workLabel is NOT overridden by runtimeLabel
+    return {
+        workMode: 'idle',
+        workLabel: '空闲',
+        runtimeLabel,
+    }
+}
+
 // ─── Seat Assignment ─────────────────────────────────────────
 
 /**
@@ -253,6 +322,7 @@ export function findZoneSeat(
  * Derive workspace states from store.agents + store.contextStatuses + workspaceLayout + tasks.
  * P10-3: Per-agent task binding (no global activeTask fallback).
  * P10-9: Decomposed into 4-layer helper functions.
+ * P11-2: Added workMode / workLabel / runtimeLabel.
  */
 export function deriveAgentStates(
     agents: RoomAgent[],
@@ -282,6 +352,9 @@ export function deriveAgentStates(
         const agentArtifacts = artifacts?.filter(a => a.agentId === agent.agentId) ?? []
         const activity = deriveAgentActivity(agent.agentId, status, agentEvents, agentArtifacts)
 
+        // P11-2: Work mode derivation
+        const workModeInfo = deriveWorkMode(status, binding)
+
         return {
             agentId: agent.agentId,
             agentName: agent.name,
@@ -295,6 +368,7 @@ export function deriveAgentStates(
             currentTaskTitle: binding?.task.title,
             phase: binding?.task.phase,
             isTaskOwner: binding?.isOwner ?? false,
+            ...workModeInfo,
         }
     })
 }

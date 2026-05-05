@@ -8,6 +8,9 @@ export type AgentWorkStatus = 'idle' | 'compressing' | 'replying' | 'thinking'
 
 export type AgentRoleType = 'observer' | 'planner' | 'developer' | 'reviewer' | 'delivery' | 'tester'
 
+// P11-2: Agent work mode — long-term task phase, not transient runtime status
+export type AgentWorkMode = 'idle' | 'requirement' | 'planning' | 'coding' | 'review' | 'delivery'
+
 export interface AgentWorkspaceState {
     agentId: string
     agentName: string
@@ -28,6 +31,10 @@ export interface AgentWorkspaceState {
     lastArtifactName?: string        // P9-6: 最近产出物名称
     activeToolName?: string          // P9-6: 正在调用的工具名
     lastEventAt: number
+    // P11-2: Two-layer state — long-term work mode + transient runtime label
+    workMode: AgentWorkMode          // 长期工作模式（由任务 phase 决定）
+    workLabel: string                // 工作模式标签（如"等待审核"）
+    runtimeLabel?: string            // 瞬时运行行为（如"生成回复"、"调用工具"）
 }
 
 export interface WorkspaceEvent {
