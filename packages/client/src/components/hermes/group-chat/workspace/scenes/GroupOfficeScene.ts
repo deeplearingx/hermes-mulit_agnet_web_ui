@@ -1,14 +1,22 @@
 // ─── Group Office Scene ──────────────────────────────────────
 // Phaser scene that renders a pixel-art office with agent workstations.
 // Uses real pixel assets from group_assets/ loaded via BootScene.
+// Phase 6: Visual layer refactoring — spritesheet chars, clean floor,
+//          subtle zones, 960×540 canvas, programming-semantic icons.
 
 import Phaser from 'phaser'
 import type { AgentWorkspaceState, AgentWorkStatus } from '../runtime/types'
 import { DEFAULT_SEATS, ZONE_COLORS, STATUS_VISUALS } from '../runtime/types'
 import { agentColor } from '../runtime/agent-state'
+import {
+    drawTerminalIcon, drawFileIcon, drawCodeIcon,
+    drawCheckIcon, drawErrorIcon, drawToolIcon,
+    drawGearIcon, drawThinkIcon, drawMemoryIcon,
+} from './PixelIcons'
 
-const SCENE_W = 720
-const SCENE_H = 560
+// V4: 16:9 widescreen canvas
+const SCENE_W = 960
+const SCENE_H = 540
 const TILE = 16
 
 // ─── Color constants ────────────────────────────────────────
@@ -23,18 +31,7 @@ const C = {
     bubbleBorder:0x475569,
 }
 
-/** Status → icon texture key mapping */
-const STATUS_ICON_MAP: Record<AgentWorkStatus, string | null> = {
-    idle: null,
-    compressing: 'item_life_pot',
-    replying: 'item_scroll',
-    thinking: 'item_heart',
-    calling_tool: 'weapon_hammer',
-    completed: 'item_gold_coin',
-    failed: 'fx_fail',
-}
-
-/** Status → tint color for the icon */
+/** Status → tint color for the character sprite */
 const STATUS_TINT_MAP: Record<AgentWorkStatus, number> = {
     idle: 0x6b7280,
     compressing: 0xf59e0b,
@@ -48,7 +45,7 @@ const STATUS_TINT_MAP: Record<AgentWorkStatus, number> = {
 export class GroupOfficeScene extends Phaser.Scene {
     private agentSprites: Map<string, Phaser.GameObjects.Container> = new Map()
     private agentBubbles: Map<string, Phaser.GameObjects.Container> = new Map()
-    private agentIcons: Map<string, Phaser.GameObjects.Image> = new Map()
+    private agentIcons: Map<string, Phaser.GameObjects.Graphics> = new Map()
     private agentStates: Map<string, AgentWorkspaceState> = new Map()
     private selectedAgentId: string | null = null
     private pulseTimers: Map<string, Phaser.Time.TimerEvent> = new Map()
@@ -70,7 +67,6 @@ export class GroupOfficeScene extends Phaser.Scene {
         this.addScanline()
         this.addFloatingParticles()
         this.addMonitorAnimations()
-        this.addZonePulse()
         this.addClock()
 
         // Listen for Vue → Phaser state updates
@@ -116,16 +112,17 @@ export class GroupOfficeScene extends Phaser.Scene {
     // ─── Drawing ─────────────────────────────────────────────
 
     private drawFloor() {
-        // Use office tilemap as background if loaded, otherwise fallback to code
+        // V2: If tilemap loaded, show it fully — no dark overlay
         if (this.textures.exists('office_tilemap')) {
             const tilemap = this.add.image(SCENE_W / 2, SCENE_H / 2, 'office_tilemap')
             tilemap.setDisplaySize(SCENE_W, SCENE_H)
-            tilemap.setAlpha(0.3)
+            tilemap.setAlpha(1)
+            return
         }
 
-        // Grid overlay
+        // Fallback: dark floor with grid (only when no tilemap)
         const g = this.add.graphics()
-        g.fillStyle(C.floor, 0.85)
+        g.fillStyle(C.floor, 1)
         g.fillRect(0, 0, SCENE_W, SCENE_H)
         g.lineStyle(1, C.floorGrid, 0.3)
         for (let x = 0; x <= SCENE_W; x += TILE * 4) {
@@ -152,38 +149,29 @@ export class GroupOfficeScene extends Phaser.Scene {
 
     private drawZones() {
         const g = this.add.graphics()
-        // P0-3: 5-zone layout — requirement | planning | coding (top), review | delivery (bottom)
+        // V4: 5-zone layout for 960×540 canvas
         const zones = [
-            { key: 'requirement', x: TILE * 2,  y: TILE * 3,  w: TILE * 14, h: TILE * 16 },
-            { key: 'planning',    x: TILE * 17, y: TILE * 3,  w: TILE * 12, h: TILE * 16 },
-            { key: 'coding',      x: TILE * 30, y: TILE * 3,  w: TILE * 14, h: TILE * 16 },
-            { key: 'review',      x: TILE * 2,  y: TILE * 21, w: TILE * 20, h: TILE * 14 },
-            { key: 'delivery',    x: TILE * 24, y: TILE * 21, w: TILE * 20, h: TILE * 14 },
+            { key: 'requirement', x: TILE * 2,  y: TILE * 3,  w: TILE * 18, h: TILE * 15 },
+            { key: 'planning',    x: TILE * 21, y: TILE * 3,  w: TILE * 16, h: TILE * 15 },
+            { key: 'coding',      x: TILE * 38, y: TILE * 3,  w: TILE * 18, h: TILE * 15 },
+            { key: 'review',      x: TILE * 2,  y: TILE * 20, w: TILE * 27, h: TILE * 13 },
+            { key: 'delivery',    x: TILE * 31, y: TILE * 20, w: TILE * 25, h: TILE * 13 },
         ]
 
         for (const z of zones) {
             const colors = ZONE_COLORS[z.key]
-            // Zone background
-            g.fillStyle(colors.bg, 0.4)
+            // V3: Very subtle background — just enough to distinguish areas
+            g.fillStyle(colors.bg, 0.12)
             g.fillRect(z.x, z.y, z.w, z.h)
-            // Zone border (dashed effect)
-            g.lineStyle(2, colors.border, 0.6)
+            // V3: Ultra-thin border — almost invisible
+            g.lineStyle(1, colors.border, 0.15)
             g.strokeRect(z.x, z.y, z.w, z.h)
-            // Corner accents
-            const cs = 8
-            g.lineStyle(2, colors.border, 0.9)
-            g.lineBetween(z.x, z.y, z.x + cs, z.y)
-            g.lineBetween(z.x, z.y, z.x, z.y + cs)
-            g.lineBetween(z.x + z.w, z.y, z.x + z.w - cs, z.y)
-            g.lineBetween(z.x + z.w, z.y, z.x + z.w, z.y + cs)
-            g.lineBetween(z.x, z.y + z.h, z.x + cs, z.y + z.h)
-            g.lineBetween(z.x, z.y + z.h, z.x, z.y + z.h - cs)
-            g.lineBetween(z.x + z.w, z.y + z.h, z.x + z.w - cs, z.y + z.h)
-            g.lineBetween(z.x + z.w, z.y + z.h, z.x + z.w, z.y + z.h - cs)
-
-            // Zone label
+            // V3: Small label badge — the only visible zone indicator
+            const labelBg = this.add.graphics()
+            labelBg.fillStyle(0x000000, 0.6)
+            labelBg.fillRoundedRect(z.x + 4, z.y + 4, 80, 18, 3)
             this.add.text(z.x + 8, z.y + 6, colors.label, {
-                fontSize: '11px',
+                fontSize: '10px',
                 fontFamily: 'monospace',
                 color: '#94a3b8',
             })
@@ -195,30 +183,43 @@ export class GroupOfficeScene extends Phaser.Scene {
             const x = seat.x
             const y = seat.y
 
-            // Use loaded desk texture or fallback to code
+            // Desk — pixel art style
             if (this.textures.exists('desk')) {
                 const desk = this.add.image(x, y, 'desk')
                 desk.setScale(0.8)
             } else {
                 const g = this.add.graphics()
-                g.fillStyle(0x374151)
-                g.fillRect(x - 24, y - 8, 48, 16)
-                g.fillStyle(0x4b5563)
-                g.fillRect(x - 24, y - 8, 48, 3)
+                // Desk surface
+                g.fillStyle(0x4a3728)
+                g.fillRect(x - 28, y - 10, 56, 20)
+                // Desk top highlight
+                g.fillStyle(0x5c4a3a)
+                g.fillRect(x - 28, y - 10, 56, 3)
+                // Desk legs
+                g.fillStyle(0x3a2a1a)
+                g.fillRect(x - 26, y + 10, 4, 6)
+                g.fillRect(x + 22, y + 10, 4, 6)
             }
 
-            // Monitor — use loaded texture or code
+            // Monitor
             if (this.textures.exists('monitor')) {
                 const monitor = this.add.image(x, y - 14, 'monitor')
                 monitor.setScale(0.7)
             } else {
                 const g = this.add.graphics()
+                // Monitor frame
                 g.fillStyle(0x111827)
-                g.fillRect(x - 8, y - 20, 16, 12)
-                g.fillStyle(0x3b82f6, 0.3)
-                g.fillRect(x - 6, y - 18, 12, 8)
+                g.fillRect(x - 10, y - 24, 20, 14)
+                // Screen
+                g.fillStyle(0x1a2744)
+                g.fillRect(x - 8, y - 22, 16, 10)
+                // Screen glow
+                g.fillStyle(0x3b82f6, 0.2)
+                g.fillRect(x - 6, y - 20, 12, 6)
+                // Stand
                 g.fillStyle(0x111827)
-                g.fillRect(x - 2, y - 8, 4, 4)
+                g.fillRect(x - 2, y - 10, 4, 4)
+                g.fillRect(x - 4, y - 6, 8, 2)
             }
 
             // Chair
@@ -228,48 +229,54 @@ export class GroupOfficeScene extends Phaser.Scene {
                 chair.setAlpha(0.7)
             } else {
                 const g = this.add.graphics()
-                g.fillStyle(0x6b7280, 0.5)
-                g.fillRect(x - 6, y + 12, 12, 8)
+                // Seat
+                g.fillStyle(0x374151)
+                g.fillRect(x - 8, y + 12, 16, 6)
+                // Back
+                g.fillStyle(0x475569)
+                g.fillRect(x - 6, y + 6, 12, 6)
+                // Legs
+                g.fillStyle(0x1e293b)
+                g.fillRect(x - 6, y + 18, 3, 4)
+                g.fillRect(x + 3, y + 18, 3, 4)
             }
         }
     }
 
     private drawZoneDecorations() {
-        // Add decorative items in zones using loaded assets (P0-3: updated for 5-zone layout)
-        const decorations: Array<{ texture: string; x: number; y: number; scale: number }> = [
-            // Requirement zone (x: TILE*2..16) — scrolls and keys
-            { texture: 'item_scroll', x: TILE * 5, y: TILE * 5, scale: 0.8 },
-            { texture: 'item_gold_key', x: TILE * 10, y: TILE * 8, scale: 0.6 },
-            // Planning zone (x: TILE*17..29) — hearts and potions
-            { texture: 'item_heart', x: TILE * 20, y: TILE * 5, scale: 0.6 },
-            { texture: 'item_life_pot', x: TILE * 25, y: TILE * 8, scale: 0.6 },
-            // Coding zone (x: TILE*30..44) — weapons/tools
-            { texture: 'weapon_sword', x: TILE * 33, y: TILE * 5, scale: 0.7 },
-            { texture: 'weapon_katana', x: TILE * 38, y: TILE * 8, scale: 0.7 },
-            // Review zone (x: TILE*2..22) — hearts and potions
-            { texture: 'item_gold_coin', x: TILE * 5, y: TILE * 23, scale: 0.6 },
-            { texture: 'item_silver_coin', x: TILE * 12, y: TILE * 26, scale: 0.6 },
-            // Delivery zone (x: TILE*24..44) — coins and keys
-            { texture: 'item_gold_key', x: TILE * 28, y: TILE * 23, scale: 0.6 },
-            { texture: 'item_scroll', x: TILE * 35, y: TILE * 26, scale: 0.6 },
+        // V5: Use code-generated pixel icons instead of RPG items
+        const decorations: Array<{ draw: (g: Phaser.GameObjects.Graphics, x: number, y: number) => void; x: number; y: number }> = [
+            // Requirement zone — files and docs
+            { draw: (g, x, y) => drawFileIcon(g, x, y, 0x3b82f6), x: TILE * 6, y: TILE * 6 },
+            { draw: (g, x, y) => drawCodeIcon(g, x, y, 0x60a5fa), x: TILE * 12, y: TILE * 9 },
+            // Planning zone — terminal and gear
+            { draw: (g, x, y) => drawTerminalIcon(g, x, y, 0x06b6d4), x: TILE * 24, y: TILE * 6 },
+            { draw: (g, x, y) => drawGearIcon(g, x, y, 0x22d3ee), x: TILE * 30, y: TILE * 9 },
+            // Coding zone — code and tools
+            { draw: (g, x, y) => drawCodeIcon(g, x, y, 0x22c55e), x: TILE * 42, y: TILE * 6 },
+            { draw: (g, x, y) => drawToolIcon(g, x, y, 0x4ade80), x: TILE * 48, y: TILE * 9 },
+            // Review zone — check and memory
+            { draw: (g, x, y) => drawCheckIcon(g, x, y), x: TILE * 8, y: TILE * 22 },
+            { draw: (g, x, y) => drawMemoryIcon(g, x, y, 0xf59e0b), x: TILE * 18, y: TILE * 25 },
+            // Delivery zone — file and terminal
+            { draw: (g, x, y) => drawFileIcon(g, x, y, 0xa855f7), x: TILE * 36, y: TILE * 22 },
+            { draw: (g, x, y) => drawTerminalIcon(g, x, y, 0xc084fc), x: TILE * 46, y: TILE * 25 },
         ]
 
         for (const d of decorations) {
-            if (this.textures.exists(d.texture)) {
-                const img = this.add.image(d.x, d.y, d.texture)
-                img.setScale(d.scale)
-                img.setAlpha(0.4)
-                // Gentle float animation
-                this.tweens.add({
-                    targets: img,
-                    y: d.y - 4,
-                    duration: 2000 + Math.random() * 1000,
-                    yoyo: true,
-                    repeat: -1,
-                    ease: 'Sine.easeInOut',
-                    delay: Math.random() * 2000,
-                })
-            }
+            const g = this.add.graphics()
+            d.draw(g, d.x, d.y)
+            g.setAlpha(0.35)
+            // Gentle float animation (±4px from origin)
+            this.tweens.add({
+                targets: g,
+                y: -4,
+                duration: 2000 + Math.random() * 1000,
+                yoyo: true,
+                repeat: -1,
+                ease: 'Sine.easeInOut',
+                delay: Math.random() * 2000,
+            })
         }
     }
 
@@ -326,36 +333,12 @@ export class GroupOfficeScene extends Phaser.Scene {
                     glow.clear()
                     const color = colors[colorIdx % colors.length]
                     glow.fillStyle(color, 0.15)
-                    glow.fillRect(seat.x - 6, seat.y - 18, 12, 8)
+                    glow.fillRect(seat.x - 6, seat.y - 22, 12, 8)
                     colorIdx++
                     this.time.delayedCall(500, () => {
                         glow.clear()
                     })
                 }
-            })
-        }
-    }
-
-    private addZonePulse() {
-        const zones = [
-            { x: TILE * 2, y: TILE * 3, w: TILE * 20, h: TILE * 16, color: 0x3b82f6 },
-            { x: TILE * 24, y: TILE * 3, w: TILE * 20, h: TILE * 16, color: 0x22c55e },
-            { x: TILE * 2, y: TILE * 21, w: TILE * 20, h: TILE * 14, color: 0xf59e0b },
-            { x: TILE * 24, y: TILE * 21, w: TILE * 20, h: TILE * 14, color: 0xa855f7 },
-        ]
-        
-        for (const zone of zones) {
-            const border = this.add.graphics()
-            border.lineStyle(1, zone.color, 0)
-            border.strokeRect(zone.x, zone.y, zone.w, zone.h)
-            
-            this.tweens.add({
-                targets: border,
-                alpha: { from: 0, to: 0.4 },
-                duration: 2000,
-                yoyo: true,
-                repeat: -1,
-                delay: Math.random() * 3000,
             })
         }
     }
@@ -429,13 +412,13 @@ export class GroupOfficeScene extends Phaser.Scene {
     }
 
     private detectZone(x: number, y: number): string {
-        // P0-3: must match drawZones layout
+        // V4: must match drawZones layout for 960×540
         const zones = [
-            { key: 'requirement', x: TILE * 2,  y: TILE * 3,  w: TILE * 14, h: TILE * 16 },
-            { key: 'planning',    x: TILE * 17, y: TILE * 3,  w: TILE * 12, h: TILE * 16 },
-            { key: 'coding',      x: TILE * 30, y: TILE * 3,  w: TILE * 14, h: TILE * 16 },
-            { key: 'review',      x: TILE * 2,  y: TILE * 21, w: TILE * 20, h: TILE * 14 },
-            { key: 'delivery',    x: TILE * 24, y: TILE * 21, w: TILE * 20, h: TILE * 14 },
+            { key: 'requirement', x: TILE * 2,  y: TILE * 3,  w: TILE * 18, h: TILE * 15 },
+            { key: 'planning',    x: TILE * 21, y: TILE * 3,  w: TILE * 16, h: TILE * 15 },
+            { key: 'coding',      x: TILE * 38, y: TILE * 3,  w: TILE * 18, h: TILE * 15 },
+            { key: 'review',      x: TILE * 2,  y: TILE * 20, w: TILE * 27, h: TILE * 13 },
+            { key: 'delivery',    x: TILE * 31, y: TILE * 20, w: TILE * 25, h: TILE * 13 },
         ]
         for (const z of zones) {
             if (x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h) {
@@ -451,25 +434,37 @@ export class GroupOfficeScene extends Phaser.Scene {
         const y = agent.y ?? seat.y
         const container = this.add.container(x, y - 32)
 
-        // Character sprite — use loaded character or fallback to colored circle
+        // V1: Character sprite — use spritesheet with single frame, or fallback to pixel art
         const charIndex = (agent.seatIndex % 25) + 1
         const charKey = `char_${charIndex}`
-        let bodyDisplay: Phaser.GameObjects.Image | Phaser.GameObjects.Graphics
+        let bodyDisplay: Phaser.GameObjects.Sprite | Phaser.GameObjects.Graphics
 
         if (this.textures.exists(charKey)) {
-            const charImg = this.add.image(0, 0, charKey)
-            charImg.setScale(1.2)
-            // Tint with agent color for differentiation
-            charImg.setTint(agentColor(agent.agentName))
-            bodyDisplay = charImg
+            // V1: Use spritesheet — take frame 0 only (16×16 pixel character)
+            const charSprite = this.add.sprite(0, 0, charKey, 0)
+            charSprite.setScale(2)
+            charSprite.setTint(agentColor(agent.agentName))
+            bodyDisplay = charSprite
         } else {
-            // Fallback: colored circle
+            // Fallback: code-generated pixel character
             const color = agentColor(agent.agentName)
             const body = this.add.graphics()
+            // Head
+            body.fillStyle(0xffcc99)
+            body.fillRect(-4, -14, 8, 8)
+            // Hair
+            body.fillStyle(color, 0.8)
+            body.fillRect(-5, -14, 10, 3)
+            // Body
             body.fillStyle(color)
-            body.fillCircle(0, 0, 12)
-            body.fillStyle(0xffffff, 0.2)
-            body.fillCircle(-3, -3, 4)
+            body.fillRect(-5, -6, 10, 10)
+            // Arms
+            body.fillRect(-8, -5, 3, 8)
+            body.fillRect(5, -5, 3, 8)
+            // Legs
+            body.fillStyle(0x374151)
+            body.fillRect(-4, 4, 3, 6)
+            body.fillRect(1, 4, 3, 6)
             bodyDisplay = body
         }
 
@@ -503,14 +498,12 @@ export class GroupOfficeScene extends Phaser.Scene {
         bubble.setVisible(false)
         this.agentBubbles.set(agent.agentId, bubble)
 
-        // Status icon (floating above agent)
-        const iconKey = STATUS_ICON_MAP[agent.status]
-        if (iconKey && this.textures.exists(iconKey)) {
-            const icon = this.add.image(x + 16, y - 40, iconKey)
-            icon.setScale(0.5)
-            icon.setVisible(false)
-            this.agentIcons.set(agent.agentId, icon)
-        }
+        // V5: Status icon — code-generated pixel icon (not RPG item)
+        const iconG = this.add.graphics()
+        iconG.setPosition(x + 16, y - 40)
+        iconG.setVisible(false)
+        this.drawStatusIcon(iconG, agent.status)
+        this.agentIcons.set(agent.agentId, iconG)
 
         // Entrance animation
         container.setAlpha(0)
@@ -547,9 +540,9 @@ export class GroupOfficeScene extends Phaser.Scene {
             this.drawStatusDot(statusDot, agent.status)
         }
 
-        // Bug 2 fix: only setTint on Image, not Graphics (Graphics also has setTint in Phaser 3)
+        // V1: Update character tint — handle both Sprite and Graphics
         const charDisplay = container.getAt(0)
-        if (charDisplay instanceof Phaser.GameObjects.Image) {
+        if (charDisplay instanceof Phaser.GameObjects.Sprite) {
             const tint = STATUS_TINT_MAP[agent.status]
             if (agent.status !== 'idle') {
                 charDisplay.setTint(tint)
@@ -558,16 +551,16 @@ export class GroupOfficeScene extends Phaser.Scene {
             }
         }
 
-        // Update status icon
-        const iconKey = STATUS_ICON_MAP[agent.status]
+        // V5: Update status icon — code-generated pixel icon
         let icon = this.agentIcons.get(agent.agentId)
-        if (iconKey && this.textures.exists(iconKey)) {
+        if (agent.status !== 'idle') {
             if (!icon) {
-                icon = this.add.image(container.x + 16, container.y - 8, iconKey)
-                icon.setScale(0.5)
+                icon = this.add.graphics()
+                icon.setPosition(container.x + 16, container.y - 8)
                 this.agentIcons.set(agent.agentId, icon)
             }
-            icon.setTexture(iconKey)
+            icon.clear()
+            this.drawStatusIcon(icon, agent.status)
             icon.setVisible(true)
             // Icon bounce animation
             this.tweens.add({
@@ -659,68 +652,43 @@ export class GroupOfficeScene extends Phaser.Scene {
                 yoyo: true,
                 repeat: 4,
             })
-            // FX sparkle if available
-            if (this.textures.exists('fx_sparkle')) {
-                const sparkle = this.add.image(container.x, container.y - 10, 'fx_sparkle')
-                sparkle.setScale(0.5)
-                sparkle.setAlpha(0.8)
-                this.tweens.add({
-                    targets: sparkle,
-                    alpha: 0,
-                    scaleX: 1.5,
-                    scaleY: 1.5,
-                    duration: 800,
-                    onComplete: () => sparkle.destroy(),
-                })
-            }
+            // Code-generated sparkle effect
+            const sparkle = this.add.graphics()
+            sparkle.fillStyle(0x8b5cf6, 0.6)
+            sparkle.fillCircle(container.x, container.y - 10, 3)
+            sparkle.fillStyle(0xa78bfa, 0.4)
+            sparkle.fillCircle(container.x - 6, container.y - 14, 2)
+            sparkle.fillCircle(container.x + 6, container.y - 14, 2)
+            this.tweens.add({
+                targets: sparkle,
+                alpha: 0,
+                scaleX: 2,
+                scaleY: 2,
+                duration: 800,
+                onComplete: () => sparkle.destroy(),
+            })
         } else if (agent.status === 'completed') {
-            // Completed — gold coin flash
-            if (this.textures.exists('fx_success')) {
-                const fx = this.add.image(container.x, container.y - 10, 'fx_success')
-                fx.setScale(0.4)
-                this.tweens.add({
-                    targets: fx,
-                    alpha: 0,
-                    y: fx.y - 20,
-                    scaleX: 0.8,
-                    scaleY: 0.8,
-                    duration: 1500,
-                    onComplete: () => fx.destroy(),
-                })
-            } else {
-                const flash = this.add.graphics()
-                flash.fillStyle(0x22c55e, 0.3)
-                flash.fillCircle(container.x, container.y, 20)
-                this.tweens.add({
-                    targets: flash,
-                    alpha: 0,
-                    duration: 1500,
-                    onComplete: () => flash.destroy(),
-                })
-            }
+            // Completed — green flash
+            const flash = this.add.graphics()
+            flash.fillStyle(0x22c55e, 0.3)
+            flash.fillCircle(container.x, container.y, 20)
+            this.tweens.add({
+                targets: flash,
+                alpha: 0,
+                duration: 1500,
+                onComplete: () => flash.destroy(),
+            })
         } else if (agent.status === 'failed') {
             // Failed — red flash + shake
-            if (this.textures.exists('fx_fail')) {
-                const fx = this.add.image(container.x, container.y - 10, 'fx_fail')
-                fx.setScale(0.4)
-                this.tweens.add({
-                    targets: fx,
-                    alpha: 0,
-                    y: fx.y - 20,
-                    duration: 2000,
-                    onComplete: () => fx.destroy(),
-                })
-            } else {
-                const flash = this.add.graphics()
-                flash.fillStyle(0xef4444, 0.3)
-                flash.fillCircle(container.x, container.y, 20)
-                this.tweens.add({
-                    targets: flash,
-                    alpha: 0,
-                    duration: 2000,
-                    onComplete: () => flash.destroy(),
-                })
-            }
+            const flash = this.add.graphics()
+            flash.fillStyle(0xef4444, 0.3)
+            flash.fillCircle(container.x, container.y, 20)
+            this.tweens.add({
+                targets: flash,
+                alpha: 0,
+                duration: 2000,
+                onComplete: () => flash.destroy(),
+            })
             this.tweens.add({
                 targets: container,
                 x: container.x + 3,
@@ -728,6 +696,31 @@ export class GroupOfficeScene extends Phaser.Scene {
                 yoyo: true,
                 repeat: 5,
             })
+        }
+    }
+
+    // V5: Draw status icon using PixelIcons (programming semantics)
+    private drawStatusIcon(g: Phaser.GameObjects.Graphics, status: AgentWorkStatus): void {
+        g.clear()
+        switch (status) {
+            case 'compressing':
+                drawMemoryIcon(g, 0, 0, 0xf59e0b)
+                break
+            case 'replying':
+                drawFileIcon(g, 0, 0, 0x3b82f6)
+                break
+            case 'thinking':
+                drawThinkIcon(g, 0, 0, 0xa855f7)
+                break
+            case 'calling_tool':
+                drawToolIcon(g, 0, 0, 0x8b5cf6)
+                break
+            case 'completed':
+                drawCheckIcon(g, 0, 0)
+                break
+            case 'failed':
+                drawErrorIcon(g, 0, 0)
+                break
         }
     }
 

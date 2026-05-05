@@ -23,11 +23,12 @@ onMounted(async () => {
     const { BootScene } = await import('./scenes/BootScene')
     const { GroupOfficeScene } = await import('./scenes/GroupOfficeScene')
 
+    // V4: 16:9 widescreen canvas
     game = new Phaser.Game({
         type: Phaser.AUTO,
         parent: containerRef.value,
-        width: 720,
-        height: 560,
+        width: 960,
+        height: 540,
         pixelArt: true,
         backgroundColor: '#0f1729',
         scene: [BootScene, GroupOfficeScene],

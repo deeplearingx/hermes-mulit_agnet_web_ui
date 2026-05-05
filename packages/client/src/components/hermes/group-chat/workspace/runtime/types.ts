@@ -33,23 +33,23 @@ export interface AgentSeat {
     label: string
 }
 
-/** Default office layout — 5 zones with 2 seats each (P0-3: unified with task phases) */
+/** Default office layout — 5 zones with 2 seats each (V4: 960×540 canvas) */
 export const DEFAULT_SEATS: AgentSeat[] = [
     // 需求区 (Requirement Zone) — top-left
-    { zone: 'requirement', x: 120, y: 130, label: '需求区' },
-    { zone: 'requirement', x: 120, y: 230, label: '需求区' },
+    { zone: 'requirement', x: 140, y: 140, label: '需求区' },
+    { zone: 'requirement', x: 140, y: 260, label: '需求区' },
     // 规划区 (Planning Zone) — top-center
-    { zone: 'planning', x: 300, y: 130, label: '规划区' },
-    { zone: 'planning', x: 300, y: 230, label: '规划区' },
+    { zone: 'planning', x: 380, y: 140, label: '规划区' },
+    { zone: 'planning', x: 380, y: 260, label: '规划区' },
     // 开发区 (Development Zone) — top-right
-    { zone: 'coding', x: 480, y: 130, label: '开发区' },
-    { zone: 'coding', x: 480, y: 230, label: '开发区' },
+    { zone: 'coding', x: 620, y: 140, label: '开发区' },
+    { zone: 'coding', x: 620, y: 260, label: '开发区' },
     // 评审区 (Review Zone) — bottom-left
-    { zone: 'review', x: 180, y: 370, label: '评审区' },
-    { zone: 'review', x: 180, y: 470, label: '评审区' },
+    { zone: 'review', x: 240, y: 380, label: '评审区' },
+    { zone: 'review', x: 240, y: 460, label: '评审区' },
     // 产出区 (Delivery Zone) — bottom-right
-    { zone: 'delivery', x: 420, y: 370, label: '产出区' },
-    { zone: 'delivery', x: 420, y: 470, label: '产出区' },
+    { zone: 'delivery', x: 560, y: 380, label: '产出区' },
+    { zone: 'delivery', x: 560, y: 460, label: '产出区' },
 ]
 
 /** Zone color palette (pixel-art friendly) — P0-3: added planning zone */
