@@ -51,6 +51,8 @@ export class GroupOfficeScene extends Phaser.Scene {
     private pulseTimers: Map<string, Phaser.Time.TimerEvent> = new Map()
     private idleTweens: Map<string, Phaser.Tweens.Tween> = new Map()
     private dragEnabled = false
+    private activePhase: string | null = null
+    private zoneGraphics: Map<string, Phaser.GameObjects.Graphics> = new Map()
 
     constructor() {
         super({ key: 'GroupOfficeScene' })
@@ -72,6 +74,7 @@ export class GroupOfficeScene extends Phaser.Scene {
         // Listen for Vue → Phaser state updates
         window.addEventListener('workspace:agents:update', this.onAgentsUpdate as EventListener)
         window.addEventListener('workspace:drag:enable', this.onDragEnable as EventListener)
+        window.addEventListener('workspace:phase:update', this.onPhaseUpdate as EventListener)
 
         // Set up Phaser drag events
         this.input.on('drag', (_pointer: Phaser.Input.Pointer, gameObject: Phaser.GameObjects.Container, dragX: number, dragY: number) => {
@@ -148,8 +151,6 @@ export class GroupOfficeScene extends Phaser.Scene {
     }
 
     private drawZones() {
-        const g = this.add.graphics()
-        // V4: 5-zone layout for 960×540 canvas
         const zones = [
             { key: 'requirement', x: TILE * 2,  y: TILE * 3,  w: TILE * 18, h: TILE * 15 },
             { key: 'planning',    x: TILE * 21, y: TILE * 3,  w: TILE * 16, h: TILE * 15 },
@@ -160,13 +161,17 @@ export class GroupOfficeScene extends Phaser.Scene {
 
         for (const z of zones) {
             const colors = ZONE_COLORS[z.key]
-            // V3: Very subtle background — just enough to distinguish areas
+            const g = this.add.graphics()
+            // V3: Very subtle background
             g.fillStyle(colors.bg, 0.12)
             g.fillRect(z.x, z.y, z.w, z.h)
-            // V3: Ultra-thin border — almost invisible
+            // V3: Ultra-thin border
             g.lineStyle(1, colors.border, 0.15)
             g.strokeRect(z.x, z.y, z.w, z.h)
-            // V3: Small label badge — the only visible zone indicator
+            // Save reference for dynamic highlighting
+            this.zoneGraphics.set(z.key, g)
+
+            // V3: Small label badge
             const labelBg = this.add.graphics()
             labelBg.fillStyle(0x000000, 0.6)
             labelBg.fillRoundedRect(z.x + 4, z.y + 4, 80, 18, 3)
@@ -179,6 +184,16 @@ export class GroupOfficeScene extends Phaser.Scene {
     }
 
     private drawFurniture() {
+        // If tilemap already contains furniture, only draw minimal seat indicators
+        if (this.textures.exists('office_tilemap')) {
+            for (const seat of DEFAULT_SEATS) {
+                const g = this.add.graphics()
+                g.fillStyle(0x1e293b, 0.3)
+                g.fillCircle(seat.x, seat.y, 3)
+            }
+            return
+        }
+
         for (const seat of DEFAULT_SEATS) {
             const x = seat.x
             const y = seat.y
@@ -266,7 +281,7 @@ export class GroupOfficeScene extends Phaser.Scene {
         for (const d of decorations) {
             const g = this.add.graphics()
             d.draw(g, d.x, d.y)
-            g.setAlpha(0.35)
+            g.setAlpha(0.15)
             // Gentle float animation (±4px from origin)
             this.tweens.add({
                 targets: g,
@@ -734,9 +749,38 @@ export class GroupOfficeScene extends Phaser.Scene {
 
     // ─── Cleanup ─────────────────────────────────────────────
 
+    // ─── Phase Highlighting ──────────────────────────────────
+
+    private onPhaseUpdate = (e: Event) => {
+        const { activePhase } = (e as CustomEvent).detail
+        if (this.activePhase !== activePhase) {
+            this.activePhase = activePhase
+            this.updateZoneHighlights()
+        }
+    }
+
+    private updateZoneHighlights() {
+        for (const [key, g] of this.zoneGraphics) {
+            if (!this.activePhase) {
+                // No active task — reset all zones to default
+                g.setAlpha(1)
+            } else if (key === this.activePhase) {
+                // 活跃 zone 边框发光
+                g.setAlpha(1)
+            } else {
+                // 非活跃 zone 降低透明度
+                g.setAlpha(0.4)
+            }
+        }
+    }
+
+    // ─── Cleanup ─────────────────────────────────────────────
+
     shutdown() {
         window.removeEventListener('workspace:agents:update', this.onAgentsUpdate as EventListener)
         window.removeEventListener('workspace:drag:enable', this.onDragEnable as EventListener)
+        window.removeEventListener('workspace:phase:update', this.onPhaseUpdate as EventListener)
+        this.zoneGraphics.clear()
         for (const timer of this.pulseTimers.values()) timer.destroy()
         for (const tween of this.idleTweens.values()) tween.destroy()
         this.pulseTimers.clear()

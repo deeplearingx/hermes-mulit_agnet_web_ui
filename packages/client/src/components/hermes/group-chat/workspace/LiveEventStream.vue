@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from 'vue'
-import type { ChatMessage } from '@/api/hermes/group-chat'
+import type { ChatMessage, RoomAgent } from '@/api/hermes/group-chat'
 import type { GroupRuntimeEvent } from '@/stores/hermes/group-chat'
 
 const props = defineProps<{
@@ -8,6 +8,7 @@ const props = defineProps<{
     // P0-2: key is agentId
     contextStatuses: Map<string, { agentId: string; agentName: string; status: string }>
     liveEvents?: GroupRuntimeEvent[]
+    agents: RoomAgent[]              // P7-9: for accurate isAgent detection
 }>()
 
 const streamRef = ref<HTMLDivElement>()
@@ -25,10 +26,12 @@ interface StreamEvent {
 
 const events = computed<StreamEvent[]>(() => {
     const result: StreamEvent[] = []
+    // P7-9: use agentIds set for accurate isAgent detection
+    const agentIds = new Set(props.agents.map(a => a.agentId))
 
     // Messages
     for (const msg of props.messages.slice(-30)) {
-        const isAgent = msg.senderId !== msg.senderName
+        const isAgent = agentIds.has(msg.senderId)
         result.push({
             id: msg.id,
             type: 'message',

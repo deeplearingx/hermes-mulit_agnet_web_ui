@@ -4,6 +4,8 @@
 export type AgentWorkStatus = 'idle' | 'compressing' | 'replying' | 'thinking'
     | 'calling_tool' | 'completed' | 'failed'
 
+export type AgentRoleType = 'observer' | 'planner' | 'developer' | 'reviewer' | 'delivery'
+
 export interface AgentWorkspaceState {
     agentId: string
     agentName: string
@@ -11,6 +13,11 @@ export interface AgentWorkspaceState {
     status: AgentWorkStatus
     seatIndex: number
     zone: string
+    roleType: AgentRoleType          // 角色类型
+    currentTaskId?: string           // 当前绑定任务 ID
+    currentTaskTitle?: string        // 当前任务标题
+    phase?: string                   // 当前任务阶段
+    isTaskOwner?: boolean            // 是否为当前任务负责人
     x?: number   // 从 workspaceLayout 恢复的坐标
     y?: number
     lastEventAt: number
@@ -51,6 +58,15 @@ export const DEFAULT_SEATS: AgentSeat[] = [
     { zone: 'delivery', x: 560, y: 380, label: '产出区' },
     { zone: 'delivery', x: 560, y: 460, label: '产出区' },
 ]
+
+/** Role → default zone mapping (P7-1) */
+export const ROLE_DEFAULT_ZONE: Record<AgentRoleType, string> = {
+    observer: 'requirement',
+    planner: 'planning',
+    developer: 'coding',
+    reviewer: 'review',
+    delivery: 'delivery',
+}
 
 /** Zone color palette (pixel-art friendly) — P0-3: added planning zone */
 export const ZONE_COLORS: Record<string, { bg: number; border: number; label: string }> = {

@@ -1,11 +1,12 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { RoomAgent, ChatMessage, MemberInfo, GroupTask, GroupArtifact } from '@/api/hermes/group-chat'
 import type { GroupRuntimeEvent } from '@/stores/hermes/group-chat'
 import PhaserWorkspace from './PhaserWorkspace.vue'
 import LiveEventStream from './LiveEventStream.vue'
 import OrchestrationPanel from './OrchestrationPanel.vue'
 
-defineProps<{
+const props = defineProps<{
     roomId: string
     agents: RoomAgent[]
     members: MemberInfo[]
@@ -17,6 +18,13 @@ defineProps<{
     artifacts: GroupArtifact[]
     liveEvents?: GroupRuntimeEvent[]
 }>()
+
+// P7-10: derive active task for phase/title display
+const activeTask = computed(() => {
+    return props.tasks.find(t => t.status === 'running')
+        ?? props.tasks.find(t => t.status === 'reviewing')
+        ?? props.tasks[0] ?? null
+})
 </script>
 
 <template>
@@ -27,6 +35,9 @@ defineProps<{
                 <PhaserWorkspace
                     :agents="agents"
                     :context-statuses="contextStatuses"
+                    :tasks="tasks"
+                    :active-phase="activeTask?.phase"
+                    :active-task-title="activeTask?.title"
                 />
             </div>
             <div class="workspace-stream">
@@ -34,6 +45,7 @@ defineProps<{
                     :messages="messages"
                     :context-statuses="contextStatuses"
                     :live-events="liveEvents"
+                    :agents="agents"
                 />
             </div>
         </div>

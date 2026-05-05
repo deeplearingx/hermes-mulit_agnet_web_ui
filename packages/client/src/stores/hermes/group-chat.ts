@@ -298,10 +298,10 @@ export const useGroupChatStore = defineStore('groupChat', () => {
                             }
                         }
 
-                        // Restore context statuses from server
+                        // Restore context statuses from server (P7-7: use agentId as primary key)
                         if (res.contextStatuses) {
                             contextStatuses.value = new Map(
-                                res.contextStatuses.map((s: any) => [s.agentName, s])
+                                res.contextStatuses.map((s: any) => [s.agentId || s.agentName, s])
                             )
                         }
                     }

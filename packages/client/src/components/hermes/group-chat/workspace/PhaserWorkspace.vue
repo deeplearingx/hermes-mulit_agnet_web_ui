@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
-import type { RoomAgent, WorkspaceLayoutItem } from '@/api/hermes/group-chat'
+import type { RoomAgent, WorkspaceLayoutItem, GroupTask } from '@/api/hermes/group-chat'
 import { useGroupChatStore } from '@/stores/hermes/group-chat'
 import { deriveAgentStates } from './runtime/agent-state'
 
@@ -8,6 +8,9 @@ const props = defineProps<{
     agents: RoomAgent[]
     // P0-2: key is agentId
     contextStatuses: Map<string, { agentId: string; agentName: string; status: string }>
+    tasks: GroupTask[]              // P7-4: task data for zone assignment
+    activePhase?: string            // P7-4: current task phase
+    activeTaskTitle?: string        // P7-4: current task title
 }>()
 
 const store = useGroupChatStore()
@@ -85,11 +88,14 @@ function onLayoutChanged(e: Event) {
 
 // Bridge: Vue props → Phaser scene via CustomEvent
 watch(
-    () => [props.agents, props.contextStatuses, store.workspaceLayout],
+    () => [props.agents, props.contextStatuses, store.workspaceLayout, props.tasks],
     () => {
-        const states = deriveAgentStates(props.agents, props.contextStatuses, store.workspaceLayout)
+        const states = deriveAgentStates(props.agents, props.contextStatuses, store.workspaceLayout, props.tasks)
         window.dispatchEvent(new CustomEvent('workspace:agents:update', {
             detail: { agents: states },
+        }))
+        window.dispatchEvent(new CustomEvent('workspace:phase:update', {
+            detail: { activePhase: props.activePhase, activeTaskTitle: props.activeTaskTitle },
         }))
     },
     { deep: true, immediate: true },

@@ -56,7 +56,7 @@ const activeRuns = computed(() => store.activeRunAgentIds.size)
 const activeCount = computed(() => {
     let count = 0
     for (const [, status] of props.contextStatuses) {
-        if (status.status === 'compressing' || status.status === 'replying') count++
+        if (['compressing', 'replying', 'calling_tool'].includes(status.status)) count++
     }
     return count
 })
