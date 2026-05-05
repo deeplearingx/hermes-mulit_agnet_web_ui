@@ -54,6 +54,7 @@ export class GroupOfficeScene extends Phaser.Scene {
     private dragEnabled = false
     private activePhase: string | null = null
     private zoneGraphics: Map<string, Phaser.GameObjects.Graphics> = new Map()
+    private lastClickAt = new Map<string, number>()  // P9-3: for double-click detection
 
     constructor() {
         super({ key: 'GroupOfficeScene' })
@@ -95,6 +96,7 @@ export class GroupOfficeScene extends Phaser.Scene {
             this.agentBubbles.clear()
             this.agentIcons.clear()
             this.agentStates.clear()
+            this.lastClickAt.clear()  // P9-3
         })
 
         // Set up Phaser drag events
@@ -176,19 +178,25 @@ export class GroupOfficeScene extends Phaser.Scene {
 
     private drawZones() {
         // P8-10: Use ZONE_RECTS from map-config for unified coordinates
+        const hasTilemap = this.textures.exists('office_tilemap')
+
         for (const z of ZONE_RECTS) {
             const colors = ZONE_COLORS[z.key]
             const g = this.add.graphics()
-            // V3: Very subtle background
-            g.fillStyle(colors.bg, 0.12)
-            g.fillRect(z.x, z.y, z.w, z.h)
-            // V3: Ultra-thin border
-            g.lineStyle(1, colors.border, 0.15)
-            g.strokeRect(z.x, z.y, z.w, z.h)
+
+            if (!hasTilemap) {
+                // 无 tilemap：画完整区域背景 + 边框
+                g.fillStyle(colors.bg, 0.12)
+                g.fillRect(z.x, z.y, z.w, z.h)
+                g.lineStyle(1, colors.border, 0.15)
+                g.strokeRect(z.x, z.y, z.w, z.h)
+            }
+            // P9-2: 有 tilemap 时不画大面积区域，只保留引用用于高亮
+
             // Save reference for dynamic highlighting
             this.zoneGraphics.set(z.key, g)
 
-            // V3: Small label badge
+            // 标签始终显示
             const labelBg = this.add.graphics()
             labelBg.fillStyle(0x000000, 0.6)
             labelBg.fillRoundedRect(z.x + 4, z.y + 4, 80, 18, 3)
@@ -414,6 +422,7 @@ export class GroupOfficeScene extends Phaser.Scene {
                 this.idleTweens.get(id)?.destroy()
                 this.idleTweens.delete(id)
                 this.agentStates.delete(id)
+                this.lastClickAt.delete(id)  // P9-3: cleanup click tracking
             }
         }
 
@@ -509,7 +518,21 @@ export class GroupOfficeScene extends Phaser.Scene {
         container.setSize(32, 44)
         container.setInteractive({ draggable: this.dragEnabled })
 
-        container.on('pointerdown', () => {
+        // P9-3: 合并单击/双击 — 单击选中，双击切换 pinned
+        container.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+            const now = pointer.downTime
+            const last = this.lastClickAt.get(agent.agentId) ?? 0
+            const isDoubleClick = now - last < 350
+
+            this.lastClickAt.set(agent.agentId, now)
+
+            if (isDoubleClick) {
+                window.dispatchEvent(new CustomEvent('workspace:layout:pin-toggle', {
+                    detail: { agentId: agent.agentId },
+                }))
+                return
+            }
+
             this.selectedAgentId = agent.agentId
             window.dispatchEvent(new CustomEvent('workspace:agent:selected', {
                 detail: { agentId: agent.agentId, agentName: agent.agentName },
@@ -597,6 +620,26 @@ export class GroupOfficeScene extends Phaser.Scene {
             })
         } else if (icon) {
             icon.setVisible(false)
+        }
+
+        // P9-3: pinned indicator — small pin icon
+        const pinKey = `pin-${agent.agentId}`
+        let pinIcon = this.agentIcons.get(pinKey)
+        if (agent.pinned) {
+            if (!pinIcon) {
+                pinIcon = this.add.graphics()
+                this.agentIcons.set(pinKey, pinIcon)
+            }
+            pinIcon.clear()
+            pinIcon.setPosition(container.x + 20, container.y - 16)
+            // 画一个小图钉
+            pinIcon.fillStyle(0xf59e0b, 0.8)
+            pinIcon.fillCircle(0, 0, 3)
+            pinIcon.fillStyle(0xf59e0b, 0.6)
+            pinIcon.fillRect(-1, 3, 2, 5)
+            pinIcon.setVisible(true)
+        } else if (pinIcon) {
+            pinIcon.setVisible(false)
         }
 
         // Bug 7 fix: only rebuild bubble when status actually changes
@@ -769,18 +812,33 @@ export class GroupOfficeScene extends Phaser.Scene {
         }
     }
 
+    // P9-2: 统一重绘，不能 clear 后只 setAlpha
     private updateZoneHighlights() {
+        const hasTilemap = this.textures.exists('office_tilemap')
+
         for (const [key, g] of this.zoneGraphics) {
-            if (!this.activePhase) {
-                // No active task — reset all zones to default
-                g.setAlpha(1)
-            } else if (key === this.activePhase) {
-                // 活跃 zone 边框发光
-                g.setAlpha(1)
-            } else {
-                // 非活跃 zone 降低透明度
-                g.setAlpha(0.4)
+            const z = ZONE_RECTS.find(r => r.key === key)
+            if (!z) continue
+
+            const colors = ZONE_COLORS[key]
+            const active = this.activePhase === key
+
+            g.clear()
+
+            if (hasTilemap) {
+                // tilemap 模式：只画当前活跃 zone 的高亮边框
+                if (active) {
+                    g.lineStyle(2, colors.border, 0.65)
+                    g.strokeRect(z.x, z.y, z.w, z.h)
+                }
+                continue
             }
+
+            // 非 tilemap 模式：重绘区域背景 + 边框
+            g.fillStyle(colors.bg, active ? 0.18 : 0.06)
+            g.fillRect(z.x, z.y, z.w, z.h)
+            g.lineStyle(1, colors.border, active ? 0.45 : 0.15)
+            g.strokeRect(z.x, z.y, z.w, z.h)
         }
     }
 

@@ -20,6 +20,12 @@ let sceneReady = false
 onMounted(async () => {
     if (!containerRef.value) return
 
+    // P9-1: 先监听事件，再 import + 创建 Phaser，避免 scene:ready 丢失
+    window.addEventListener('workspace:layout:changed', onLayoutChanged as EventListener)
+    window.addEventListener('workspace:scene:ready', onSceneReady as EventListener)
+    window.addEventListener('workspace:agent:selected', onAgentSelected as EventListener)
+    window.addEventListener('workspace:layout:pin-toggle', onPinToggle as EventListener)
+
     const Phaser = (await import('phaser')).default
     const { BootScene } = await import('./scenes/BootScene')
     const { GroupOfficeScene } = await import('./scenes/GroupOfficeScene')
@@ -40,15 +46,6 @@ onMounted(async () => {
         banner: false,
         audio: { noAudio: true },
     })
-
-    // Listen for layout changes from Phaser drag events
-    window.addEventListener('workspace:layout:changed', onLayoutChanged as EventListener)
-
-    // P8-2: Listen for scene ready, then push current snapshot
-    window.addEventListener('workspace:scene:ready', onSceneReady as EventListener)
-
-    // P8-9: Listen for agent selection from Phaser
-    window.addEventListener('workspace:agent:selected', onAgentSelected as EventListener)
 })
 
 onBeforeUnmount(() => {
@@ -63,6 +60,7 @@ onBeforeUnmount(() => {
     window.removeEventListener('workspace:layout:changed', onLayoutChanged as EventListener)
     window.removeEventListener('workspace:scene:ready', onSceneReady as EventListener)
     window.removeEventListener('workspace:agent:selected', onAgentSelected as EventListener)
+    window.removeEventListener('workspace:layout:pin-toggle', onPinToggle as EventListener)
 })
 
 // P8-2: Scene is ready — push current state snapshot
@@ -84,6 +82,37 @@ function pushStateToScene() {
     window.dispatchEvent(new CustomEvent('workspace:phase:update', {
         detail: { activePhase: props.activePhase, activeTaskTitle: props.activeTaskTitle },
     }))
+}
+
+// P9-3: Handle pin toggle from Phaser double-click
+function onPinToggle(e: Event) {
+    const { agentId } = (e as CustomEvent).detail
+
+    const existing = store.workspaceLayout.find(l => l.agentId === agentId)
+    const agent = store.agentWorkspaceStates.find(a => a.agentId === agentId)
+    if (!agent) return
+
+    let updated: WorkspaceLayoutItem[]
+    if (existing) {
+        // 已有 layout：切换 pinned
+        updated = store.workspaceLayout.map(l =>
+            l.agentId === agentId ? { ...l, pinned: !l.pinned } : l,
+        )
+    } else {
+        // 无 layout：从当前 agent 状态创建 pinned layout
+        updated = [
+            ...store.workspaceLayout,
+            {
+                agentId,
+                x: agent.x ?? 0,
+                y: agent.y ?? 0,
+                zone: agent.zone,
+                pinned: true,
+            },
+        ]
+    }
+
+    store.saveWorkspaceLayout(updated)
 }
 
 function onLayoutChanged(e: Event) {

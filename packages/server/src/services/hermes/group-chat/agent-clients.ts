@@ -546,9 +546,14 @@ export class AgentClients {
         const mergedHandlers: AgentEventHandler = {
             ...handlers,
             onRuntimeEvent: (event) => {
+                // 广播 agent_event 到房间
                 if (this._io) {
                     this._io.of('/group-chat').to(event.roomId).emit('agent_event', event)
                 }
+                // P9-5: 后端任务联动
+                this._handleTaskLinkage(event).catch((err: any) => {
+                    logger.warn(`[AgentClients] task linkage error: ${err.message}`)
+                })
             },
         }
         const client = new AgentClient(config, mergedHandlers)
@@ -797,5 +802,87 @@ export class AgentClients {
         this._processAgentMention(roomId, last.agent, last.msg).catch((err) => {
             logger.error(`[AgentClients] error processing queued mention: ${err.message}`)
         })
+    }
+
+    // ─── P9-5: Task Linkage (backend-driven) ──────────────────
+
+    /**
+     * P9-5: Backend-driven task linkage.
+     * When an agent emits a runtime event, check if it should trigger
+     * task status progression or artifact creation.
+     */
+    private async _handleTaskLinkage(event: GroupRuntimeEvent): Promise<void> {
+        if (!this._storage) return
+
+        try {
+            const tasks = this._storage.getTasks(event.roomId)
+            // 找到 agent 负责的活跃任务
+            const agentTask = tasks.find((t: any) =>
+                t.assigneeAgentId === event.agentId &&
+                ['draft', 'planning', 'running', 'reviewing'].includes(t.status),
+            )
+
+            if (event.type === 'run_started' && agentTask) {
+                // run_started → 如果任务是 draft/planning，推进到 running
+                if (agentTask.status === 'draft' || agentTask.status === 'planning') {
+                    this._storage.updateTask(agentTask.id, { status: 'running', phase: 'coding' })
+                    logger.info(`[AgentClients] P9-5: task ${agentTask.id} auto-progressed to running (agent ${event.agentName})`)
+                    this._broadcastWorkspaceUpdate(event.roomId)
+                }
+            }
+
+            if (event.type === 'run_completed' && agentTask) {
+                // run_completed → 如果任务是 running，推进到 reviewing
+                if (agentTask.status === 'running') {
+                    this._storage.updateTask(agentTask.id, { status: 'reviewing', phase: 'review' })
+                    logger.info(`[AgentClients] P9-5: task ${agentTask.id} auto-progressed to reviewing (agent ${event.agentName})`)
+                    this._broadcastWorkspaceUpdate(event.roomId)
+                }
+            }
+
+            if (event.type === 'tool_call' && agentTask && event.payload) {
+                // tool_call completed → 如果有文件产出，自动创建 artifact
+                const result = event.payload.result
+                if (result && typeof result === 'object' && result.path) {
+                    this._storage.createArtifact(
+                        event.roomId,
+                        result.name || result.path.split('/').pop() || 'output',
+                        result.type || 'file',
+                        {
+                            taskId: agentTask.id,
+                            agentId: event.agentId,
+                            path: result.path,
+                            contentPreview: result.preview?.slice(0, 200),
+                        },
+                    )
+                    logger.info(`[AgentClients] P9-5: artifact auto-created for task ${agentTask.id} (agent ${event.agentName})`)
+                    this._broadcastWorkspaceUpdate(event.roomId)
+                }
+            }
+        } catch (err: any) {
+            logger.warn(`[AgentClients] P9-5: task linkage failed: ${err.message}`)
+        }
+    }
+
+    /**
+     * P9-5: Broadcast workspace_updated to all clients in a room.
+     * This ensures all connected frontends receive the latest state
+     * without each client independently calling patchTask/createArtifact.
+     */
+    private _broadcastWorkspaceUpdate(roomId: string): void {
+        if (!this._io || !this._storage) return
+        try {
+            const layout = this._storage.getWorkspaceLayout(roomId)
+            const tasks = this._storage.getTasks(roomId)
+            const artifacts = this._storage.getArtifacts(roomId)
+            this._io.of('/group-chat').to(roomId).emit('workspace_updated', {
+                roomId,
+                layout,
+                tasks,
+                artifacts,
+            })
+        } catch (err: any) {
+            logger.warn(`[AgentClients] P9-5: broadcast workspace update failed: ${err.message}`)
+        }
     }
 }

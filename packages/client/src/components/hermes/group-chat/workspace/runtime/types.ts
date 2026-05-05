@@ -22,6 +22,11 @@ export interface AgentWorkspaceState {
     isTaskOwner?: boolean            // 是否为当前任务负责人
     x?: number   // 从 workspaceLayout 恢复的坐标
     y?: number
+    pinned?: boolean                 // P9-3: 用户固定位置，不被任务流转覆盖
+    lastEventType?: string           // P9-6: 最近一次事件类型
+    lastEventPayload?: string        // P9-6: 最近事件摘要
+    lastArtifactName?: string        // P9-6: 最近产出物名称
+    activeToolName?: string          // P9-6: 正在调用的工具名
     lastEventAt: number
 }
 
@@ -61,14 +66,14 @@ export const DEFAULT_SEATS: AgentSeat[] = Object.entries(ZONE_SEATS).flatMap(([z
     }))
 )
 
-/** Role → default zone mapping (P7-1, P8-5: added tester) */
+/** Role → default zone mapping (P7-1, P8-5: added tester, P9-4: tester→review) */
 export const ROLE_DEFAULT_ZONE: Record<AgentRoleType, string> = {
     observer: 'requirement',
     planner: 'planning',
     developer: 'coding',
     reviewer: 'review',
     delivery: 'delivery',
-    tester: 'coding',
+    tester: 'review',
 }
 
 /** Zone color palette (pixel-art friendly) — P0-3: added planning zone */

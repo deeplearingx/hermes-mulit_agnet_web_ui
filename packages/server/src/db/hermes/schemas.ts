@@ -199,6 +199,7 @@ export const GC_WORKSPACE_LAYOUTS_SCHEMA: Record<string, string> = {
   x: 'INTEGER NOT NULL DEFAULT 0',
   y: 'INTEGER NOT NULL DEFAULT 0',
   zone: "TEXT NOT NULL DEFAULT 'coding'",
+  pinned: 'INTEGER NOT NULL DEFAULT 0',  // P9-3: 用户固定位置
   updatedAt: 'INTEGER NOT NULL',
 }
 

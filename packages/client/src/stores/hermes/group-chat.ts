@@ -102,8 +102,9 @@ export const useGroupChatStore = defineStore('groupChat', () => {
     })
 
     // P8-3: Unified agent workspace states — single source of truth
+    // P9-6: pass liveEvents + artifacts for behavior card enrichment
     const agentWorkspaceStates = computed<AgentWorkspaceState[]>(() =>
-        deriveAgentStates(agents.value, contextStatuses.value, workspaceLayout.value, tasks.value)
+        deriveAgentStates(agents.value, contextStatuses.value, workspaceLayout.value, tasks.value, liveEvents.value, artifacts.value)
     )
 
     // P8-11: Unified active/display task

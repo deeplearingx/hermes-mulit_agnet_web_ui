@@ -3,7 +3,7 @@
 // P7-2: Added role inference. P7-3: Task-driven seat assignment.
 // P8-1: Added getActiveTask / getDisplayTask.
 
-import type { RoomAgent, WorkspaceLayoutItem, GroupTask } from '@/api/hermes/group-chat'
+import type { RoomAgent, WorkspaceLayoutItem, GroupTask, GroupArtifact } from '@/api/hermes/group-chat'
 import type { AgentWorkspaceState, AgentWorkStatus, AgentRoleType } from './types'
 import { DEFAULT_SEATS, ROLE_DEFAULT_ZONE } from './types'
 
@@ -94,6 +94,8 @@ export function deriveAgentStates(
     contextStatuses: Map<string, { agentId: string; agentName: string; status: string }>,
     workspaceLayout?: WorkspaceLayoutItem[],
     tasks?: GroupTask[],
+    liveEvents?: Array<{ agentId: string; type: string; payload: Record<string, any>; timestamp: number }>,
+    artifacts?: GroupArtifact[],
 ): AgentWorkspaceState[] {
     // P8-1: Use getActiveTask for canvas-driven logic (no tasks[0] fallback)
     const activeTask = tasks ? getActiveTask(tasks) : null
@@ -115,32 +117,58 @@ export function deriveAgentStates(
         const roleType = inferAgentRole(agent)
         const isTaskOwner = activeTask?.assigneeAgentId === agent.agentId
 
-        // P7-3: zone/seat assignment with priority:
-        //   1. User-dragged layout (workspaceLayout)
+        // P9-3: zone/seat assignment with priority:
+        //   1. Pinned layout (user fixed, not overridden by task flow)
         //   2. Task owner → move to task's phase zone
-        //   3. Role default zone
+        //   3. Normal layout (non-pinned, can be overridden by task flow)
+        //   4. Role default zone
         const layout = workspaceLayout?.find(l => l.agentId === agent.agentId)
         let zone: string
         let x: number | undefined
         let y: number | undefined
+        let pinned = false
 
-        if (layout) {
+        if (layout?.pinned) {
+            // 固定位置，不被任务流转覆盖
             zone = layout.zone
             x = layout.x
             y = layout.y
-            // Mark layout coords as occupied
+            pinned = true
             if (x != null && y != null) occupiedCoords.add(`${x},${y}`)
         } else if (isTaskOwner && activeTask) {
+            // 任务负责人 → 移动到任务阶段区域
             zone = activeTask.phase
             const seat = findZoneSeat(zone, occupiedCoords, index)
             x = seat.x
             y = seat.y
+        } else if (layout) {
+            // 非固定布局，可被任务覆盖
+            zone = layout.zone
+            x = layout.x
+            y = layout.y
+            if (x != null && y != null) occupiedCoords.add(`${x},${y}`)
         } else {
+            // 角色默认区域
             zone = ROLE_DEFAULT_ZONE[roleType]
             const seat = findZoneSeat(zone, occupiedCoords, index)
             x = seat.x
             y = seat.y
         }
+
+        // P9-6: 最近事件
+        const agentEvents = liveEvents?.filter(e => e.agentId === agent.agentId) ?? []
+        const lastEvent = agentEvents[0]
+        const lastEventType = lastEvent?.type
+        const lastEventPayload = lastEvent?.payload?.toolName || lastEvent?.payload?.model || undefined
+
+        // P9-6: 正在调用的工具
+        const activeToolName = status === 'calling_tool'
+            ? agentEvents.find(e => e.type === 'tool_call')?.payload?.toolName
+            : undefined
+
+        // P9-6: 最近产出物
+        const agentArtifacts = artifacts?.filter(a => a.agentId === agent.agentId) ?? []
+        const lastArtifactName = agentArtifacts[0]?.name
 
         return {
             agentId: agent.agentId,
@@ -156,6 +184,11 @@ export function deriveAgentStates(
             isTaskOwner,
             x,
             y,
+            pinned,
+            lastEventType,
+            lastEventPayload,
+            lastArtifactName,
+            activeToolName,
             lastEventAt: Date.now(),
         }
     })

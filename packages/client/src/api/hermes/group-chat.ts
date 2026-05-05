@@ -222,6 +222,7 @@ export interface WorkspaceLayoutItem {
     x: number
     y: number
     zone: string
+    pinned?: boolean  // P9-3: 用户固定位置
 }
 
 export interface GroupTask {

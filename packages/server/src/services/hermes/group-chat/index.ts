@@ -510,23 +510,26 @@ class ChatStorage {
     }
 
     // ─── Workspace Layouts ─────────────────────────────────────
-    getWorkspaceLayout(roomId: string): Array<{ agentId: string; x: number; y: number; zone: string }> {
+    getWorkspaceLayout(roomId: string): Array<{ agentId: string; x: number; y: number; zone: string; pinned: boolean }> {
         return (this.db()?.prepare(
-            'SELECT agentId, x, y, zone FROM gc_workspace_layouts WHERE roomId = ?'
-        ).all(roomId) || []) as any[]
+            'SELECT agentId, x, y, zone, pinned FROM gc_workspace_layouts WHERE roomId = ?'
+        ).all(roomId) || []).map((row: any) => ({
+            ...row,
+            pinned: !!row.pinned,
+        })) as any[]
     }
 
-    saveWorkspaceLayout(roomId: string, layout: Array<{ agentId: string; x: number; y: number; zone: string }>): void {
+    saveWorkspaceLayout(roomId: string, layout: Array<{ agentId: string; x: number; y: number; zone: string; pinned?: boolean }>): void {
         const db = this.db()
         if (!db) return
         const now = Date.now()
         const del = db.prepare('DELETE FROM gc_workspace_layouts WHERE roomId = ?')
-        const ins = db.prepare('INSERT INTO gc_workspace_layouts (id, roomId, agentId, x, y, zone, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        const ins = db.prepare('INSERT INTO gc_workspace_layouts (id, roomId, agentId, x, y, zone, pinned, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
         db.exec('BEGIN')
         try {
             del.run(roomId)
             for (const item of layout) {
-                ins.run(`${roomId}:${item.agentId}`, roomId, item.agentId, item.x, item.y, item.zone, now)
+                ins.run(`${roomId}:${item.agentId}`, roomId, item.agentId, item.x, item.y, item.zone, item.pinned ? 1 : 0, now)
             }
             db.exec('COMMIT')
         } catch (error) {

@@ -22,6 +22,16 @@ const ROLE_LABELS: Record<string, string> = {
     tester: '🧪 测试',
 }
 
+// P9-6: Event type labels for behavior card
+const EVENT_LABELS: Record<string, string> = {
+    run_started: '🚀 开始运行',
+    context_compressing: '⚙️ 压缩上下文',
+    replying: '✍️ 生成回复',
+    tool_call: '🔧 调用工具',
+    run_completed: '✅ 运行完成',
+    run_failed: '❌ 运行失败',
+}
+
 function statusColor(status: AgentWorkStatus): string {
     return '#' + STATUS_VISUALS[status].color.toString(16).padStart(6, '0')
 }
@@ -70,10 +80,11 @@ const selectedAgent = computed(() =>
             </div>
         </div>
 
-        <!-- P8-9: Agent detail panel -->
+        <!-- P8-9 + P9-6: Agent detail panel (enhanced behavior card) -->
         <div v-if="selectedAgent" class="asl-detail">
             <div class="asl-detail-header">
                 <span class="asl-detail-name">{{ selectedAgent.agentName }}</span>
+                <span v-if="selectedAgent.pinned" class="asl-pin-badge">📌</span>
                 <button class="asl-detail-close" @click="store.selectAgent(null)">✕</button>
             </div>
             <div class="asl-detail-row">
@@ -86,10 +97,6 @@ const selectedAgent = computed(() =>
                     {{ STATUS_VISUALS[selectedAgent.status].emoji }} {{ STATUS_VISUALS[selectedAgent.status].label }}
                 </span>
             </div>
-            <div class="asl-detail-row">
-                <span class="asl-detail-label">区域</span>
-                <span class="asl-detail-value">{{ selectedAgent.zone }}</span>
-            </div>
             <div v-if="selectedAgent.currentTaskTitle" class="asl-detail-row">
                 <span class="asl-detail-label">任务</span>
                 <span class="asl-detail-value">{{ selectedAgent.currentTaskTitle }}</span>
@@ -97,6 +104,32 @@ const selectedAgent = computed(() =>
             <div v-if="selectedAgent.phase" class="asl-detail-row">
                 <span class="asl-detail-label">阶段</span>
                 <span class="asl-detail-value">{{ selectedAgent.phase }}</span>
+            </div>
+            <!-- P9-6: 正在调用的工具 -->
+            <div v-if="selectedAgent.activeToolName" class="asl-detail-row asl-highlight">
+                <span class="asl-detail-label">🔧 工具</span>
+                <span class="asl-detail-value">{{ selectedAgent.activeToolName }}</span>
+            </div>
+            <!-- P9-6: 最近事件 -->
+            <div v-if="selectedAgent.lastEventType" class="asl-detail-row">
+                <span class="asl-detail-label">最近事件</span>
+                <span class="asl-detail-value">
+                    {{ EVENT_LABELS[selectedAgent.lastEventType] || selectedAgent.lastEventType }}
+                    <span v-if="selectedAgent.lastEventPayload"> · {{ selectedAgent.lastEventPayload }}</span>
+                </span>
+            </div>
+            <!-- P9-6: 最近产出物 -->
+            <div v-if="selectedAgent.lastArtifactName" class="asl-detail-row">
+                <span class="asl-detail-label">📦 产出</span>
+                <span class="asl-detail-value">{{ selectedAgent.lastArtifactName }}</span>
+            </div>
+            <div class="asl-detail-row">
+                <span class="asl-detail-label">区域</span>
+                <span class="asl-detail-value">{{ selectedAgent.zone }}</span>
+            </div>
+            <div class="asl-detail-row">
+                <span class="asl-detail-label">固定</span>
+                <span class="asl-detail-value">{{ selectedAgent.pinned ? '📌 是' : '否' }}</span>
             </div>
             <div class="asl-detail-row">
                 <span class="asl-detail-label">Profile</span>
