@@ -1,8 +1,9 @@
 // ─── Task Runtime Service ────────────────────────────────────
 // P10-4: Backend-driven task-event linkage.
-// Extracted from AgentClients._handleTaskLinkage for separation of concerns.
+// P12-5: taskAction-driven transitions (replaces hardcoded phase mapping).
 
 import type { GroupRuntimeEvent } from './agent-clients'
+import { resolveTaskTransition } from './task-dispatch'
 
 interface TaskPatchResult {
     taskUpdated: boolean
@@ -10,11 +11,11 @@ interface TaskPatchResult {
 }
 
 /**
- * P10-4: Runtime event → task status machine.
- * Maps event types to task status transitions.
+ * Fallback runtime event → task status machine for events WITHOUT taskAction.
+ * Used when an agent runs via @mention (no explicit task dispatch).
  * Note: run_failed keeps the current phase (more useful for debugging).
  */
-const RUNTIME_EVENT_TO_TASK_PATCH: Record<string, {
+const FALLBACK_RUNTIME_EVENT_TO_TASK_PATCH: Record<string, {
     from: string[]
     to: string
     phase?: string
@@ -33,16 +34,17 @@ const RUNTIME_EVENT_TO_TASK_PATCH: Record<string, {
     run_failed: {
         from: ['draft', 'planning', 'running', 'reviewing'],
         to: 'failed',
-        keepPhase: true,  // P10-4: failed 不改 phase，保留失败时的阶段
+        keepPhase: true,
     },
 }
 
 /**
- * P10-4: Handle a runtime event from an agent.
+ * Handle a runtime event from an agent.
  * Returns whether any state was changed (for broadcast optimization).
  *
  * P10-5: Uses payload.taskId when available, falls back to assigneeAgentId lookup.
  * P10-6: Artifact creation is idempotent (checks findArtifactByPath first).
+ * P12-5: Uses payload.taskAction for precise transitions when available.
  */
 export function handleAgentRuntimeEvent(
     storage: any,
@@ -67,15 +69,33 @@ export function handleAgentRuntimeEvent(
     }
 
     // 2. Apply task status machine
-    const patch = RUNTIME_EVENT_TO_TASK_PATCH[eventType]
-    if (patch && targetTask && patch.from.includes(targetTask.status)) {
-        const update: Record<string, any> = { status: patch.to }
-        if (patch.phase) {
-            update.phase = patch.phase
+    // P12-5: Prefer taskAction-driven transitions from task-dispatch.ts
+    const taskAction = payload?.taskAction as string | undefined
+    let transition: { status: string; phase: string } | null = null
+
+    if (taskAction) {
+        transition = resolveTaskTransition(eventType, taskAction, targetTask?.status)
+    }
+
+    if (transition && targetTask) {
+        const update: Record<string, any> = {
+            status: transition.status,
+            phase: transition.phase,
         }
-        // keepPhase: don't change phase (e.g., for run_failed)
         storage.updateTask(targetTask.id, update)
         taskUpdated = true
+    } else if (!taskAction) {
+        // Fallback: use legacy static mapping for mention-based events (no taskAction)
+        const patch = FALLBACK_RUNTIME_EVENT_TO_TASK_PATCH[eventType]
+        if (patch && targetTask && patch.from.includes(targetTask.status)) {
+            const update: Record<string, any> = { status: patch.to }
+            if (patch.phase) {
+                update.phase = patch.phase
+            }
+            // keepPhase: don't change phase (e.g., for run_failed)
+            storage.updateTask(targetTask.id, update)
+            taskUpdated = true
+        }
     }
 
     // 3. Artifact auto-creation (tool_call with file result)

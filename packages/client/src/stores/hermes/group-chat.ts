@@ -28,6 +28,7 @@ import {
     updateWorkspaceLayout,
     createGroupTask,
     updateGroupTask,
+    dispatchGroupTask,
     createGroupArtifact,
     deleteGroupArtifact,
 } from '@/api/hermes/group-chat'
@@ -486,6 +487,25 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         }
     }
 
+    // ─── Phase 12: Task Dispatch ────────────────────────────────
+    async function dispatchTask(taskId: string, action: string, assigneeAgentId?: string) {
+        if (!currentRoomId.value) return null
+        try {
+            const res = await dispatchGroupTask(currentRoomId.value, taskId, { action, assigneeAgentId })
+            // The server broadcasts workspace_updated, but also update local state immediately
+            if (res.task) {
+                const idx = tasks.value.findIndex(t => t.id === taskId)
+                if (idx >= 0) {
+                    tasks.value[idx] = res.task
+                }
+            }
+            return res
+        } catch (err: any) {
+            error.value = err.message
+            throw err
+        }
+    }
+
     async function addArtifact(name: string, type: string, opts?: { taskId?: string; agentId?: string; path?: string; contentPreview?: string }) {
         if (!currentRoomId.value) return
         const res = await createGroupArtifact(currentRoomId.value, { name, type, ...opts })
@@ -578,6 +598,7 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         saveWorkspaceLayout,
         addTask,
         patchTask,
+        dispatchTask,
         addArtifact,
         removeArtifact,
         isDragging,

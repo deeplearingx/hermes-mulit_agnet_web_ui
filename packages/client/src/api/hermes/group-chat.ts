@@ -294,6 +294,18 @@ export async function updateGroupTask(roomId: string, taskId: string, patch: {
     })
 }
 
+// Phase 12: Task dispatch API
+export async function dispatchGroupTask(roomId: string, taskId: string, data: {
+    action: string
+    assigneeAgentId?: string
+}): Promise<{ success: boolean; task: GroupTask; dispatch: { taskId: string; agentId: string; action: string } | null }> {
+    return request(`/api/hermes/group-chat/rooms/${roomId}/tasks/${taskId}/dispatch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    })
+}
+
 export async function createGroupArtifact(roomId: string, data: {
     name: string
     type: string

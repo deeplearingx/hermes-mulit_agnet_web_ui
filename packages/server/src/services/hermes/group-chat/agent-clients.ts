@@ -9,6 +9,8 @@ import { logger } from '../../../services/logger'
 import { updateUsage } from '../../../db/hermes/usage-store'
 import { getSessionDetailFromDbWithProfile } from '../../../db/hermes/sessions-db'
 import { inferProvider } from './infer-provider'
+import { buildTaskInstruction, TASK_ACTION_TRANSITIONS } from './task-dispatch'
+import type { TaskAction } from './task-dispatch'
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -484,6 +486,242 @@ class AgentClient {
         }
     }
 
+    // ─── Phase 12: Task Dispatch Execution ──────────────────────
+
+    /**
+     * Execute a task dispatch command.
+     * Similar to replyToMention() but uses task-specific instruction
+     * and includes task metadata in runtime events.
+     */
+    async replyToTaskDispatch(
+        roomId: string,
+        task: { id: string; title: string; description?: string; phase: string; assigneeAgentId?: string },
+        action: string,
+        instruction: string,
+        onStatus?: (status: 'compressing' | 'replying' | 'ready') => void,
+    ): Promise<void> {
+        logger.debug(`[AgentClients] ${this.name} dispatching task "${task.title}" action=${action}`)
+        if (!this.gatewayManager) {
+            logger.debug(`[AgentClients] ${this.name}: gatewayManager is null, skipping`)
+            return
+        }
+
+        const upstream = this.gatewayManager.getUpstream(this.profile)
+        const apiKey = this.gatewayManager.getApiKey(this.profile)
+        if (!upstream) {
+            logger.error(`[AgentClients] ${this.name}: no gateway upstream for profile "${this.profile}"`)
+            return
+        }
+
+        const sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+
+        // Task metadata to include in all runtime events
+        const taskMeta = {
+            taskId: task.id,
+            taskAction: action,
+            taskPhase: task.phase,
+            taskTitle: task.title,
+            assigneeAgentId: task.assigneeAgentId,
+        }
+
+        try {
+            this.startTyping(roomId)
+
+            // Build compressed context if context engine is available
+            let conversationHistory: Array<{ role: string; content: string }> = []
+            let instructions: string | undefined
+
+            if (this.contextEngine && this.storage) {
+                try {
+                    logger.debug(`[AgentClients] ${this.name}: building context for task dispatch...`)
+                    this.emitRuntimeEvent(roomId, 'context_compressing', taskMeta)
+                    onStatus?.('compressing')
+
+                    const roomMembers: Array<{ userId: string; name: string; description: string }> = this.storage.getRoomMembers(roomId) || []
+                    const memberNames = roomMembers.map((m: any) => m.name)
+                    const members = roomMembers.map((m: any) => ({ userId: m.userId, name: m.name, description: m.description }))
+
+                    const roomInfo = this.storage.getRoom(roomId)
+                    const compression = roomInfo ? {
+                        triggerTokens: roomInfo.triggerTokens,
+                        maxHistoryTokens: roomInfo.maxHistoryTokens,
+                        tailMessageCount: roomInfo.tailMessageCount,
+                    } : undefined
+
+                    // Use a synthetic message for context building
+                    const syntheticMsg = {
+                        content: instruction,
+                        senderName: 'Task Dispatch',
+                        senderId: 'system',
+                        timestamp: Date.now(),
+                    }
+
+                    const ctx = await this.contextEngine.buildContext({
+                        roomId,
+                        agentId: this.agentId,
+                        agentName: this.name,
+                        agentDescription: this.description,
+                        agentSocketId: this.socket?.id || '',
+                        roomName: roomId,
+                        memberNames,
+                        members,
+                        upstream,
+                        apiKey,
+                        currentMessage: syntheticMsg,
+                        compression,
+                        profile: this.profile,
+                        agentOverride: this._override,
+                    })
+                    conversationHistory = ctx.conversationHistory
+                    instructions = ctx.instructions
+                    logger.debug(`[AgentClients] ${this.name}: context built for dispatch — historyLen=${conversationHistory.length}`)
+                    onStatus?.('replying')
+                } catch (err: any) {
+                    logger.warn(`[AgentClients] ${this.name}: context engine failed: ${err.message}`)
+                    onStatus?.('replying')
+                }
+            }
+
+            // Resolve model/provider override
+            const overrideModel = this._override?.model || undefined
+            const overrideProvider = this._override?.provider ||
+                (overrideModel ? await inferProvider(overrideModel) : undefined)
+
+            // Start a run on Hermes gateway
+            const runRes = await fetch(`${upstream}/v1/runs`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+                },
+                body: JSON.stringify({
+                    input: instruction,
+                    session_id: sessionId,
+                    ...(conversationHistory.length > 0 ? { conversation_history: conversationHistory } : {}),
+                    ...(instructions ? { instructions } : {}),
+                    ...(overrideModel ? { model: overrideModel } : {}),
+                    ...(overrideProvider ? { provider: overrideProvider } : {}),
+                }),
+                signal: AbortSignal.timeout(120000),
+            })
+
+            if (!runRes.ok) {
+                const text = await runRes.text().catch(() => '')
+                logger.error(`[AgentClients] ${this.name}: gateway run failed (${runRes.status}): ${text}`)
+                this.stopTyping(roomId)
+                this.emitRuntimeEvent(roomId, 'run_failed', { ...taskMeta, error: `HTTP ${runRes.status}` })
+                return
+            }
+
+            const runData = await runRes.json() as any
+            const run_id = runData.run_id
+            if (!run_id) {
+                logger.error(`[AgentClients] ${this.name}: no run_id in response`)
+                this.stopTyping(roomId)
+                this.emitRuntimeEvent(roomId, 'run_failed', { ...taskMeta, error: 'no run_id' })
+                return
+            }
+
+            const actualSessionId = runData.session_id || sessionId
+            if (this.storage) {
+                this.storage.saveSessionProfile(actualSessionId, roomId, this.agentId, this.profile)
+            }
+
+            this.emitRuntimeEvent(roomId, 'run_started', {
+                ...taskMeta,
+                runId: run_id,
+                sessionId: actualSessionId,
+                profile: this.profile,
+                model: overrideModel,
+            })
+
+            // Stream events from Hermes
+            const eventsUrl = new URL(`${upstream}/v1/runs/${run_id}/events`)
+            const eventSourceInit: any = apiKey ? {
+                fetch: (url: string, init: any = {}) => fetch(url, {
+                    ...init,
+                    headers: {
+                        ...(init.headers || {}),
+                        Authorization: `Bearer ${apiKey}`,
+                    },
+                }),
+            } : {}
+
+            // @ts-ignore - eventsource library types are too strict
+            const source = new EventSource(eventsUrl.toString(), eventSourceInit)
+
+            let fullContent = ''
+
+            source.onmessage = async (e: any) => {
+                try {
+                    const parsed = JSON.parse(e.data)
+
+                    if (parsed.event === 'run.completed') {
+                        try {
+                            const detail = await getSessionDetailFromDbWithProfile(actualSessionId, this.profile)
+                            if (detail) {
+                                updateUsage(roomId, {
+                                    inputTokens: detail.input_tokens,
+                                    outputTokens: detail.output_tokens,
+                                    cacheReadTokens: detail.cache_read_tokens,
+                                    cacheWriteTokens: detail.cache_write_tokens,
+                                    reasoningTokens: detail.reasoning_tokens,
+                                    model: detail.model,
+                                    profile: this.profile,
+                                })
+                            }
+                        } catch (err: any) {
+                            logger.warn(err, '[AgentClients] Failed to record usage from DB')
+                        }
+
+                        source.close()
+                        if (fullContent) {
+                            this.stopTyping(roomId)
+                            this.sendMessage(roomId, fullContent)
+                        }
+                        this.deleteSession(actualSessionId).catch(() => { })
+                        this.emitRuntimeEvent(roomId, 'run_completed', {
+                            ...taskMeta,
+                            sessionId: actualSessionId,
+                            contentLength: fullContent.length,
+                        })
+                        onStatus?.('ready')
+                        return
+                    }
+
+                    if (parsed.event === 'run.failed') {
+                        source.close()
+                        this.stopTyping(roomId)
+                        this.deleteSession(actualSessionId).catch(() => { })
+                        this.emitRuntimeEvent(roomId, 'run_failed', { ...taskMeta, error: 'run.failed' })
+                        onStatus?.('ready')
+                        return
+                    }
+
+                    if (parsed.event === 'message.delta' && parsed.delta) {
+                        fullContent += parsed.delta
+                    }
+                } catch {
+                    // ignore parse errors
+                }
+            }
+
+            source.onerror = (err: any) => {
+                logger.error(err, `[AgentClients] ${this.name}: EventSource error`)
+                source.close()
+                this.stopTyping(roomId)
+                this.deleteSession(actualSessionId).catch(() => { })
+                onStatus?.('ready')
+            }
+        } catch (err: any) {
+            logger.error(`[AgentClients] ${this.name}: error dispatching task: ${err.message}`)
+            this.stopTyping(roomId)
+            this.deleteSession(sessionId).catch(() => { })
+            this.emitRuntimeEvent(roomId, 'run_failed', { ...taskMeta, error: err.message })
+            onStatus?.('ready')
+        }
+    }
+
     private bindEvents(): void {
         const s = this.socket!
 
@@ -720,6 +958,72 @@ export class AgentClients {
             const room = this.rooms.get(roomId)
             const keys = room ? Array.from(room.keys()) : []
             logger.warn(`[AgentClients] updateAgentOverride: room=${roomId} agent=${agentId} → CLIENT NOT FOUND! Available keys: [${keys.join(', ')}]`)
+        }
+    }
+
+    // ─── Phase 12: Task Dispatch ────────────────────────────────
+
+    /**
+     * Dispatch a task to its assigned agent.
+     * This is the main entry point for task commands from the right panel.
+     *
+     * @returns The runId if the dispatch was successful, or null if no agent was found.
+     */
+    async dispatchTask(
+        roomId: string,
+        task: { id: string; title: string; description?: string; phase: string; assigneeAgentId?: string },
+        action: TaskAction,
+    ): Promise<{ agentId: string; runId?: string } | null> {
+        if (!this._gatewayManager) {
+            logger.warn(`[AgentClients] dispatchTask: _gatewayManager is null, skipping for room=${roomId}`)
+            return null
+        }
+
+        // Resolve the target agent
+        const assigneeId = task.assigneeAgentId
+        if (!assigneeId) {
+            logger.warn(`[AgentClients] dispatchTask: no assigneeAgentId for task "${task.title}" (${task.id})`)
+            return null
+        }
+
+        const agent = this.getAgent(roomId, assigneeId)
+        if (!agent) {
+            logger.warn(`[AgentClients] dispatchTask: agent "${assigneeId}" not found in room "${roomId}"`)
+            return null
+        }
+
+        // Build task-specific instruction
+        const instruction = buildTaskInstruction(action, {
+            taskId: task.id,
+            taskTitle: task.title,
+            taskDescription: task.description,
+            taskPhase: task.phase,
+            assigneeAgentId: task.assigneeAgentId,
+            assigneeAgentName: agent.name,
+        })
+
+        logger.info(`[AgentClients] dispatchTask: dispatching "${task.title}" to ${agent.name} action=${action}`)
+
+        // Execute the task dispatch (reuses the same processing lock as mentions)
+        const agentKey = `${roomId}:${agent.name}`
+        if (this._processingRooms.has(agentKey)) {
+            logger.warn(`[AgentClients] dispatchTask: agent ${agent.name} is busy in room ${roomId}, dispatching anyway (will queue)`)
+        }
+
+        this._processingRooms.add(agentKey)
+        const onStatus = (status: 'compressing' | 'replying' | 'ready') => {
+            agent.emitContextStatus(roomId, status)
+        }
+
+        try {
+            await agent.replyToTaskDispatch(roomId, task, action, instruction, onStatus)
+            return { agentId: agent.agentId }
+        } catch (err: any) {
+            logger.error(`[AgentClients] dispatchTask error for ${agent.name}: ${err.message}`)
+            return null
+        } finally {
+            this._processingRooms.delete(agentKey)
+            await this._drainQueue(agentKey, roomId)
         }
     }
 

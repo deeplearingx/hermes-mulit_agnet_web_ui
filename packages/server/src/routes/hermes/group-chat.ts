@@ -352,6 +352,100 @@ groupChatRoutes.put('/api/hermes/group-chat/rooms/:roomId/tasks/:taskId', async 
     ctx.body = { task: updated }
 })
 
+// ─── Phase 12: Task Dispatch API ───────────────────────────
+groupChatRoutes.post('/api/hermes/group-chat/rooms/:roomId/tasks/:taskId/dispatch', async (ctx) => {
+    if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }
+    const roomId = ctx.params.roomId
+    const { taskId } = ctx.params
+    const { action, assigneeAgentId } = ctx.request.body as { action: string; assigneeAgentId?: string }
+
+    // Validate action
+    const VALID_ACTIONS = ['start_planning', 'start_coding', 'request_review', 'revise', 'deliver']
+    if (!action || !VALID_ACTIONS.includes(action)) {
+        ctx.status = 400
+        ctx.body = { error: `action is required and must be one of: ${VALID_ACTIONS.join(', ')}` }
+        return
+    }
+
+    const storage = chatServer.getStorage()
+    const tasks = storage.getTasks(roomId) as any[]
+    const task = tasks.find((t: any) => t.id === taskId)
+    if (!task) {
+        ctx.status = 404
+        ctx.body = { error: 'Task not found' }
+        return
+    }
+
+    // Resolve assignee: prefer request body, then task's assigneeAgentId
+    const resolvedAssigneeId = assigneeAgentId || task.assigneeAgentId
+    if (!resolvedAssigneeId) {
+        ctx.status = 400
+        ctx.body = { error: 'No assignee specified. Provide assigneeAgentId in request body or set it on the task first.' }
+        return
+    }
+
+    // Resolve transition
+    const { TASK_ACTION_TRANSITIONS } = await import('../../services/hermes/group-chat/task-dispatch')
+    const transition = TASK_ACTION_TRANSITIONS[action as keyof typeof TASK_ACTION_TRANSITIONS]
+
+    // Save original state for rollback
+    const originalStatus = task.status
+    const originalPhase = task.phase
+
+    // Validate from status
+    if (transition && !transition.from.includes(task.status)) {
+        ctx.status = 400
+        ctx.body = { error: `Action "${action}" is not valid for task status "${task.status}". Expected one of: ${transition.from.join(', ')}` }
+        return
+    }
+
+    // Apply onDispatch transition
+    if (transition) {
+        storage.updateTask(taskId, {
+            status: transition.onDispatch.status,
+            phase: transition.onDispatch.phase,
+        })
+    }
+
+    // Dispatch to agent
+    const agentClients = chatServer.agentClients
+    const result = await agentClients.dispatchTask(
+        roomId,
+        {
+            id: task.id,
+            title: task.title,
+            description: task.description,
+            phase: transition?.onDispatch.phase || task.phase,
+            assigneeAgentId: resolvedAssigneeId,
+        },
+        action as any,
+    )
+
+    // Bug fix: rollback if dispatch failed (agent not found, gateway down, etc.)
+    if (!result && transition) {
+        storage.updateTask(taskId, {
+            status: originalStatus,
+            phase: originalPhase,
+        })
+    }
+
+    // Broadcast workspace update
+    chatServer.getIO().of('/group-chat').to(roomId).emit('workspace_updated', {
+        roomId,
+        tasks: storage.getTasks(roomId),
+    })
+
+    ctx.body = {
+        success: !!result,
+        task: storage.getTasks(roomId).find((t: any) => t.id === taskId) || null,
+        dispatch: result ? {
+            taskId,
+            agentId: result.agentId,
+            action,
+        } : null,
+    }
+})
+
 // ─── Artifact API ──────────────────────────────────────────
 groupChatRoutes.post('/api/hermes/group-chat/rooms/:roomId/artifacts', async (ctx) => {
     if (!chatServer) { ctx.status = 503; ctx.body = { error: 'Group chat not initialized' }; return }

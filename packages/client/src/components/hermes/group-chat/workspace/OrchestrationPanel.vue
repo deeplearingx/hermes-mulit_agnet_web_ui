@@ -97,42 +97,57 @@ async function onCreateTask() {
     showNewTaskForm.value = false
 }
 
-// P11-6: Explicit task action buttons (replaces cycleTaskStatus)
+// P12-3: Task action buttons with dispatch semantics
 const TASK_ACTIONS: Record<string, Array<{
     label: string
-    nextStatus: string
-    nextPhase?: string
-    keepPhase?: boolean
+    key: string
     icon: string
+    isDispatch: boolean  // true = dispatch to agent, false = manual patch
 }>> = {
     draft: [
-        { label: '开始规划', nextStatus: 'planning', nextPhase: 'planning', icon: '📐' },
+        { label: '开始规划', key: 'start_planning', icon: '📐', isDispatch: true },
     ],
     planning: [
-        { label: '开始开发', nextStatus: 'running', nextPhase: 'coding', icon: '⚡' },
+        { label: '开始开发', key: 'start_coding', icon: '⚡', isDispatch: true },
     ],
     running: [
-        { label: '提交审核', nextStatus: 'reviewing', nextPhase: 'review', icon: '🔍' },
-        { label: '标记失败', nextStatus: 'failed', keepPhase: true, icon: '❌' },
+        { label: '提交审核', key: 'request_review', icon: '🔍', isDispatch: true },
+        { label: '标记失败', key: 'mark_failed', icon: '❌', isDispatch: false },
     ],
     reviewing: [
-        { label: '审核通过', nextStatus: 'done', nextPhase: 'delivery', icon: '✅' },
-        { label: '打回修改', nextStatus: 'running', nextPhase: 'coding', icon: '↩️' },
+        { label: '审核通过', key: 'deliver', icon: '✅', isDispatch: true },
+        { label: '打回修改', key: 'revise', icon: '↩️', isDispatch: true },
     ],
     done: [
-        { label: '重新打开', nextStatus: 'running', nextPhase: 'coding', icon: '🔄' },
+        { label: '重新打开', key: 'reopen', icon: '🔄', isDispatch: false },
     ],
     failed: [
-        { label: '重新开始', nextStatus: 'draft', nextPhase: 'requirement', icon: '🔄' },
+        { label: '重新开始', key: 'restart', icon: '🔄', isDispatch: false },
     ],
+}
+
+// Manual patch transitions for non-dispatch actions
+const MANUAL_PATCHES: Record<string, { status: string; phase?: string; keepPhase?: boolean }> = {
+    mark_failed: { status: 'failed', keepPhase: true },
+    reopen: { status: 'running', phase: 'coding' },
+    restart: { status: 'draft', phase: 'requirement' },
 }
 
 async function executeTaskAction(
     task: GroupTask,
-    action: { nextStatus: string; nextPhase?: string; keepPhase?: boolean },
+    action: { key: string; isDispatch: boolean },
 ) {
-    const phase = action.keepPhase ? task.phase : (action.nextPhase ?? task.phase)
-    await store.patchTask(task.id, { status: action.nextStatus, phase })
+    if (action.isDispatch) {
+        // Dispatch to agent via backend
+        await store.dispatchTask(task.id, action.key, task.assigneeAgentId || undefined)
+    } else {
+        // Manual patch (mark_failed, reopen, restart)
+        const patch = MANUAL_PATCHES[action.key]
+        if (patch) {
+            const phase = patch.keepPhase ? task.phase : (patch.phase ?? task.phase)
+            await store.patchTask(task.id, { status: patch.status, phase })
+        }
+    }
 }
 
 function artifactIcon(type: string): string {
@@ -183,7 +198,7 @@ const recentIssues = computed(() => {
                 <div v-if="TASK_ACTIONS[mainTask.status]" class="op-mt-actions">
                     <button
                         v-for="action in TASK_ACTIONS[mainTask.status]"
-                        :key="action.nextStatus + action.label"
+                        :key="action.key"
                         class="op-action-btn"
                         @click="executeTaskAction(mainTask, action)"
                     >
@@ -343,7 +358,7 @@ const recentIssues = computed(() => {
                     <div v-if="TASK_ACTIONS[task.status]" class="op-task-actions">
                         <button
                             v-for="action in TASK_ACTIONS[task.status]"
-                            :key="action.nextStatus + action.label"
+                            :key="action.key"
                             class="op-action-btn-sm"
                             @click="executeTaskAction(task, action)"
                         >
