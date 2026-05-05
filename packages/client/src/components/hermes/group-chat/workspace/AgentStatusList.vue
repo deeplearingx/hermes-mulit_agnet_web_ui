@@ -1,48 +1,46 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import type { RoomAgent } from '@/api/hermes/group-chat'
-import { deriveAgentStates, agentColor } from './runtime/agent-state'
+import { computed } from 'vue'
+import { useGroupChatStore } from '@/stores/hermes/group-chat'
+import { agentColor } from './runtime/agent-state'
 import { STATUS_VISUALS } from './runtime/types'
-import type { AgentWorkStatus } from './runtime/types'
+import type { AgentWorkspaceState, AgentWorkStatus } from './runtime/types'
 
 const props = defineProps<{
-    agents: RoomAgent[]
-    // P0-2: key is agentId
-    contextStatuses: Map<string, { agentId: string; agentName: string; status: string }>
+    agentStates: AgentWorkspaceState[]  // P8-3: pre-computed from store
 }>()
 
-const selectedAgentId = ref<string | null>(null)
+const store = useGroupChatStore()
 
-const agentStates = computed(() => deriveAgentStates(props.agents, props.contextStatuses))
+const selectedAgentId = computed(() => store.selectedAgentId)
+
+const ROLE_LABELS: Record<string, string> = {
+    observer: '👁️ 观察员',
+    planner: '📐 架构师',
+    developer: '💻 开发',
+    reviewer: '🔍 评审',
+    delivery: '📦 交付',
+    tester: '🧪 测试',
+}
 
 function statusColor(status: AgentWorkStatus): string {
     return '#' + STATUS_VISUALS[status].color.toString(16).padStart(6, '0')
 }
 
 function handleAgentClick(agentId: string) {
-    selectedAgentId.value = agentId
+    // P8-9: Toggle selection via store
+    store.selectAgent(store.selectedAgentId === agentId ? null : agentId)
 }
 
-// Listen for Phaser agent selection
-function onPhaserSelect(e: Event) {
-    const { agentId } = (e as CustomEvent).detail
-    selectedAgentId.value = agentId
-}
-
-onMounted(() => {
-    window.addEventListener('workspace:agent:selected', onPhaserSelect)
-})
-
-onBeforeUnmount(() => {
-    window.removeEventListener('workspace:agent:selected', onPhaserSelect)
-})
+const selectedAgent = computed(() =>
+    props.agentStates.find(a => a.agentId === selectedAgentId.value) ?? null
+)
 </script>
 
 <template>
     <div class="agent-status-list">
         <div class="asl-header">
             <span class="asl-title">🤖 Agent 状态</span>
-            <span class="asl-count">{{ agents.length }}</span>
+            <span class="asl-count">{{ agentStates.length }}</span>
         </div>
         <div class="asl-body">
             <div
@@ -67,8 +65,42 @@ onBeforeUnmount(() => {
                     <span class="asl-status-label">{{ STATUS_VISUALS[agent.status].emoji }} {{ STATUS_VISUALS[agent.status].label }}</span>
                 </div>
             </div>
-            <div v-if="agents.length === 0" class="asl-empty">
+            <div v-if="agentStates.length === 0" class="asl-empty">
                 暂无 Agent
+            </div>
+        </div>
+
+        <!-- P8-9: Agent detail panel -->
+        <div v-if="selectedAgent" class="asl-detail">
+            <div class="asl-detail-header">
+                <span class="asl-detail-name">{{ selectedAgent.agentName }}</span>
+                <button class="asl-detail-close" @click="store.selectAgent(null)">✕</button>
+            </div>
+            <div class="asl-detail-row">
+                <span class="asl-detail-label">角色</span>
+                <span class="asl-detail-value">{{ ROLE_LABELS[selectedAgent.roleType] || selectedAgent.roleType }}</span>
+            </div>
+            <div class="asl-detail-row">
+                <span class="asl-detail-label">状态</span>
+                <span class="asl-detail-value" :style="{ color: statusColor(selectedAgent.status) }">
+                    {{ STATUS_VISUALS[selectedAgent.status].emoji }} {{ STATUS_VISUALS[selectedAgent.status].label }}
+                </span>
+            </div>
+            <div class="asl-detail-row">
+                <span class="asl-detail-label">区域</span>
+                <span class="asl-detail-value">{{ selectedAgent.zone }}</span>
+            </div>
+            <div v-if="selectedAgent.currentTaskTitle" class="asl-detail-row">
+                <span class="asl-detail-label">任务</span>
+                <span class="asl-detail-value">{{ selectedAgent.currentTaskTitle }}</span>
+            </div>
+            <div v-if="selectedAgent.phase" class="asl-detail-row">
+                <span class="asl-detail-label">阶段</span>
+                <span class="asl-detail-value">{{ selectedAgent.phase }}</span>
+            </div>
+            <div class="asl-detail-row">
+                <span class="asl-detail-label">Profile</span>
+                <span class="asl-detail-value">{{ selectedAgent.profile }}</span>
             </div>
         </div>
     </div>
@@ -191,5 +223,63 @@ onBeforeUnmount(() => {
     text-align: center;
     color: #475569;
     font-size: 12px;
+}
+
+// ─── Agent Detail Panel (P8-9) ───────────────────────────
+.asl-detail {
+    border-top: 1px solid #1e293b;
+    padding: 8px;
+    background: #0f1729;
+}
+
+.asl-detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+.asl-detail-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: #e2e8f0;
+    font-family: 'Courier New', monospace;
+}
+
+.asl-detail-close {
+    background: none;
+    border: none;
+    color: #64748b;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+
+    &:hover {
+        color: #e2e8f0;
+    }
+}
+
+.asl-detail-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 2px 0;
+}
+
+.asl-detail-label {
+    font-size: 10px;
+    color: #64748b;
+    font-family: 'Courier New', monospace;
+}
+
+.asl-detail-value {
+    font-size: 10px;
+    color: #94a3b8;
+    font-family: 'Courier New', monospace;
+    text-align: right;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 </style>

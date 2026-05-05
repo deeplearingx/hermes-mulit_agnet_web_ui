@@ -1,16 +1,13 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
-import type { RoomAgent, WorkspaceLayoutItem, GroupTask } from '@/api/hermes/group-chat'
+import type { WorkspaceLayoutItem } from '@/api/hermes/group-chat'
+import type { AgentWorkspaceState } from './runtime/types'
 import { useGroupChatStore } from '@/stores/hermes/group-chat'
-import { deriveAgentStates } from './runtime/agent-state'
 
 const props = defineProps<{
-    agents: RoomAgent[]
-    // P0-2: key is agentId
-    contextStatuses: Map<string, { agentId: string; agentName: string; status: string }>
-    tasks: GroupTask[]              // P7-4: task data for zone assignment
-    activePhase?: string            // P7-4: current task phase
-    activeTaskTitle?: string        // P7-4: current task title
+    agentWorkspaceStates: AgentWorkspaceState[]  // P8-3: pre-computed from store
+    activePhase?: string
+    activeTaskTitle?: string
 }>()
 
 const store = useGroupChatStore()
@@ -18,6 +15,7 @@ const containerRef = ref<HTMLDivElement>()
 let game: Phaser.Game | null = null
 let layoutDebounceTimer: ReturnType<typeof setTimeout> | null = null
 const pendingLayoutChanges = ref<Map<string, WorkspaceLayoutItem>>(new Map())
+let sceneReady = false
 
 onMounted(async () => {
     if (!containerRef.value) return
@@ -43,9 +41,14 @@ onMounted(async () => {
         audio: { noAudio: true },
     })
 
-    // Bug 6 fix: drag enable is now handled by BootScene.create() after assets load
     // Listen for layout changes from Phaser drag events
     window.addEventListener('workspace:layout:changed', onLayoutChanged as EventListener)
+
+    // P8-2: Listen for scene ready, then push current snapshot
+    window.addEventListener('workspace:scene:ready', onSceneReady as EventListener)
+
+    // P8-9: Listen for agent selection from Phaser
+    window.addEventListener('workspace:agent:selected', onAgentSelected as EventListener)
 })
 
 onBeforeUnmount(() => {
@@ -58,19 +61,39 @@ onBeforeUnmount(() => {
         layoutDebounceTimer = null
     }
     window.removeEventListener('workspace:layout:changed', onLayoutChanged as EventListener)
+    window.removeEventListener('workspace:scene:ready', onSceneReady as EventListener)
+    window.removeEventListener('workspace:agent:selected', onAgentSelected as EventListener)
 })
+
+// P8-2: Scene is ready — push current state snapshot
+function onSceneReady() {
+    sceneReady = true
+    pushStateToScene()
+}
+
+// P8-9: Agent selected in Phaser — update store
+function onAgentSelected(e: Event) {
+    const { agentId } = (e as CustomEvent).detail
+    store.selectAgent(agentId)
+}
+
+function pushStateToScene() {
+    window.dispatchEvent(new CustomEvent('workspace:agents:update', {
+        detail: { agents: props.agentWorkspaceStates },
+    }))
+    window.dispatchEvent(new CustomEvent('workspace:phase:update', {
+        detail: { activePhase: props.activePhase, activeTaskTitle: props.activeTaskTitle },
+    }))
+}
 
 function onLayoutChanged(e: Event) {
     const { agentId, x, y, zone } = (e as CustomEvent).detail
     pendingLayoutChanges.value.set(agentId, { agentId, x, y, zone })
-    // Bug 3 fix: mark dragging state to prevent workspace_updated from overwriting
-    // P0-4 fix: use store action instead of direct .value access (Pinia auto-unwraps)
     store.setDragging(true)
 
     // Debounce: save layout after 1 second of no changes
     if (layoutDebounceTimer) clearTimeout(layoutDebounceTimer)
     layoutDebounceTimer = setTimeout(async () => {
-        // Merge pending changes with existing layout
         const existing = [...store.workspaceLayout]
         for (const [id, item] of pendingLayoutChanges.value) {
             const idx = existing.findIndex(l => l.agentId === id)
@@ -86,19 +109,13 @@ function onLayoutChanged(e: Event) {
     }, 1000)
 }
 
-// Bridge: Vue props → Phaser scene via CustomEvent
+// P8-3: Watch pre-computed states from store → push to Phaser scene
 watch(
-    () => [props.agents, props.contextStatuses, store.workspaceLayout, props.tasks],
+    () => [props.agentWorkspaceStates, props.activePhase, props.activeTaskTitle],
     () => {
-        const states = deriveAgentStates(props.agents, props.contextStatuses, store.workspaceLayout, props.tasks)
-        window.dispatchEvent(new CustomEvent('workspace:agents:update', {
-            detail: { agents: states },
-        }))
-        window.dispatchEvent(new CustomEvent('workspace:phase:update', {
-            detail: { activePhase: props.activePhase, activeTaskTitle: props.activeTaskTitle },
-        }))
+        if (sceneReady) pushStateToScene()
     },
-    { deep: true, immediate: true },
+    { deep: true },
 )
 </script>
 

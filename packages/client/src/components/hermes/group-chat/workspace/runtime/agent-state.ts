@@ -1,10 +1,29 @@
 // ─── Agent State Derivation ──────────────────────────────────
 // Derives workspace agent states from existing Pinia store data.
 // P7-2: Added role inference. P7-3: Task-driven seat assignment.
+// P8-1: Added getActiveTask / getDisplayTask.
 
 import type { RoomAgent, WorkspaceLayoutItem, GroupTask } from '@/api/hermes/group-chat'
 import type { AgentWorkspaceState, AgentWorkStatus, AgentRoleType } from './types'
 import { DEFAULT_SEATS, ROLE_DEFAULT_ZONE } from './types'
+
+/**
+ * Canvas-driven: only return truly active tasks (planning/running/reviewing).
+ * Used by PhaserWorkspace, zone highlighting, agent movement.
+ */
+export function getActiveTask(tasks: GroupTask[]): GroupTask | null {
+    return tasks.find(t => ['planning', 'running', 'reviewing'].includes(t.status)) ?? null
+}
+
+/**
+ * Display-driven: active task > any non-done task > first task.
+ * Used by right-side main task card so users always see "something".
+ */
+export function getDisplayTask(tasks: GroupTask[]): GroupTask | null {
+    return getActiveTask(tasks)
+        ?? tasks.find(t => t.status !== 'done')
+        ?? tasks[0] ?? null
+}
 
 /** Map runtime event type to visual agent status */
 export function runtimeEventToStatus(eventType: string): AgentWorkStatus | null {
@@ -20,12 +39,23 @@ export function runtimeEventToStatus(eventType: string): AgentWorkStatus | null 
 }
 
 /**
- * Infer agent role from name/profile/description keywords (P7-2).
+ * Infer agent role with three-layer fallback (P8-5):
+ * 1. Explicit roleType from database
+ * 2. Keyword inference from name/profile/description
+ * 3. Default 'observer'
  */
 export function inferAgentRole(agent: RoomAgent): AgentRoleType {
-    const text = `${agent.name} ${agent.profile} ${agent.description || ''}`.toLowerCase()
+    // Layer 1: Explicit configuration
+    if (agent.roleType) return agent.roleType as AgentRoleType
+    // Layer 2: Keyword inference
+    return inferRoleByText(agent.name, agent.profile, agent.description)
+}
+
+function inferRoleByText(name: string, profile: string, description?: string): AgentRoleType {
+    const text = `${name} ${profile} ${description || ''}`.toLowerCase()
     if (text.includes('架构') || text.includes('planner') || text.includes('architect')) return 'planner'
     if (text.includes('开发') || text.includes('engineer') || text.includes('coder')) return 'developer'
+    if (text.includes('测试') || text.includes('tester') || text.includes('qa')) return 'tester'
     if (text.includes('评审') || text.includes('review')) return 'reviewer'
     if (text.includes('交付') || text.includes('release') || text.includes('doc')) return 'delivery'
     return 'observer'
@@ -65,10 +95,8 @@ export function deriveAgentStates(
     workspaceLayout?: WorkspaceLayoutItem[],
     tasks?: GroupTask[],
 ): AgentWorkspaceState[] {
-    // Find active task: running > reviewing > first
-    const activeTask = tasks?.find(t => t.status === 'running')
-        ?? tasks?.find(t => t.status === 'reviewing')
-        ?? tasks?.[0]
+    // P8-1: Use getActiveTask for canvas-driven logic (no tasks[0] fallback)
+    const activeTask = tasks ? getActiveTask(tasks) : null
 
     // Track occupied coordinates to avoid stacking
     const occupiedCoords = new Set<string>()

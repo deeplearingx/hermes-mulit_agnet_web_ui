@@ -31,7 +31,8 @@ import {
     createGroupArtifact,
     deleteGroupArtifact,
 } from '@/api/hermes/group-chat'
-import { runtimeEventToStatus } from '@/components/hermes/group-chat/workspace/runtime/agent-state'
+import { runtimeEventToStatus, deriveAgentStates, getActiveTask, getDisplayTask } from '@/components/hermes/group-chat/workspace/runtime/agent-state'
+import type { AgentWorkspaceState } from '@/components/hermes/group-chat/workspace/runtime/types'
 
 export interface GroupRuntimeEvent {
     id: string
@@ -99,6 +100,21 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         if (names.length === 2) return `${names[0]} and ${names[1]} are typing...`
         return `${names[0]} and ${names.length - 1} others are typing...`
     })
+
+    // P8-3: Unified agent workspace states — single source of truth
+    const agentWorkspaceStates = computed<AgentWorkspaceState[]>(() =>
+        deriveAgentStates(agents.value, contextStatuses.value, workspaceLayout.value, tasks.value)
+    )
+
+    // P8-11: Unified active/display task
+    const activeTask = computed(() => getActiveTask(tasks.value))
+    const displayTask = computed(() => getDisplayTask(tasks.value))
+
+    // P8-9: Unified selected agent
+    const selectedAgentId = ref<string | null>(null)
+    function selectAgent(agentId: string | null) {
+        selectedAgentId.value = agentId
+    }
 
     // ─── Connection ────────────────────────────────────────
     function connect() {
@@ -252,6 +268,7 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         artifacts.value = []
         liveEvents.value = []
         activeRunAgentIds.value.clear()
+        selectedAgentId.value = null  // P8-9: clear selection on disconnect
     }
 
     function setUserInfo(name: string, description: string) {
@@ -395,7 +412,7 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         } catch { /* ignore */ }
     }
 
-    async function addAgentToRoom(roomId: string, data: { profile: string; name?: string; description?: string; invited?: boolean }) {
+    async function addAgentToRoom(roomId: string, data: { profile: string; name?: string; description?: string; invited?: boolean; roleType?: string }) {
         try {
             const res = await addAgent(roomId, data)
             agents.value.push(res.agent)
@@ -535,6 +552,11 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         memberNames,
         typingNames,
         typingText,
+        agentWorkspaceStates,
+        activeTask,
+        displayTask,
+        selectedAgentId,
+        selectAgent,
         // Actions
         connect,
         disconnect,

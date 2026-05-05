@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import type { RoomAgent, ChatMessage, GroupTask, GroupArtifact } from '@/api/hermes/group-chat'
 import type { GroupRuntimeEvent } from '@/stores/hermes/group-chat'
 import { useGroupChatStore } from '@/stores/hermes/group-chat'
+import type { AgentWorkspaceState } from './runtime/types'
 import AgentStatusList from './AgentStatusList.vue'
 
 const props = defineProps<{
@@ -14,6 +15,8 @@ const props = defineProps<{
     tasks: GroupTask[]
     artifacts: GroupArtifact[]
     liveEvents?: GroupRuntimeEvent[]
+    agentWorkspaceStates: AgentWorkspaceState[]  // P8-3: pre-computed from store
+    displayTask: GroupTask | null                 // P8-1: display-driven task
 }>()
 
 const store = useGroupChatStore()
@@ -35,15 +38,8 @@ const PHASE_LABELS: Record<string, string> = {
     delivery: '交付',
 }
 
-// ─── Main task card ──────────────────────────────────────
-const activeTask = computed(() => {
-    // Prefer running task, then reviewing, then first
-    const running = props.tasks.find(t => t.status === 'running')
-    if (running) return running
-    const reviewing = props.tasks.find(t => t.status === 'reviewing')
-    if (reviewing) return reviewing
-    return props.tasks[0] ?? null
-})
+// P8-1: Use displayTask prop (shows draft tasks too, unlike activeTask)
+const activeTask = computed(() => props.displayTask)
 
 const activePhaseIndex = computed(() => {
     if (!activeTask.value) return -1
@@ -101,11 +97,22 @@ async function onCreateTask() {
     showNewTaskForm.value = false
 }
 
+// P8-6: STATUS_TO_PHASE mapping
+const STATUS_TO_PHASE: Record<string, string> = {
+    draft: 'requirement',
+    planning: 'planning',
+    running: 'coding',
+    reviewing: 'review',
+    done: 'delivery',
+}
+
 async function cycleTaskStatus(task: GroupTask) {
     const order = ['draft', 'planning', 'running', 'reviewing', 'done'] as const
     const idx = order.indexOf(task.status as any)
     const next = order[(idx + 1) % order.length]
-    await store.patchTask(task.id, { status: next })
+    // P8-6: Sync phase with status (failed keeps original phase)
+    const phase = next === 'failed' ? task.phase : (STATUS_TO_PHASE[next] ?? task.phase)
+    await store.patchTask(task.id, { status: next, phase })
 }
 
 function artifactIcon(type: string): string {
@@ -222,8 +229,7 @@ const recentIssues = computed(() => {
         <!-- 4. Agent Execution List -->
         <div class="op-section op-agents">
             <AgentStatusList
-                :agents="agents"
-                :context-statuses="contextStatuses"
+                :agent-states="agentWorkspaceStates"
             />
         </div>
 

@@ -1,10 +1,12 @@
 // ─── Workspace Types ─────────────────────────────────────────
 // Types for the pixel-style workspace visualization mode.
 
+import { ZONE_SEATS } from './map-config'
+
 export type AgentWorkStatus = 'idle' | 'compressing' | 'replying' | 'thinking'
     | 'calling_tool' | 'completed' | 'failed'
 
-export type AgentRoleType = 'observer' | 'planner' | 'developer' | 'reviewer' | 'delivery'
+export type AgentRoleType = 'observer' | 'planner' | 'developer' | 'reviewer' | 'delivery' | 'tester'
 
 export interface AgentWorkspaceState {
     agentId: string
@@ -40,32 +42,33 @@ export interface AgentSeat {
     label: string
 }
 
-/** Default office layout — 5 zones with 2 seats each (V4: 960×540 canvas) */
-export const DEFAULT_SEATS: AgentSeat[] = [
-    // 需求区 (Requirement Zone) — top-left
-    { zone: 'requirement', x: 140, y: 140, label: '需求区' },
-    { zone: 'requirement', x: 140, y: 260, label: '需求区' },
-    // 规划区 (Planning Zone) — top-center
-    { zone: 'planning', x: 380, y: 140, label: '规划区' },
-    { zone: 'planning', x: 380, y: 260, label: '规划区' },
-    // 开发区 (Development Zone) — top-right
-    { zone: 'coding', x: 620, y: 140, label: '开发区' },
-    { zone: 'coding', x: 620, y: 260, label: '开发区' },
-    // 评审区 (Review Zone) — bottom-left
-    { zone: 'review', x: 240, y: 380, label: '评审区' },
-    { zone: 'review', x: 240, y: 460, label: '评审区' },
-    // 产出区 (Delivery Zone) — bottom-right
-    { zone: 'delivery', x: 560, y: 380, label: '产出区' },
-    { zone: 'delivery', x: 560, y: 460, label: '产出区' },
-]
+/** Zone label mapping */
+const ZONE_LABELS: Record<string, string> = {
+    requirement: '需求区',
+    planning: '规划区',
+    coding: '开发区',
+    review: '评审区',
+    delivery: '产出区',
+}
 
-/** Role → default zone mapping (P7-1) */
+/** P8-7: Default seats derived from ZONE_SEATS (4 per zone, 20 total) */
+export const DEFAULT_SEATS: AgentSeat[] = Object.entries(ZONE_SEATS).flatMap(([zone, seats]) =>
+    seats.map(seat => ({
+        zone,
+        x: seat.x,
+        y: seat.y,
+        label: ZONE_LABELS[zone] ?? zone,
+    }))
+)
+
+/** Role → default zone mapping (P7-1, P8-5: added tester) */
 export const ROLE_DEFAULT_ZONE: Record<AgentRoleType, string> = {
     observer: 'requirement',
     planner: 'planning',
     developer: 'coding',
     reviewer: 'review',
     delivery: 'delivery',
+    tester: 'coding',
 }
 
 /** Zone color palette (pixel-art friendly) — P0-3: added planning zone */

@@ -7,6 +7,7 @@
 import Phaser from 'phaser'
 import type { AgentWorkspaceState, AgentWorkStatus } from '../runtime/types'
 import { DEFAULT_SEATS, ZONE_COLORS, STATUS_VISUALS } from '../runtime/types'
+import { ZONE_RECTS } from '../runtime/map-config'
 import { agentColor } from '../runtime/agent-state'
 import {
     drawTerminalIcon, drawFileIcon, drawCodeIcon,
@@ -59,15 +60,19 @@ export class GroupOfficeScene extends Phaser.Scene {
     }
 
     create() {
+        const hasTilemap = this.textures.exists('office_tilemap')
+
         this.drawFloor()
         this.drawWalls()
         this.drawZones()
         this.drawFurniture()
-        this.drawZoneDecorations()
+
+        // P8-8: Only draw zone decorations when no tilemap (reduces visual noise)
+        if (!hasTilemap) {
+            this.drawZoneDecorations()
+        }
 
         // Environment animations
-        this.addScanline()
-        this.addFloatingParticles()
         this.addMonitorAnimations()
         this.addClock()
 
@@ -75,6 +80,22 @@ export class GroupOfficeScene extends Phaser.Scene {
         window.addEventListener('workspace:agents:update', this.onAgentsUpdate as EventListener)
         window.addEventListener('workspace:drag:enable', this.onDragEnable as EventListener)
         window.addEventListener('workspace:phase:update', this.onPhaseUpdate as EventListener)
+
+        // P8-2: Use Phaser shutdown event for cleanup (prevents leak on room switch)
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+            window.removeEventListener('workspace:agents:update', this.onAgentsUpdate as EventListener)
+            window.removeEventListener('workspace:drag:enable', this.onDragEnable as EventListener)
+            window.removeEventListener('workspace:phase:update', this.onPhaseUpdate as EventListener)
+            this.zoneGraphics.clear()
+            for (const timer of this.pulseTimers.values()) timer.destroy()
+            for (const tween of this.idleTweens.values()) tween.destroy()
+            this.pulseTimers.clear()
+            this.idleTweens.clear()
+            this.agentSprites.clear()
+            this.agentBubbles.clear()
+            this.agentIcons.clear()
+            this.agentStates.clear()
+        })
 
         // Set up Phaser drag events
         this.input.on('drag', (_pointer: Phaser.Input.Pointer, gameObject: Phaser.GameObjects.Container, dragX: number, dragY: number) => {
@@ -110,6 +131,9 @@ export class GroupOfficeScene extends Phaser.Scene {
                 }))
             }
         })
+
+        // P8-2: Signal that scene is ready to receive state
+        window.dispatchEvent(new CustomEvent('workspace:scene:ready'))
     }
 
     // ─── Drawing ─────────────────────────────────────────────
@@ -151,15 +175,8 @@ export class GroupOfficeScene extends Phaser.Scene {
     }
 
     private drawZones() {
-        const zones = [
-            { key: 'requirement', x: TILE * 2,  y: TILE * 3,  w: TILE * 18, h: TILE * 15 },
-            { key: 'planning',    x: TILE * 21, y: TILE * 3,  w: TILE * 16, h: TILE * 15 },
-            { key: 'coding',      x: TILE * 38, y: TILE * 3,  w: TILE * 18, h: TILE * 15 },
-            { key: 'review',      x: TILE * 2,  y: TILE * 20, w: TILE * 27, h: TILE * 13 },
-            { key: 'delivery',    x: TILE * 31, y: TILE * 20, w: TILE * 25, h: TILE * 13 },
-        ]
-
-        for (const z of zones) {
+        // P8-10: Use ZONE_RECTS from map-config for unified coordinates
+        for (const z of ZONE_RECTS) {
             const colors = ZONE_COLORS[z.key]
             const g = this.add.graphics()
             // V3: Very subtle background
@@ -281,7 +298,7 @@ export class GroupOfficeScene extends Phaser.Scene {
         for (const d of decorations) {
             const g = this.add.graphics()
             d.draw(g, d.x, d.y)
-            g.setAlpha(0.15)
+            g.setAlpha(0.08)
             // Gentle float animation (±4px from origin)
             this.tweens.add({
                 targets: g,
@@ -427,15 +444,8 @@ export class GroupOfficeScene extends Phaser.Scene {
     }
 
     private detectZone(x: number, y: number): string {
-        // V4: must match drawZones layout for 960×540
-        const zones = [
-            { key: 'requirement', x: TILE * 2,  y: TILE * 3,  w: TILE * 18, h: TILE * 15 },
-            { key: 'planning',    x: TILE * 21, y: TILE * 3,  w: TILE * 16, h: TILE * 15 },
-            { key: 'coding',      x: TILE * 38, y: TILE * 3,  w: TILE * 18, h: TILE * 15 },
-            { key: 'review',      x: TILE * 2,  y: TILE * 20, w: TILE * 27, h: TILE * 13 },
-            { key: 'delivery',    x: TILE * 31, y: TILE * 20, w: TILE * 25, h: TILE * 13 },
-        ]
-        for (const z of zones) {
+        // P8-10: Use ZONE_RECTS from map-config for unified coordinates
+        for (const z of ZONE_RECTS) {
             if (x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h) {
                 return z.key
             }
@@ -774,20 +784,5 @@ export class GroupOfficeScene extends Phaser.Scene {
         }
     }
 
-    // ─── Cleanup ─────────────────────────────────────────────
-
-    shutdown() {
-        window.removeEventListener('workspace:agents:update', this.onAgentsUpdate as EventListener)
-        window.removeEventListener('workspace:drag:enable', this.onDragEnable as EventListener)
-        window.removeEventListener('workspace:phase:update', this.onPhaseUpdate as EventListener)
-        this.zoneGraphics.clear()
-        for (const timer of this.pulseTimers.values()) timer.destroy()
-        for (const tween of this.idleTweens.values()) tween.destroy()
-        this.pulseTimers.clear()
-        this.idleTweens.clear()
-        this.agentSprites.clear()
-        this.agentBubbles.clear()
-        this.agentIcons.clear()
-        this.agentStates.clear()
-    }
+    // Cleanup is handled by Phaser.Scenes.Events.SHUTDOWN listener in create()
 }

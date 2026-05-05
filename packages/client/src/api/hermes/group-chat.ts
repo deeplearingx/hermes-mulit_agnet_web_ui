@@ -21,6 +21,7 @@ export interface RoomAgent {
     name: string
     description: string
     invited: number
+    roleType?: string
 }
 
 export interface ChatMessage {
@@ -148,6 +149,7 @@ export async function addAgent(roomId: string, data: {
     name?: string
     description?: string
     invited?: boolean
+    roleType?: string
 }): Promise<{ agent: RoomAgent }> {
     return request(`/api/hermes/group-chat/rooms/${roomId}/agents`, {
         method: 'POST',

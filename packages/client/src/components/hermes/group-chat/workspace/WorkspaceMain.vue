@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import type { RoomAgent, ChatMessage, MemberInfo, GroupTask, GroupArtifact } from '@/api/hermes/group-chat'
 import type { GroupRuntimeEvent } from '@/stores/hermes/group-chat'
+import { useGroupChatStore } from '@/stores/hermes/group-chat'
 import PhaserWorkspace from './PhaserWorkspace.vue'
 import LiveEventStream from './LiveEventStream.vue'
 import OrchestrationPanel from './OrchestrationPanel.vue'
@@ -19,12 +20,12 @@ const props = defineProps<{
     liveEvents?: GroupRuntimeEvent[]
 }>()
 
-// P7-10: derive active task for phase/title display
-const activeTask = computed(() => {
-    return props.tasks.find(t => t.status === 'running')
-        ?? props.tasks.find(t => t.status === 'reviewing')
-        ?? props.tasks[0] ?? null
-})
+const store = useGroupChatStore()
+
+// P8-11: Use store's unified computed — single source of truth
+const activeTask = computed(() => store.activeTask)
+const displayTask = computed(() => store.displayTask)
+const agentWorkspaceStates = computed(() => store.agentWorkspaceStates)
 </script>
 
 <template>
@@ -33,9 +34,7 @@ const activeTask = computed(() => {
         <div class="workspace-center">
             <div class="workspace-canvas">
                 <PhaserWorkspace
-                    :agents="agents"
-                    :context-statuses="contextStatuses"
-                    :tasks="tasks"
+                    :agent-workspace-states="agentWorkspaceStates"
                     :active-phase="activeTask?.phase"
                     :active-task-title="activeTask?.title"
                 />
@@ -60,6 +59,8 @@ const activeTask = computed(() => {
                 :tasks="tasks"
                 :artifacts="artifacts"
                 :live-events="liveEvents"
+                :agent-workspace-states="agentWorkspaceStates"
+                :display-task="displayTask"
             />
         </div>
     </div>

@@ -144,7 +144,7 @@ groupChatRoutes.post('/api/hermes/group-chat/rooms/:roomId/agents', async (ctx) 
         return
     }
 
-    const { profile, name, description, invited } = ctx.request.body as { profile?: string; name?: string; description?: string; invited?: boolean }
+    const { profile, name, description, invited, roleType } = ctx.request.body as { profile?: string; name?: string; description?: string; invited?: boolean; roleType?: string }
     if (!profile) {
         ctx.status = 400
         ctx.body = { error: 'profile is required' }
@@ -160,7 +160,7 @@ groupChatRoutes.post('/api/hermes/group-chat/rooms/:roomId/agents', async (ctx) 
     }
 
     const agentId = generateId()
-    const agent = chatServer.getStorage().addRoomAgent(ctx.params.roomId, agentId, profile, name || profile, description || '', invited ? 1 : 0)
+    const agent = chatServer.getStorage().addRoomAgent(ctx.params.roomId, agentId, profile, name || profile, description || '', invited ? 1 : 0, roleType || 'observer')
 
     // Auto-connect agent via Socket.IO
     try {

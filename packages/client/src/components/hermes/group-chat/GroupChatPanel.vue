@@ -27,10 +27,20 @@ const isCompressing = ref(false)
 const selectedProfile = ref<string | null>(null)
 const agentName = ref('')
 const agentDescription = ref('')
+const agentRoleType = ref<string>('observer')
 
 const profileOptions = computed(() =>
     profilesStore.profiles.map(p => ({ label: p.name, value: p.name }))
 )
+
+const roleTypeOptions = [
+    { label: '👁️ 观察员', value: 'observer' },
+    { label: '📐 架构师', value: 'planner' },
+    { label: '💻 开发工程师', value: 'developer' },
+    { label: '🧪 测试工程师', value: 'tester' },
+    { label: '🔍 评审员', value: 'reviewer' },
+    { label: '📦 交付员', value: 'delivery' },
+]
 
 const avatarCache = new Map<string, string>()
 
@@ -102,11 +112,13 @@ async function confirmAddAgent() {
             profile: selectedProfile.value,
             name: agentName.value.trim() || undefined,
             description: agentDescription.value.trim() || undefined,
+            roleType: agentRoleType.value,
         })
         showAddAgentModal.value = false
         selectedProfile.value = null
         agentName.value = ''
         agentDescription.value = ''
+        agentRoleType.value = 'observer'
         message.success(t('groupChat.agentAdded'))
     } catch (err: any) {
         if (err.message?.includes('already')) {
@@ -398,6 +410,13 @@ watch(() => store.sortedMessages.length, async () => {
                             type="textarea"
                             :rows="2"
                             :placeholder="t('groupChat.agentDescPlaceholder')"
+                        />
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">角色类型</label>
+                        <NSelect
+                            v-model:value="agentRoleType"
+                            :options="roleTypeOptions"
                         />
                     </div>
                     <div class="modal-actions">

@@ -126,6 +126,7 @@ export const GC_ROOM_AGENTS_SCHEMA: Record<string, string> = {
   name: 'TEXT NOT NULL',
   description: "TEXT NOT NULL DEFAULT ''",
   invited: 'INTEGER NOT NULL DEFAULT 0',
+  role_type: "TEXT NOT NULL DEFAULT 'observer'",
 }
 
 export const GC_AGENT_OVERRIDES_TABLE = 'gc_agent_overrides'

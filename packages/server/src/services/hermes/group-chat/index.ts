@@ -27,6 +27,7 @@ interface RoomAgent {
     name: string
     description: string
     invited: number
+    roleType: string
 }
 
 export interface AgentOverride {
@@ -163,6 +164,14 @@ class ChatStorage {
         try { db.exec('CREATE INDEX IF NOT EXISTS idx_gc_pending_session_deletes_profile ON gc_pending_session_deletes(profile_name, status, next_attempt_at, created_at)') } catch { /* ignore */ }
         try { db.exec('CREATE INDEX IF NOT EXISTS idx_gc_session_profiles_profile ON gc_session_profiles(profile_name, created_at)') } catch { /* ignore */ }
         _tablesEnsured = true
+        // P8-4: Add role_type column to gc_room_agents (safe to run repeatedly)
+        try {
+            db.exec(`ALTER TABLE gc_room_agents ADD COLUMN role_type TEXT DEFAULT 'observer'`)
+        } catch (err: any) {
+            if (!String(err).includes('duplicate column name')) {
+                logger.warn(`[GroupChat] role_type migration failed: ${err.message}`)
+            }
+        }
         // BUG-009b migration: fix gc_agent_overrides rows where agentId was stored as
         // gc_room_agents.id (table PK) instead of gc_room_agents.agentId (business ID).
         // Safe to run repeatedly — only updates rows where a mismatch is detected.
@@ -354,16 +363,16 @@ class ChatStorage {
 
     getRoomAgents(roomId: string): RoomAgent[] {
         return (this.db()?.prepare(
-            'SELECT id, roomId, agentId, profile, name, description, invited FROM gc_room_agents WHERE roomId = ?'
+            'SELECT id, roomId, agentId, profile, name, description, invited, role_type AS roleType FROM gc_room_agents WHERE roomId = ?'
         ).all(roomId) || []) as unknown as RoomAgent[]
     }
 
-    addRoomAgent(roomId: string, agentId: string, profile: string, name: string, description: string, invited: number): RoomAgent {
+    addRoomAgent(roomId: string, agentId: string, profile: string, name: string, description: string, invited: number, roleType: string = 'observer'): RoomAgent {
         const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
         this.db()?.prepare(
-            'INSERT INTO gc_room_agents (id, roomId, agentId, profile, name, description, invited) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        ).run(id, roomId, agentId, profile, name, description, invited)
-        return { id, roomId, agentId, profile, name, description, invited }
+            'INSERT INTO gc_room_agents (id, roomId, agentId, profile, name, description, invited, role_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(id, roomId, agentId, profile, name, description, invited, roleType)
+        return { id, roomId, agentId, profile, name, description, invited, roleType }
     }
 
     removeRoomAgent(agentId: string): void {
