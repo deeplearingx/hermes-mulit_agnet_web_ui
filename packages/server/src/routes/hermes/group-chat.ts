@@ -28,7 +28,7 @@ groupChatRoutes.post('/api/hermes/group-chat/rooms', async (ctx) => {
     const { name, inviteCode, agents, compression } = ctx.request.body as {
         name?: string
         inviteCode?: string
-        agents?: { profile: string; name?: string; description?: string; invited?: boolean }[]
+        agents?: { profile: string; name?: string; description?: string; invited?: boolean; roleType?: string }[]
         compression?: { triggerTokens?: number; maxHistoryTokens?: number; tailMessageCount?: number }
     }
     if (!name || !inviteCode) {
@@ -45,7 +45,7 @@ groupChatRoutes.post('/api/hermes/group-chat/rooms', async (ctx) => {
     const addedAgents = []
     for (const a of agents || []) {
         const agentId = generateId()
-        const agent = storage.addRoomAgent(roomId, agentId, a.profile, a.name || a.profile, a.description || '', a.invited ? 1 : 0)
+        const agent = storage.addRoomAgent(roomId, agentId, a.profile, a.name || a.profile, a.description || '', a.invited ? 1 : 0, a.roleType || 'observer')
         addedAgents.push(agent)
 
         try {

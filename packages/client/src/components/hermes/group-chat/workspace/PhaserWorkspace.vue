@@ -117,10 +117,18 @@ function onPinToggle(e: Event) {
 
 function onLayoutChanged(e: Event) {
     const { agentId, x, y, zone } = (e as CustomEvent).detail
-    pendingLayoutChanges.value.set(agentId, { agentId, x, y, zone })
+
+    // P10-1: 优先从 pending 取 pinned（连续拖拽场景），再从 store 取
+    const pending = pendingLayoutChanges.value.get(agentId)
+    const old = store.workspaceLayout.find(l => l.agentId === agentId)
+
+    pendingLayoutChanges.value.set(agentId, {
+        agentId, x, y, zone,
+        pinned: pending?.pinned ?? old?.pinned ?? false,
+    })
+
     store.setDragging(true)
 
-    // Debounce: save layout after 1 second of no changes
     if (layoutDebounceTimer) clearTimeout(layoutDebounceTimer)
     layoutDebounceTimer = setTimeout(async () => {
         const existing = [...store.workspaceLayout]
@@ -133,9 +141,12 @@ function onLayoutChanged(e: Event) {
             }
         }
         pendingLayoutChanges.value.clear()
-        await store.saveWorkspaceLayout(existing)
-        store.setDragging(false)
-    }, 1000)
+        try {
+            await store.saveWorkspaceLayout(existing)
+        } finally {
+            store.setDragging(false)  // P10-1: 确保无论成功失败都解锁
+        }
+    }, 800)  // P10-1: 1000ms → 800ms 更跟手
 }
 
 // P8-3: Watch pre-computed states from store → push to Phaser scene

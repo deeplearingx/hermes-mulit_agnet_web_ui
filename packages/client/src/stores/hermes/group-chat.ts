@@ -361,7 +361,7 @@ export const useGroupChatStore = defineStore('groupChat', () => {
         }
     }
 
-    async function createNewRoom(name: string, inviteCode: string, agentList?: { profile: string; name?: string; description?: string; invited?: boolean }[], compression?: { triggerTokens: number; maxHistoryTokens: number; tailMessageCount: number }) {
+    async function createNewRoom(name: string, inviteCode: string, agentList?: { profile: string; name?: string; description?: string; invited?: boolean; roleType?: string }[], compression?: { triggerTokens: number; maxHistoryTokens: number; tailMessageCount: number }) {
         try {
             const res = await createRoom({
                 name,

@@ -603,6 +603,19 @@ class ChatStorage {
     deleteArtifact(artifactId: string): void {
         this.db()?.prepare('DELETE FROM gc_artifacts WHERE id = ?').run(artifactId)
     }
+
+    /**
+     * P10-6: Find an artifact by its unique path within a task.
+     * Used for idempotency check before creating new artifacts.
+     */
+    findArtifactByPath(roomId: string, taskId: string | null, agentId: string | null, path: string): any | null {
+        // P10-6 fix: Use IS instead of = for nullable columns.
+        // In SQLite, NULL = NULL returns NULL (falsy), not TRUE.
+        // IS correctly handles NULL: NULL IS NULL → TRUE.
+        return (this.db()?.prepare(
+            'SELECT * FROM gc_artifacts WHERE roomId = ? AND taskId IS ? AND agentId IS ? AND path = ?'
+        ).get(roomId, taskId, agentId, path) || null) as any
+    }
 }
 
 export async function drainPendingSessionDeletes(profileName: string): Promise<PendingSessionDeleteDrainResult> {

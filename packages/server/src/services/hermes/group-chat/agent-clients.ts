@@ -804,10 +804,10 @@ export class AgentClients {
         })
     }
 
-    // ─── P9-5: Task Linkage (backend-driven) ──────────────────
+    // ─── P10-4: Task Linkage (backend-driven, delegated to task-runtime) ──
 
     /**
-     * P9-5: Backend-driven task linkage.
+     * P10-4: Backend-driven task linkage — delegated to task-runtime service.
      * When an agent emits a runtime event, check if it should trigger
      * task status progression or artifact creation.
      */
@@ -815,52 +815,18 @@ export class AgentClients {
         if (!this._storage) return
 
         try {
-            const tasks = this._storage.getTasks(event.roomId)
-            // 找到 agent 负责的活跃任务
-            const agentTask = tasks.find((t: any) =>
-                t.assigneeAgentId === event.agentId &&
-                ['draft', 'planning', 'running', 'reviewing'].includes(t.status),
-            )
+            const { handleAgentRuntimeEvent } = await import('./task-runtime')
+            const result = handleAgentRuntimeEvent(this._storage, event)
 
-            if (event.type === 'run_started' && agentTask) {
-                // run_started → 如果任务是 draft/planning，推进到 running
-                if (agentTask.status === 'draft' || agentTask.status === 'planning') {
-                    this._storage.updateTask(agentTask.id, { status: 'running', phase: 'coding' })
-                    logger.info(`[AgentClients] P9-5: task ${agentTask.id} auto-progressed to running (agent ${event.agentName})`)
-                    this._broadcastWorkspaceUpdate(event.roomId)
-                }
-            }
-
-            if (event.type === 'run_completed' && agentTask) {
-                // run_completed → 如果任务是 running，推进到 reviewing
-                if (agentTask.status === 'running') {
-                    this._storage.updateTask(agentTask.id, { status: 'reviewing', phase: 'review' })
-                    logger.info(`[AgentClients] P9-5: task ${agentTask.id} auto-progressed to reviewing (agent ${event.agentName})`)
-                    this._broadcastWorkspaceUpdate(event.roomId)
-                }
-            }
-
-            if (event.type === 'tool_call' && agentTask && event.payload) {
-                // tool_call completed → 如果有文件产出，自动创建 artifact
-                const result = event.payload.result
-                if (result && typeof result === 'object' && result.path) {
-                    this._storage.createArtifact(
-                        event.roomId,
-                        result.name || result.path.split('/').pop() || 'output',
-                        result.type || 'file',
-                        {
-                            taskId: agentTask.id,
-                            agentId: event.agentId,
-                            path: result.path,
-                            contentPreview: result.preview?.slice(0, 200),
-                        },
-                    )
-                    logger.info(`[AgentClients] P9-5: artifact auto-created for task ${agentTask.id} (agent ${event.agentName})`)
-                    this._broadcastWorkspaceUpdate(event.roomId)
-                }
+            if (result.taskUpdated || result.artifactCreated) {
+                logger.info(
+                    `[AgentClients] P10-4: task linkage — event=${event.type} agent=${event.agentName} ` +
+                    `taskUpdated=${result.taskUpdated} artifactCreated=${result.artifactCreated}`,
+                )
+                this._broadcastWorkspaceUpdate(event.roomId)
             }
         } catch (err: any) {
-            logger.warn(`[AgentClients] P9-5: task linkage failed: ${err.message}`)
+            logger.warn(`[AgentClients] P10-4: task linkage failed: ${err.message}`)
         }
     }
 

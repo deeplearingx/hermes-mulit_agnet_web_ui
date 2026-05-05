@@ -2,10 +2,25 @@
 // Derives workspace agent states from existing Pinia store data.
 // P7-2: Added role inference. P7-3: Task-driven seat assignment.
 // P8-1: Added getActiveTask / getDisplayTask.
+// P10-3: Per-agent task binding with source tracking (no global fallback).
+// P10-7: Seat overflow clamped to zone bounds.
+// P10-9: Decomposed into 4-layer helper functions.
 
 import type { RoomAgent, WorkspaceLayoutItem, GroupTask, GroupArtifact } from '@/api/hermes/group-chat'
 import type { AgentWorkspaceState, AgentWorkStatus, AgentRoleType } from './types'
 import { DEFAULT_SEATS, ROLE_DEFAULT_ZONE } from './types'
+import { ZONE_RECTS } from './map-config'
+
+// ─── P10-8: Timestamp Normalization ─────────────────────────
+
+/** P10-8: Normalize timestamp from various formats to epoch ms */
+function normalizeTimestamp(value: unknown): number {
+    if (typeof value === 'number') return value
+    if (typeof value === 'string') return new Date(value).getTime()
+    return 0
+}
+
+// ─── Global Task Helpers (exported, used by other modules) ──
 
 /**
  * Canvas-driven: only return truly active tasks (planning/running/reviewing).
@@ -24,6 +39,8 @@ export function getDisplayTask(tasks: GroupTask[]): GroupTask | null {
         ?? tasks.find(t => t.status !== 'done')
         ?? tasks[0] ?? null
 }
+
+// ─── Event / Role Utilities ─────────────────────────────────
 
 /** Map runtime event type to visual agent status */
 export function runtimeEventToStatus(eventType: string): AgentWorkStatus | null {
@@ -61,9 +78,146 @@ function inferRoleByText(name: string, profile: string, description?: string): A
     return 'observer'
 }
 
+// ─── P10-3: Per-Agent Task Binding ───────────────────────────
+
+export interface AgentTaskBinding {
+    task: GroupTask
+    source: 'event' | 'assignee'
+    isOwner: boolean
+}
+
+/**
+ * P10-3: Per-agent task binding with explicit source tracking.
+ * Priority:
+ *   1. Agent's most recent liveEvent that has a taskId → source: 'event'
+ *   2. assigneeAgentId === agentId 的 running/reviewing/planning/draft → source: 'assignee'
+ *   3. No fallback — agents without explicit task association return null
+ */
+export function deriveAgentTaskBinding(
+    agent: RoomAgent,
+    tasks: GroupTask[],
+    agentEvents: Array<{ agentId: string; type: string; payload: Record<string, any>; timestamp: number }> = [],
+): AgentTaskBinding | null {
+    // 1. 从 agentEvents 找最近事件关联的 taskId
+    const sortedEvents = agentEvents
+        .filter(e => e.agentId === agent.agentId)
+        .sort((a, b) => b.timestamp - a.timestamp)
+
+    for (const evt of sortedEvents) {
+        const taskId = evt.payload?.taskId
+        if (!taskId) continue
+        const task = tasks.find(t =>
+            t.id === taskId && !['done', 'failed'].includes(t.status),
+        )
+        if (task) {
+            return {
+                task,
+                source: 'event',
+                isOwner: task.assigneeAgentId === agent.agentId,
+            }
+        }
+    }
+
+    // 2. assigneeAgentId 匹配的活跃任务
+    const assigned = tasks.find(t =>
+        t.assigneeAgentId === agent.agentId &&
+        ['running', 'reviewing', 'planning', 'draft'].includes(t.status),
+    )
+    if (assigned) {
+        return { task: assigned, source: 'assignee', isOwner: true }
+    }
+
+    // 3. 无 fallback — 没有任务的 Agent 不绑定
+    return null
+}
+
+// ─── P10-9: Position Derivation ──────────────────────────────
+
+interface AgentPositionInput {
+    agent: RoomAgent
+    roleType: AgentRoleType
+    binding: AgentTaskBinding | null
+    layout: WorkspaceLayoutItem | undefined
+    index: number
+    occupiedCoords: Set<string>
+}
+
+function deriveAgentPosition(input: AgentPositionInput): {
+    zone: string; x?: number; y?: number; pinned: boolean
+} {
+    const { roleType, binding, layout, index, occupiedCoords } = input
+
+    // P9-3 优先级：pinned → task owner → layout → role default
+    if (layout?.pinned) {
+        const { x, y, zone } = layout
+        if (x != null && y != null) occupiedCoords.add(`${x},${y}`)
+        return { zone, x, y, pinned: true }
+    }
+
+    if (binding?.isOwner && binding.task) {
+        const zone = binding.task.phase
+        const seat = findZoneSeat(zone, occupiedCoords, index)
+        return { zone, x: seat.x, y: seat.y, pinned: false }
+    }
+
+    if (layout) {
+        const { x, y, zone } = layout
+        if (x != null && y != null) occupiedCoords.add(`${x},${y}`)
+        return { zone, x, y, pinned: false }
+    }
+
+    const zone = ROLE_DEFAULT_ZONE[roleType]
+    const seat = findZoneSeat(zone, occupiedCoords, index)
+    return { zone, x: seat.x, y: seat.y, pinned: false }
+}
+
+// ─── P10-9: Activity Derivation ──────────────────────────────
+
+function deriveAgentActivity(
+    _agentId: string,
+    status: AgentWorkStatus,
+    agentEvents: Array<{ agentId: string; type: string; payload: Record<string, any>; timestamp: number }>,
+    agentArtifacts: GroupArtifact[],
+): {
+    lastEventType?: string
+    lastEventPayload?: string
+    activeToolName?: string
+    lastArtifactName?: string
+    lastEventAt: number
+} {
+    const lastEvent = agentEvents[0]
+    return {
+        lastEventType: lastEvent?.type,
+        lastEventPayload: lastEvent?.payload?.toolName || lastEvent?.payload?.model || undefined,
+        activeToolName: status === 'calling_tool'
+            ? agentEvents.find(e => e.type === 'tool_call')?.payload?.toolName
+            : undefined,
+        lastArtifactName: agentArtifacts[0]?.name,
+        lastEventAt: normalizeTimestamp(lastEvent?.timestamp),
+    }
+}
+
+// ─── P10-9: Runtime Status Derivation ────────────────────────
+
+function deriveAgentRuntimeStatus(
+    agent: RoomAgent,
+    contextStatuses: Map<string, { agentId: string; agentName: string; status: string }>,
+): AgentWorkStatus {
+    const statusEntry = contextStatuses.get(agent.agentId) ?? contextStatuses.get(agent.name)
+    if (statusEntry?.status === 'compressing') return 'compressing'
+    if (statusEntry?.status === 'replying') return 'replying'
+    if (statusEntry?.status === 'calling_tool') return 'calling_tool'
+    if (statusEntry?.status === 'completed') return 'completed'
+    if (statusEntry?.status === 'failed') return 'failed'
+    return 'idle'
+}
+
+// ─── Seat Assignment ─────────────────────────────────────────
+
 /**
  * Find an available seat in the given zone, using index as tiebreaker (P7-3).
  * Returns the first seat in the zone whose position hasn't been taken yet.
+ * P10-7: Overflow is clamped within zone bounds.
  */
 export function findZoneSeat(
     zone: string,
@@ -78,16 +232,27 @@ export function findZoneSeat(
             return { x: seat.x, y: seat.y }
         }
     }
-    // All seats occupied — use fallback modulo
-    const fallback = zoneSeats[fallbackIndex % zoneSeats.length] ?? DEFAULT_SEATS[0]
-    return { x: fallback.x, y: fallback.y }
+    // P10-7: 动态溢出，限制在 zone 边界内
+    const rect = ZONE_RECTS.find(z => z.key === zone)
+    const base = zoneSeats[fallbackIndex % zoneSeats.length] ?? DEFAULT_SEATS[0]
+
+    if (!rect) return { x: base.x, y: base.y }
+
+    const row = Math.floor(fallbackIndex / zoneSeats.length)
+    const x = Math.min(base.x + row * 18, rect.x + rect.w - 24)
+    const y = Math.min(base.y + row * 14, rect.y + rect.h - 24)
+
+    const key = `${x},${y}`
+    occupiedCoords.add(key)
+    return { x, y }
 }
+
+// ─── Main Entry Point ────────────────────────────────────────
 
 /**
  * Derive workspace states from store.agents + store.contextStatuses + workspaceLayout + tasks.
- * Maps each agent to a seat and derives work status from context_status events.
- * When workspaceLayout is provided, uses saved x/y coordinates instead of defaults.
- * P7-3: When tasks are provided, assigns agents to zones based on role and task ownership.
+ * P10-3: Per-agent task binding (no global activeTask fallback).
+ * P10-9: Decomposed into 4-layer helper functions.
  */
 export function deriveAgentStates(
     agents: RoomAgent[],
@@ -97,102 +262,44 @@ export function deriveAgentStates(
     liveEvents?: Array<{ agentId: string; type: string; payload: Record<string, any>; timestamp: number }>,
     artifacts?: GroupArtifact[],
 ): AgentWorkspaceState[] {
-    // P8-1: Use getActiveTask for canvas-driven logic (no tasks[0] fallback)
-    const activeTask = tasks ? getActiveTask(tasks) : null
-
-    // Track occupied coordinates to avoid stacking
     const occupiedCoords = new Set<string>()
 
     return agents.map((agent, index) => {
-        // P0-2: use agentId as primary lookup key, fallback to agent.name
-        const statusEntry = contextStatuses.get(agent.agentId) ?? contextStatuses.get(agent.name)
-        let status: AgentWorkStatus = 'idle'
-        if (statusEntry?.status === 'compressing') status = 'compressing'
-        else if (statusEntry?.status === 'replying') status = 'replying'
-        else if (statusEntry?.status === 'calling_tool') status = 'calling_tool'
-        else if (statusEntry?.status === 'completed') status = 'completed'
-        else if (statusEntry?.status === 'failed') status = 'failed'
-
-        // P7-2: infer role
         const roleType = inferAgentRole(agent)
-        const isTaskOwner = activeTask?.assigneeAgentId === agent.agentId
+        const status = deriveAgentRuntimeStatus(agent, contextStatuses)
 
-        // P9-3: zone/seat assignment with priority:
-        //   1. Pinned layout (user fixed, not overridden by task flow)
-        //   2. Task owner → move to task's phase zone
-        //   3. Normal layout (non-pinned, can be overridden by task flow)
-        //   4. Role default zone
-        const layout = workspaceLayout?.find(l => l.agentId === agent.agentId)
-        let zone: string
-        let x: number | undefined
-        let y: number | undefined
-        let pinned = false
-
-        if (layout?.pinned) {
-            // 固定位置，不被任务流转覆盖
-            zone = layout.zone
-            x = layout.x
-            y = layout.y
-            pinned = true
-            if (x != null && y != null) occupiedCoords.add(`${x},${y}`)
-        } else if (isTaskOwner && activeTask) {
-            // 任务负责人 → 移动到任务阶段区域
-            zone = activeTask.phase
-            const seat = findZoneSeat(zone, occupiedCoords, index)
-            x = seat.x
-            y = seat.y
-        } else if (layout) {
-            // 非固定布局，可被任务覆盖
-            zone = layout.zone
-            x = layout.x
-            y = layout.y
-            if (x != null && y != null) occupiedCoords.add(`${x},${y}`)
-        } else {
-            // 角色默认区域
-            zone = ROLE_DEFAULT_ZONE[roleType]
-            const seat = findZoneSeat(zone, occupiedCoords, index)
-            x = seat.x
-            y = seat.y
-        }
-
-        // P9-6: 最近事件
+        // P10-3: Per-agent task binding (no global activeTask fallback)
         const agentEvents = liveEvents?.filter(e => e.agentId === agent.agentId) ?? []
-        const lastEvent = agentEvents[0]
-        const lastEventType = lastEvent?.type
-        const lastEventPayload = lastEvent?.payload?.toolName || lastEvent?.payload?.model || undefined
+        const binding = deriveAgentTaskBinding(agent, tasks ?? [], agentEvents)
 
-        // P9-6: 正在调用的工具
-        const activeToolName = status === 'calling_tool'
-            ? agentEvents.find(e => e.type === 'tool_call')?.payload?.toolName
-            : undefined
+        // P10-9: Position derivation
+        const layout = workspaceLayout?.find(l => l.agentId === agent.agentId)
+        const position = deriveAgentPosition({
+            agent, roleType, binding, layout, index, occupiedCoords,
+        })
 
-        // P9-6: 最近产出物
+        // P10-9: Activity derivation
         const agentArtifacts = artifacts?.filter(a => a.agentId === agent.agentId) ?? []
-        const lastArtifactName = agentArtifacts[0]?.name
+        const activity = deriveAgentActivity(agent.agentId, status, agentEvents, agentArtifacts)
 
         return {
             agentId: agent.agentId,
             agentName: agent.name,
             profile: agent.profile,
-            status,
             seatIndex: index,
-            zone,
+            ...position,
+            ...activity,
             roleType,
-            currentTaskId: isTaskOwner ? activeTask?.id : undefined,
-            currentTaskTitle: isTaskOwner ? activeTask?.title : undefined,
-            phase: isTaskOwner ? activeTask?.phase : undefined,
-            isTaskOwner,
-            x,
-            y,
-            pinned,
-            lastEventType,
-            lastEventPayload,
-            lastArtifactName,
-            activeToolName,
-            lastEventAt: Date.now(),
+            status,
+            currentTaskId: binding?.task.id,
+            currentTaskTitle: binding?.task.title,
+            phase: binding?.task.phase,
+            isTaskOwner: binding?.isOwner ?? false,
         }
     })
 }
+
+// ─── Color Utility ───────────────────────────────────────────
 
 /**
  * Generate a deterministic color for an agent based on their name.
