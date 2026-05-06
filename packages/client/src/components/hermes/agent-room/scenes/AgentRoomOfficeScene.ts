@@ -79,11 +79,11 @@ interface ZoneDef {
 }
 
 const ZONES: ZoneDef[] = [
-    { id: 'conversation', x: 30,  y: 60,  w: 260, h: 200, agentX: 160, agentY: 170, deskX: 120, deskY: 200 },
-    { id: 'planner',      x: 670, y: 60,  w: 260, h: 200, agentX: 800, agentY: 170, deskX: 760, deskY: 200 },
-    { id: 'developer',    x: 350, y: 180, w: 260, h: 200, agentX: 480, agentY: 290, deskX: 440, deskY: 320 },
-    { id: 'reviewer',     x: 30,  y: 320, w: 260, h: 180, agentX: 160, agentY: 420, deskX: 120, deskY: 450 },
-    { id: 'delivery',     x: 670, y: 320, w: 260, h: 180, agentX: 800, agentY: 420, deskX: 760, deskY: 450 },
+    { id: 'conversation', x: 24,  y: 56,  w: 270, h: 210, agentX: 159, agentY: 165, deskX: 119, deskY: 195 },
+    { id: 'planner',      x: 666, y: 56,  w: 270, h: 210, agentX: 801, agentY: 165, deskX: 761, deskY: 195 },
+    { id: 'developer',    x: 345, y: 175, w: 270, h: 210, agentX: 480, agentY: 285, deskX: 440, deskY: 315 },
+    { id: 'reviewer',     x: 24,  y: 310, w: 270, h: 195, agentX: 159, agentY: 415, deskX: 119, deskY: 445 },
+    { id: 'delivery',     x: 666, y: 310, w: 270, h: 195, agentX: 801, agentY: 415, deskX: 761, deskY: 445 },
 ]
 
 // ─── State interface ─────────────────────────────────────────
@@ -212,16 +212,17 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
 
             // Zone label background
             const labelBg = this.add.graphics()
-            labelBg.fillStyle(C.labelBg, 0.6)
-            labelBg.fillRoundedRect(zone.x + 4, zone.y + 4, 80, 18, 3)
+            labelBg.fillStyle(C.labelBg, 0.7)
+            labelBg.fillRoundedRect(zone.x + 6, zone.y + 6, 90, 22, 4)
 
             // Zone label text
             const label = AGENT_LABELS[zone.id] ?? zone.id
             const color = AGENT_COLORS[zone.id] ?? 0x94a3b8
-            this.add.text(zone.x + 8, zone.y + 6, label, {
-                fontSize: '10px',
+            this.add.text(zone.x + 12, zone.y + 9, label, {
+                fontSize: '12px',
                 fontFamily: 'monospace',
                 color: `#${color.toString(16).padStart(6, '0')}`,
+                fontStyle: 'bold',
             })
         }
     }
@@ -285,7 +286,7 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
                 const zoneIdx = ZONES.indexOf(zone)
                 const spriteKey = charKeys[zoneIdx % charKeys.length]
                 const sprite = this.add.sprite(0, -8, spriteKey, 0)
-                sprite.setScale(2)
+                sprite.setScale(2.5)
                 sprite.setTint(color)
                 container.add(sprite)
             } else {
@@ -333,25 +334,25 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
     private createTaskOverlay() {
         // Background panel at top-center
         const bg = this.add.graphics()
-        bg.fillStyle(C.taskBg, 0.85)
-        bg.fillRoundedRect(SCENE_W / 2 - 200, 40, 400, 44, 6)
-        bg.lineStyle(1, C.taskBorder, 0.4)
-        bg.strokeRoundedRect(SCENE_W / 2 - 200, 40, 400, 44, 6)
+        bg.fillStyle(C.taskBg, 0.9)
+        bg.fillRoundedRect(SCENE_W / 2 - 220, 36, 440, 50, 8)
+        bg.lineStyle(2, C.taskBorder, 0.5)
+        bg.strokeRoundedRect(SCENE_W / 2 - 220, 36, 440, 50, 8)
 
         // Status dot
         this.taskStatusDot = this.add.graphics()
         this.drawStatusDot(0x6b7280)
 
         // Task title
-        this.taskTitleText = this.add.text(SCENE_W / 2 - 180, 48, '等待任务...', {
-            fontSize: '12px',
+        this.taskTitleText = this.add.text(SCENE_W / 2 - 200, 44, '等待任务...', {
+            fontSize: '13px',
             fontFamily: 'monospace',
-            color: '#e2e8f0',
+            color: '#f1f5f9',
         })
 
         // Task status
-        this.taskStatusText = this.add.text(SCENE_W / 2 - 180, 64, 'idle', {
-            fontSize: '10px',
+        this.taskStatusText = this.add.text(SCENE_W / 2 - 200, 62, 'idle', {
+            fontSize: '11px',
             fontFamily: 'monospace',
             color: '#94a3b8',
         })
@@ -361,7 +362,7 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
         if (!this.taskStatusDot) return
         this.taskStatusDot.clear()
         this.taskStatusDot.fillStyle(color, 1)
-        this.taskStatusDot.fillCircle(SCENE_W / 2 - 192, 62, 4)
+        this.taskStatusDot.fillCircle(SCENE_W / 2 - 210, 58, 5)
     }
 
     // ─── State Update Handler ────────────────────────────────
@@ -420,16 +421,16 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
                 if (zone) {
                     const color = AGENT_COLORS[agent.id] ?? 0x3b82f6
                     glow.clear()
-                    glow.fillStyle(color, 0.3)
-                    glow.fillCircle(zone.agentX, zone.agentY, 28)
+                    glow.fillStyle(color, 0.35)
+                    glow.fillCircle(zone.agentX, zone.agentY, 32)
                     glow.setAlpha(1)
                 }
 
                 // Pulse tween
                 this.tweens.add({
                     targets: glow,
-                    alpha: { from: 0.8, to: 0.2 },
-                    duration: 800,
+                    alpha: { from: 0.9, to: 0.15 },
+                    duration: 900,
                     yoyo: true,
                     repeat: -1,
                 })
@@ -437,14 +438,14 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
                 // Idle bounce
                 this.tweens.add({
                     targets: sprite,
-                    y: baseY - 3,
-                    duration: 600,
+                    y: baseY - 4,
+                    duration: 650,
                     yoyo: true,
                     repeat: -1,
                     ease: 'Sine.easeInOut',
                 })
 
-                label.setColor('#e2e8f0')
+                label.setColor('#f1f5f9')
                 break
             }
             case 'completed': {

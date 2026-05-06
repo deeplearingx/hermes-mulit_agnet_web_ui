@@ -96,7 +96,7 @@ onMounted(async () => {
         height: 540,
         pixelArt: true,
         backgroundColor: '#0f1729',
-        scene: [new AgentRoomBootScene(), new AgentRoomOfficeScene(instanceId)],
+        scene: [new AgentRoomBootScene(instanceId), new AgentRoomOfficeScene(instanceId)],
         scale: {
             mode: PhaserLib.Scale.FIT,
             autoCenter: PhaserLib.Scale.CENTER_BOTH,

@@ -6,8 +6,11 @@ import Phaser from 'phaser'
 import { loadAgentRoomAssets } from './AgentRoomAssetManifest'
 
 export class AgentRoomBootScene extends Phaser.Scene {
-    constructor() {
+    private instanceId: string
+
+    constructor(instanceId: string) {
         super({ key: 'AgentRoomBootScene' })
+        this.instanceId = instanceId
     }
 
     preload() {
@@ -42,6 +45,8 @@ export class AgentRoomBootScene extends Phaser.Scene {
     }
 
     create() {
+        // Acknowledge instanceId for future use (e.g. scene-level event scoping)
+        void this.instanceId
         // Start the office scene — instanceId is injected via constructor in AgentRoomWorkspace
         this.scene.start('AgentRoomOfficeScene')
     }
