@@ -126,10 +126,14 @@ agentRoomRoutes.patch('/api/agent-room/sessions/:sessionId/tasks/:taskId/status'
         )
         ctx.body = task
     } catch (err: any) {
-        if (err.message === 'Session not found') {
+        if (err.message.startsWith('Session not found')) {
+            ctx.status = 404
+        } else if (err.message.startsWith('Task not found')) {
             ctx.status = 404
         } else if (err.message.includes('belongs to session')) {
             ctx.status = 403
+        } else if (err.message.startsWith('Invalid transition')) {
+            ctx.status = 400
         } else {
             ctx.status = 400
         }

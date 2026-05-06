@@ -511,7 +511,7 @@ describe('Agent Room Service', () => {
   // ─── Workflow dual-path + event order ─────────────────────────
 
   describe('Workflow dual-path + event order', () => {
-    it('created path: events are task_planned, task_assigned, task_started, task_submitted', async () => {
+    it('created path: events are task_created, task_planned, task_assigned, task_started, task_submitted', async () => {
       const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
       const session = svc.createSession('Test')
       const task = svc.createTask(session.id, 'Task', '')
@@ -521,10 +521,10 @@ describe('Agent Room Service', () => {
       const updated = svc.getTask(task.id)
       expect(updated!.status).toBe('submitted_for_review')
 
-      // Workflow events: task_created (from createTask) + 4 workflow steps
+      // Full event sequence: task_created (from createTask) + 4 workflow steps
       const events = svc.listWorkflowEvents(session.id)
-      const workflowEvents = events.filter(e => e.type !== 'task_created')
-      expect(workflowEvents.map(e => e.type)).toEqual([
+      expect(events.map(e => e.type)).toEqual([
+        'task_created',
         'task_planned',
         'task_assigned',
         'task_started',

@@ -229,7 +229,7 @@ export function getTask(id: string): AgentRoomTask | null {
 
 export function listTasksBySession(sessionId: string): AgentRoomTask[] {
     const db = requireDb()
-    const rows = db.prepare(`SELECT * FROM ${AR_TASKS_TABLE} WHERE session_id = ? ORDER BY created_at ASC`).all(sessionId) as Array<Record<string, unknown>>
+    const rows = db.prepare(`SELECT * FROM ${AR_TASKS_TABLE} WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`).all(sessionId) as Array<Record<string, unknown>>
     return rows.map(mapTaskRow)
 }
 
@@ -256,13 +256,13 @@ export function createReview(review: AgentRoomReview): void {
 
 export function listReviewsByTask(taskId: string): AgentRoomReview[] {
     const db = requireDb()
-    const rows = db.prepare(`SELECT * FROM ${AR_REVIEWS_TABLE} WHERE task_id = ? ORDER BY created_at ASC`).all(taskId) as Array<Record<string, unknown>>
+    const rows = db.prepare(`SELECT * FROM ${AR_REVIEWS_TABLE} WHERE task_id = ? ORDER BY created_at ASC, rowid ASC`).all(taskId) as Array<Record<string, unknown>>
     return rows.map(mapReviewRow)
 }
 
 export function listReviewsBySession(sessionId: string): AgentRoomReview[] {
     const db = requireDb()
-    const rows = db.prepare(`SELECT * FROM ${AR_REVIEWS_TABLE} WHERE session_id = ? ORDER BY created_at ASC`).all(sessionId) as Array<Record<string, unknown>>
+    const rows = db.prepare(`SELECT * FROM ${AR_REVIEWS_TABLE} WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`).all(sessionId) as Array<Record<string, unknown>>
     return rows.map(mapReviewRow)
 }
 
@@ -281,7 +281,7 @@ export function createMessage(msg: AgentRoomMessage): void {
 
 export function listMessagesBySession(sessionId: string): AgentRoomMessage[] {
     const db = requireDb()
-    const rows = db.prepare(`SELECT * FROM ${AR_MESSAGES_TABLE} WHERE session_id = ? ORDER BY created_at ASC`).all(sessionId) as Array<Record<string, unknown>>
+    const rows = db.prepare(`SELECT * FROM ${AR_MESSAGES_TABLE} WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`).all(sessionId) as Array<Record<string, unknown>>
     return rows.map(mapMessageRow)
 }
 

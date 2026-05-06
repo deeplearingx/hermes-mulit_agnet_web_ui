@@ -94,10 +94,6 @@ async function handleReviewSubmit(data: { status: 'passed' | 'rejected'; comment
     }
 }
 
-async function handleRetryTask(taskId: string) {
-    await store.retryTask(taskId)
-}
-
 async function handleDeliverTask(taskId: string) {
     await store.deliverTask(taskId)
 }
@@ -179,7 +175,6 @@ function handleSelectTask(taskId: string) {
                     @create-task="showCreateTask = true"
                     @run-workflow="handleRunWorkflow"
                     @open-review="handleOpenReview"
-                    @retry-task="handleRetryTask"
                     @deliver-task="handleDeliverTask"
                     @select-task="handleSelectTask"
                 />

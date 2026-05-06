@@ -14,7 +14,6 @@ const emit = defineEmits<{
     (e: 'create-task'): void
     (e: 'run-workflow', taskId: string): void
     (e: 'open-review', taskId: string): void
-    (e: 'retry-task', taskId: string): void
     (e: 'deliver-task', taskId: string): void
     (e: 'select-task', taskId: string): void
 }>()
@@ -43,7 +42,7 @@ function getStatusConfig(status: AgentRoomTaskStatus) {
 interface TaskAction {
     label: string
     icon: string
-    action: 'run-workflow' | 'open-review' | 'retry' | 'deliver'
+    action: 'run-workflow' | 'open-review' | 'deliver'
     color: string
 }
 
@@ -60,13 +59,13 @@ function getTaskActions(task: AgentRoomTask): TaskAction[] {
             actions.push({ label: '开始交付', icon: '📦', action: 'deliver', color: '#0e639c' })
             break
         case 'revision_required':
-            actions.push({ label: '重新开发', icon: '🔄', action: 'retry', color: '#f57c00' })
+            actions.push({ label: '重新开发', icon: '🔄', action: 'run-workflow', color: '#f57c00' })
             break
         case 'need_user_decision':
-            actions.push({ label: '继续修改', icon: '🔄', action: 'retry', color: '#f57c00' })
+            actions.push({ label: '继续修改', icon: '🔄', action: 'run-workflow', color: '#f57c00' })
             break
         case 'failed':
-            actions.push({ label: '重新开始', icon: '🔄', action: 'retry', color: '#f57c00' })
+            actions.push({ label: '重新开始', icon: '🔄', action: 'run-workflow', color: '#f57c00' })
             break
     }
     return actions
@@ -80,9 +79,6 @@ function handleAction(task: AgentRoomTask, action: TaskAction) {
             break
         case 'open-review':
             emit('open-review', task.id)
-            break
-        case 'retry':
-            emit('retry-task', task.id)
             break
         case 'deliver':
             emit('deliver-task', task.id)
