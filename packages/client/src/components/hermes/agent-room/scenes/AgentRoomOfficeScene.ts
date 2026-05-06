@@ -84,8 +84,15 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
     private taskStatusText: Phaser.GameObjects.Text | null = null
     private taskStatusDot: Phaser.GameObjects.Graphics | null = null
 
+    private instanceId: string | null = null
+
     constructor() {
         super({ key: 'AgentRoomOfficeScene' })
+    }
+
+    /** Called by Vue before scene starts to set the instance scope */
+    setInstanceId(id: string) {
+        this.instanceId = id
     }
 
     create() {
@@ -272,9 +279,13 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
 
     private onStateUpdate = (e: Event) => {
         const detail = (e as CustomEvent).detail as {
+            instanceId?: string
             agents: AgentDisplayState[]
             task: TaskDisplayState | null
         }
+
+        // Only process events from our own instance
+        if (this.instanceId && detail.instanceId && detail.instanceId !== this.instanceId) return
 
         // Update agents
         for (const agent of detail.agents) {

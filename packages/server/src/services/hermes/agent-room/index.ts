@@ -241,6 +241,10 @@ export function createTask(sessionId: string, title: string, description: string
         updatedAt: new Date().toISOString(),
     }
     tasks.set(task.id, task)
+
+    // Emit task_created event + chat message
+    emitEventAndMessage(sessionId, task.id, 'task_created', 'conversation', title)
+
     return task
 }
 

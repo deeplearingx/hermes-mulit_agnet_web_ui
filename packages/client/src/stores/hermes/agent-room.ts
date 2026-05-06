@@ -42,17 +42,25 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     const agents = ref<AgentRoomAgent[]>([...AGENT_ROOM_AGENTS])
     const loading = ref(false)
     const error = ref<string | null>(null)
+    const activeTaskId = ref<string | null>(null)
+    const actionLoadingTaskId = ref<string | null>(null)
 
     // ─── Computed ──────────────────────────────────────────────
     const currentSession = computed(() =>
         sessions.value.find(s => s.id === currentSessionId.value) ?? null,
     )
 
-    const activeTask = computed(() =>
-        tasks.value.find(t =>
+    const activeTask = computed(() => {
+        // Priority 1: explicit activeTaskId
+        if (activeTaskId.value) {
+            const found = tasks.value.find(t => t.id === activeTaskId.value)
+            if (found) return found
+        }
+        // Priority 2: first non-terminal task
+        return tasks.value.find(t =>
             !['completed', 'failed'].includes(t.status),
-        ) ?? null,
-    )
+        ) ?? null
+    })
 
     const agentMap = computed(() => {
         const map = new Map<string, AgentRoomAgent>()
@@ -83,6 +91,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
 
     async function selectSession(sessionId: string) {
         currentSessionId.value = sessionId
+        activeTaskId.value = null
         await Promise.all([
             loadMessages(sessionId),
             loadTasks(sessionId),
@@ -136,6 +145,9 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         try {
             const task = await apiCreateTask(currentSessionId.value, { title, description, assignedAgentId })
             tasks.value.push(task)
+            activeTaskId.value = task.id
+            // Server now emits task_created event + message; refresh to pick them up
+            await refreshCurrentSession()
             return task
         } catch (err: any) {
             error.value = err.message
@@ -158,41 +170,51 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
 
     async function submitTaskReview(taskId: string, reviewerAgentId: string, status: 'passed' | 'rejected', comment?: string) {
         if (!currentSessionId.value) return null
+        actionLoadingTaskId.value = taskId
+        error.value = null
         try {
             const review = await apiSubmitReview(currentSessionId.value, taskId, {
                 reviewerAgentId,
                 status,
                 comment: comment ?? '',
             })
-            // Server transitions task status + emits events + messages.
-            // Refresh everything to stay in sync.
             await refreshCurrentSession()
             return review
         } catch (err: any) {
             error.value = err.message
             throw err
+        } finally {
+            actionLoadingTaskId.value = null
         }
     }
 
     async function retryTask(taskId: string) {
         if (!currentSessionId.value) return null
+        actionLoadingTaskId.value = taskId
+        error.value = null
         try {
             await apiRetryTask(currentSessionId.value, taskId)
             await refreshCurrentSession()
         } catch (err: any) {
             error.value = err.message
             throw err
+        } finally {
+            actionLoadingTaskId.value = null
         }
     }
 
     async function deliverTask(taskId: string) {
         if (!currentSessionId.value) return null
+        actionLoadingTaskId.value = taskId
+        error.value = null
         try {
             await apiDeliverTask(currentSessionId.value, taskId)
             await refreshCurrentSession()
         } catch (err: any) {
             error.value = err.message
             throw err
+        } finally {
+            actionLoadingTaskId.value = null
         }
     }
 
@@ -218,16 +240,28 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     // Calls server-side mock workflow, then reloads all data
     async function runMockWorkflow(taskId: string) {
         if (!currentSessionId.value) return
+        actionLoadingTaskId.value = taskId
+        error.value = null
         try {
             await apiRunWorkflow(currentSessionId.value, taskId)
             await refreshCurrentSession()
         } catch (err: any) {
             error.value = err.message
             throw err
+        } finally {
+            actionLoadingTaskId.value = null
         }
     }
 
     // ─── Reset ─────────────────────────────────────────────────
+    function setActiveTask(taskId: string | null) {
+        activeTaskId.value = taskId
+    }
+
+    function clearError() {
+        error.value = null
+    }
+
     function $reset() {
         sessions.value = []
         currentSessionId.value = null
@@ -237,6 +271,8 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         workflowEvents.value = []
         loading.value = false
         error.value = null
+        activeTaskId.value = null
+        actionLoadingTaskId.value = null
     }
 
     return {
@@ -250,6 +286,8 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         agents,
         loading,
         error,
+        activeTaskId,
+        actionLoadingTaskId,
         // Computed
         currentSession,
         activeTask,
@@ -270,6 +308,8 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         loadReviews,
         loadWorkflowEvents,
         runMockWorkflow,
+        setActiveTask,
+        clearError,
         $reset,
     }
 })

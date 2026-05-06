@@ -7,6 +7,7 @@ const store = useAgentRoomStore()
 const containerRef = ref<HTMLDivElement>()
 let game: Phaser.Game | null = null
 let sceneReady = false
+const instanceId = `ar-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
 // ─── Derive agent display states from store ─────────────────
 interface AgentDisplayState {
@@ -71,6 +72,7 @@ const taskDisplayState = computed(() => {
 function pushStateToScene() {
     window.dispatchEvent(new CustomEvent('agent-room:state:update', {
         detail: {
+            instanceId,
             agents: agentDisplayStates.value,
             task: taskDisplayState.value,
         },

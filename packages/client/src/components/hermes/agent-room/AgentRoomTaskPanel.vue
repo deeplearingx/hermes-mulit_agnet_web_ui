@@ -6,6 +6,8 @@ const props = defineProps<{
     tasks: AgentRoomTask[]
     reviews: AgentRoomReview[]
     workflowEvents: AgentRoomWorkflowEvent[]
+    activeTaskId?: string | null
+    actionLoadingTaskId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -14,6 +16,7 @@ const emit = defineEmits<{
     (e: 'open-review', taskId: string): void
     (e: 'retry-task', taskId: string): void
     (e: 'deliver-task', taskId: string): void
+    (e: 'select-task', taskId: string): void
 }>()
 
 // ─── Status Display ────────────────────────────────────────────
@@ -70,6 +73,7 @@ function getTaskActions(task: AgentRoomTask): TaskAction[] {
 }
 
 function handleAction(task: AgentRoomTask, action: TaskAction) {
+    if (props.actionLoadingTaskId === task.id) return
     switch (action.action) {
         case 'run-workflow':
             emit('run-workflow', task.id)
@@ -84,6 +88,10 @@ function handleAction(task: AgentRoomTask, action: TaskAction) {
             emit('deliver-task', task.id)
             break
     }
+}
+
+function handleSelectTask(taskId: string) {
+    emit('select-task', taskId)
 }
 
 // ─── Recent Events ─────────────────────────────────────────────
@@ -131,7 +139,13 @@ function eventLabel(type: string): string {
                 <span>📭</span>
                 <p>暂无任务</p>
             </div>
-            <div v-for="task in tasks" :key="task.id" class="task-card">
+            <div
+                v-for="task in tasks"
+                :key="task.id"
+                class="task-card"
+                :class="{ selected: task.id === activeTaskId }"
+                @click="handleSelectTask(task.id)"
+            >
                 <div class="task-header">
                     <span class="task-icon">{{ getStatusConfig(task.status).icon }}</span>
                     <span class="task-title">{{ task.title }}</span>
@@ -156,8 +170,10 @@ function eventLabel(type: string): string {
                         :key="action.action"
                         class="task-action-btn"
                         :style="{ borderColor: action.color, color: action.color }"
-                        @click="handleAction(task, action)"
+                        :disabled="actionLoadingTaskId === task.id"
+                        @click.stop="handleAction(task, action)"
                     >
+                        <span v-if="actionLoadingTaskId === task.id" class="loading-spinner">⏳</span>
                         {{ action.icon }} {{ action.label }}
                     </button>
                 </div>
@@ -268,6 +284,17 @@ function eventLabel(type: string): string {
     border-radius: 6px;
     background: var(--vscode-editorWidget-background, #252526);
     border: 1px solid var(--vscode-widget-border, #3c3c3c);
+    cursor: pointer;
+    transition: border-color 0.15s;
+
+    &:hover {
+        border-color: var(--vscode-focusBorder, #007fd4);
+    }
+
+    &.selected {
+        border-color: var(--vscode-button-background, #0e639c);
+        background: rgba(14, 99, 156, 0.08);
+    }
 }
 
 .task-header {
@@ -328,9 +355,23 @@ function eventLabel(type: string): string {
     font-size: 11px;
     transition: background 0.15s;
 
-    &:hover {
+    &:hover:not(:disabled) {
         background: rgba(255, 255, 255, 0.05);
     }
+
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .loading-spinner {
+        animation: spin 1s linear infinite;
+    }
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
 }
 
 .section {

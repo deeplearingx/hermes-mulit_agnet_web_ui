@@ -79,6 +79,10 @@ async function handleRetryTask(taskId: string) {
 async function handleDeliverTask(taskId: string) {
     await store.deliverTask(taskId)
 }
+
+function handleSelectTask(taskId: string) {
+    store.setActiveTask(taskId)
+}
 </script>
 
 <template>
@@ -107,6 +111,12 @@ async function handleDeliverTask(taskId: string) {
                 />
                 <button @click="handleCreateSession">创建</button>
             </div>
+        </div>
+
+        <!-- Error Banner -->
+        <div v-if="store.error" class="error-banner">
+            <span class="error-text">⚠️ {{ store.error }}</span>
+            <button class="error-dismiss" @click="store.clearError()">✕</button>
         </div>
 
         <!-- Main Content -->
@@ -139,11 +149,14 @@ async function handleDeliverTask(taskId: string) {
                     :tasks="store.tasks"
                     :reviews="store.reviews"
                     :workflow-events="store.workflowEvents"
+                    :active-task-id="store.activeTaskId"
+                    :action-loading-task-id="store.actionLoadingTaskId"
                     @create-task="showCreateTask = true"
                     @run-workflow="handleRunWorkflow"
                     @open-review="handleOpenReview"
                     @retry-task="handleRetryTask"
                     @deliver-task="handleDeliverTask"
+                    @select-task="handleSelectTask"
                 />
             </div>
         </div>
@@ -182,6 +195,35 @@ async function handleDeliverTask(taskId: string) {
     flex-direction: column;
     background: var(--vscode-editor-background, #1e1e1e);
     color: var(--vscode-editor-foreground, #cccccc);
+}
+
+.error-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: rgba(239, 68, 68, 0.15);
+    border-bottom: 1px solid rgba(239, 68, 68, 0.3);
+    flex-shrink: 0;
+
+    .error-text {
+        flex: 1;
+        font-size: 12px;
+        color: #fca5a5;
+    }
+
+    .error-dismiss {
+        padding: 2px 6px;
+        border: none;
+        background: transparent;
+        color: #fca5a5;
+        cursor: pointer;
+        font-size: 12px;
+
+        &:hover {
+            background: rgba(239, 68, 68, 0.2);
+        }
+    }
 }
 
 .session-bar {
