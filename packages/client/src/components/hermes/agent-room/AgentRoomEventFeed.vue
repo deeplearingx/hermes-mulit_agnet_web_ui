@@ -123,6 +123,8 @@ function formatTime(ts: number): string {
 .event-feed {
     display: flex;
     flex-direction: column;
+    flex: 1;
+    min-height: 0;
     background: #0c1222;
     border: 1px solid #1e293b;
     border-radius: 6px;
@@ -168,9 +170,9 @@ function formatTime(ts: number): string {
 
 .feed-body {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 4px 0;
-    max-height: 200px;
 }
 
 .feed-event {

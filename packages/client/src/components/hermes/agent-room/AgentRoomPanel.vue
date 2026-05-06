@@ -3,7 +3,6 @@ import { ref } from 'vue'
 import { useAgentRoomStore } from '@/stores/hermes/agent-room'
 import type { AgentRoomTask } from '@/api/hermes/agent-room'
 import AgentRoomWorkspace from './AgentRoomWorkspace.vue'
-import AgentRoomMessageList from './AgentRoomMessageList.vue'
 import AgentRoomTaskPanel from './AgentRoomTaskPanel.vue'
 import AgentRoomEventFeed from './AgentRoomEventFeed.vue'
 import CreateTaskModal from './CreateTaskModal.vue'
@@ -139,11 +138,29 @@ function handleSelectTask(taskId: string) {
 
         <!-- Main Content -->
         <div v-if="store.currentSessionId" class="room-content">
-            <!-- Middle: Workspace + Right Info Panel -->
+            <!-- Workspace Main: Center (canvas + stream) + Right Panel -->
             <div class="workspace-main">
                 <div class="workspace-center">
                     <div class="workspace-canvas">
                         <AgentRoomWorkspace />
+                    </div>
+                    <div class="workspace-stream">
+                        <AgentRoomEventFeed
+                            :messages="store.messages"
+                            :workflow-events="store.workflowEvents"
+                            :reviews="store.reviews"
+                        />
+                        <div class="stream-input">
+                            <textarea
+                                v-model="inputText"
+                                placeholder="输入消息..."
+                                rows="2"
+                                @keydown="handleKeydown"
+                            />
+                            <button class="btn-send" @click="handleSend" :disabled="!inputText.trim()">
+                                发送
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <div class="workspace-panel">
@@ -160,31 +177,6 @@ function handleSelectTask(taskId: string) {
                         @deliver-task="handleDeliverTask"
                         @select-task="handleSelectTask"
                     />
-                </div>
-            </div>
-
-            <!-- Bottom: Event Feed + Message Input -->
-            <div class="bottom-panels">
-                <div class="event-feed-area">
-                    <AgentRoomEventFeed
-                        :messages="store.messages"
-                        :workflow-events="store.workflowEvents"
-                        :reviews="store.reviews"
-                    />
-                </div>
-                <div class="chat-area">
-                    <AgentRoomMessageList :messages="store.messages" />
-                    <div class="chat-input-area">
-                        <textarea
-                            v-model="inputText"
-                            placeholder="输入消息..."
-                            rows="2"
-                            @keydown="handleKeydown"
-                        />
-                        <button class="btn-send" @click="handleSend" :disabled="!inputText.trim()">
-                            发送
-                        </button>
-                    </div>
                 </div>
             </div>
         </div>
@@ -400,43 +392,22 @@ function handleSelectTask(taskId: string) {
     overflow: hidden;
 }
 
-.workspace-panel {
-    width: 280px;
+.workspace-stream {
     flex-shrink: 0;
-    min-height: 0;
-}
-
-// ─── Bottom Panels ─────────────────────────────────────────────
-.bottom-panels {
-    display: flex;
-    gap: 8px;
-    padding: 0 8px 8px;
-    flex-shrink: 0;
-    max-height: 280px;
-}
-
-.event-feed-area {
-    width: 360px;
-    flex-shrink: 0;
-}
-
-.chat-area {
-    flex: 1;
+    max-height: 220px;
     display: flex;
     flex-direction: column;
-    min-width: 0;
-    background: #0c1222;
-    border: 1px solid #1e293b;
-    border-radius: 6px;
-    overflow: hidden;
+    min-height: 0;
+    margin-top: 8px;
 }
 
-.chat-input-area {
+.stream-input {
     display: flex;
     gap: 4px;
     padding: 6px 8px;
     border-top: 1px solid #1e293b;
     background: #111827;
+    border-radius: 0 0 6px 6px;
 
     textarea {
         flex: 1;
@@ -475,6 +446,12 @@ function handleSelectTask(taskId: string) {
         opacity: 0.4;
         cursor: not-allowed;
     }
+}
+
+.workspace-panel {
+    width: 280px;
+    flex-shrink: 0;
+    min-height: 0;
 }
 
 // ─── Empty State ───────────────────────────────────────────────
@@ -534,13 +511,8 @@ function handleSelectTask(taskId: string) {
         max-height: 300px;
     }
 
-    .bottom-panels {
-        flex-direction: column;
-        max-height: none;
-    }
-
-    .event-feed-area {
-        width: 100%;
+    .workspace-stream {
+        max-height: 280px;
     }
 }
 </style>
