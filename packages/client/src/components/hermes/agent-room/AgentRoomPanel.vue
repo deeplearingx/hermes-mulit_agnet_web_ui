@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useAgentRoomStore } from '@/stores/hermes/agent-room'
-import type { AgentRoomAgent, AgentRoomTask, AgentRoomMessage, AgentRoomTaskStatus } from '@/api/hermes/agent-room'
+import type { AgentRoomTask } from '@/api/hermes/agent-room'
 import AgentRoomMessageList from './AgentRoomMessageList.vue'
 import AgentRoomTaskPanel from './AgentRoomTaskPanel.vue'
 import AgentRoomAgentList from './AgentRoomAgentList.vue'

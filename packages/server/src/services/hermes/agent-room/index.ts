@@ -310,8 +310,9 @@ export function submitReview(
         })
 
         // 3. Check revision round limit
-        // revisionRound will be incremented when entering revision_required
-        if (task.revisionRound + 1 > task.maxRevisionRounds) {
+        // maxRevisionRounds = max allowed revision rounds.
+        // If revisionRound + 1 >= maxRevisionRounds, no more revisions allowed.
+        if (task.revisionRound + 1 >= task.maxRevisionRounds) {
             // Exceeded max rounds → need_user_decision
             updateTaskStatus(taskId, 'need_user_decision')
             emitEventAndMessage(sessionId, taskId, 'need_user_decision', 'reviewer', task.title, {
@@ -388,9 +389,8 @@ export async function runMockWorkflow(sessionId: string, taskId: string): Promis
     emitEventAndMessage(sessionId, taskId, 'task_submitted', 'developer', task.title)
     await delay(300)
 
-    // Step 5: Reviewer reviews (mock always passes)
-    updateTaskStatus(taskId, 'review_passed')
-    emitEventAndMessage(sessionId, taskId, 'review_passed', 'reviewer', task.title)
+    // Workflow stops here at submitted_for_review.
+    // Actual review must be triggered manually via ReviewDecisionModal.
 }
 
 // ─── Retry / Deliver ───────────────────────────────────────────

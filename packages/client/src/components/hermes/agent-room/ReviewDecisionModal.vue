@@ -17,8 +17,8 @@ const decision = ref<'passed' | 'rejected'>('passed')
 const comment = ref('')
 const commentInput = ref<HTMLTextAreaElement | null>(null)
 
-const isAtLimit = computed(() => props.revisionRound >= props.maxRevisionRounds)
-const remainingRounds = computed(() => Math.max(0, props.maxRevisionRounds - props.revisionRound))
+const isAtLimit = computed(() => props.revisionRound + 1 >= props.maxRevisionRounds)
+const remainingRounds = computed(() => Math.max(0, props.maxRevisionRounds - props.revisionRound - 1))
 
 watch(() => props.visible, (v) => {
     if (v) {

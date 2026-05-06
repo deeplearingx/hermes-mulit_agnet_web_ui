@@ -24,6 +24,7 @@ import {
     submitReview as apiSubmitReview,
     retryTask as apiRetryTask,
     deliverTask as apiDeliverTask,
+    listReviews as apiListReviews,
     listWorkflowEvents as apiListWorkflowEvents,
     runWorkflow as apiRunWorkflow,
 } from '@/api/hermes/agent-room'
@@ -85,7 +86,19 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         await Promise.all([
             loadMessages(sessionId),
             loadTasks(sessionId),
+            loadReviews(sessionId),
             loadWorkflowEvents(sessionId),
+        ])
+    }
+
+    // ─── Unified Refresh ───────────────────────────────────────
+    async function refreshCurrentSession() {
+        if (!currentSessionId.value) return
+        await Promise.all([
+            loadMessages(currentSessionId.value),
+            loadTasks(currentSessionId.value),
+            loadReviews(currentSessionId.value),
+            loadWorkflowEvents(currentSessionId.value),
         ])
     }
 
@@ -151,11 +164,9 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
                 status,
                 comment: comment ?? '',
             })
-            reviews.value.push(review)
-
-            // Server already transitions task status inside submitReview.
-            // Reload tasks to stay in sync and avoid double state transitions.
-            await loadTasks(currentSessionId.value)
+            // Server transitions task status + emits events + messages.
+            // Refresh everything to stay in sync.
+            await refreshCurrentSession()
             return review
         } catch (err: any) {
             error.value = err.message
@@ -166,10 +177,8 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     async function retryTask(taskId: string) {
         if (!currentSessionId.value) return null
         try {
-            const task = await apiRetryTask(currentSessionId.value, taskId)
-            const idx = tasks.value.findIndex(t => t.id === taskId)
-            if (idx >= 0) tasks.value[idx] = task
-            return task
+            await apiRetryTask(currentSessionId.value, taskId)
+            await refreshCurrentSession()
         } catch (err: any) {
             error.value = err.message
             throw err
@@ -179,13 +188,20 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     async function deliverTask(taskId: string) {
         if (!currentSessionId.value) return null
         try {
-            const task = await apiDeliverTask(currentSessionId.value, taskId)
-            const idx = tasks.value.findIndex(t => t.id === taskId)
-            if (idx >= 0) tasks.value[idx] = task
-            return task
+            await apiDeliverTask(currentSessionId.value, taskId)
+            await refreshCurrentSession()
         } catch (err: any) {
             error.value = err.message
             throw err
+        }
+    }
+
+    // ─── Reviews ───────────────────────────────────────────────
+    async function loadReviews(sessionId: string) {
+        try {
+            reviews.value = await apiListReviews(sessionId)
+        } catch (err: any) {
+            error.value = err.message
         }
     }
 
@@ -199,17 +215,12 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     }
 
     // ─── Mock Workflow (v1) ────────────────────────────────────
-    // Calls server-side mock workflow, then reloads messages/tasks/events
+    // Calls server-side mock workflow, then reloads all data
     async function runMockWorkflow(taskId: string) {
         if (!currentSessionId.value) return
         try {
             await apiRunWorkflow(currentSessionId.value, taskId)
-            // Reload all data from server after workflow completes
-            await Promise.all([
-                loadMessages(currentSessionId.value),
-                loadTasks(currentSessionId.value),
-                loadWorkflowEvents(currentSessionId.value),
-            ])
+            await refreshCurrentSession()
         } catch (err: any) {
             error.value = err.message
             throw err
@@ -247,6 +258,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         loadSessions,
         createSession,
         selectSession,
+        refreshCurrentSession,
         loadMessages,
         sendUserMessage,
         loadTasks,
@@ -255,6 +267,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         submitTaskReview,
         retryTask,
         deliverTask,
+        loadReviews,
         loadWorkflowEvents,
         runMockWorkflow,
         $reset,

@@ -235,6 +235,10 @@ export async function deliverTask(sessionId: string, taskId: string): Promise<Ag
     })
 }
 
+export async function listReviews(sessionId: string): Promise<AgentRoomReview[]> {
+    return request(`${BASE}/sessions/${sessionId}/reviews`)
+}
+
 export async function listWorkflowEvents(sessionId: string): Promise<AgentRoomWorkflowEvent[]> {
     return request(`${BASE}/sessions/${sessionId}/events`)
 }

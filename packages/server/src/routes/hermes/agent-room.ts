@@ -198,6 +198,13 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/workflow
     }
 })
 
+// ─── Reviews ───────────────────────────────────────────────────
+
+// List reviews for a session
+agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/reviews', async (ctx) => {
+    ctx.body = agentRoomService.listReviews(ctx.params.sessionId)
+})
+
 // ─── Workflow Events ───────────────────────────────────────────
 
 // List workflow events
