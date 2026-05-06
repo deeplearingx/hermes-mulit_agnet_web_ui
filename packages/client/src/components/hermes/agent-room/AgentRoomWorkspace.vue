@@ -86,6 +86,7 @@ onMounted(async () => {
     window.addEventListener('agent-room:scene:ready', onSceneReady as EventListener)
 
     const PhaserLib = (await import('phaser')).default
+    const { AgentRoomBootScene } = await import('./scenes/AgentRoomBootScene')
     const { AgentRoomOfficeScene } = await import('./scenes/AgentRoomOfficeScene')
 
     game = new PhaserLib.Game({
@@ -95,7 +96,7 @@ onMounted(async () => {
         height: 540,
         pixelArt: true,
         backgroundColor: '#0f1729',
-        scene: [new AgentRoomOfficeScene(instanceId)],
+        scene: [new AgentRoomBootScene(), new AgentRoomOfficeScene(instanceId)],
         scale: {
             mode: PhaserLib.Scale.FIT,
             autoCenter: PhaserLib.Scale.CENTER_BOTH,

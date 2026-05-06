@@ -1,7 +1,9 @@
 // ─── Agent Room Office Scene ──────────────────────────────────
-// Lightweight Phaser scene for Agent Room pixel workspace.
+// Full pixel office scene for Agent Room workspace.
 // Pure display — no drag, no click, no layout persistence.
 // Independent from group-chat/workspace/scenes/.
+// Uses office_tilemap + char spritesheets when available,
+// falls back to code-drawn graphics otherwise.
 
 import Phaser from 'phaser'
 
@@ -22,6 +24,11 @@ const C = {
     labelText:   0xe2e8f0,
     taskBg:      0x1e293b,
     taskBorder:  0x475569,
+    desk:        0x2d3748,
+    deskLeg:     0x1a202c,
+    monitor:     0x0f1729,
+    monitorFrame:0x475569,
+    chair:       0x374151,
 }
 
 // ─── Agent role → color ──────────────────────────────────────
@@ -31,6 +38,15 @@ const AGENT_COLORS: Record<string, number> = {
     developer:    0x22c55e,
     reviewer:     0xf59e0b,
     delivery:     0x06b6d4,
+}
+
+// ─── Agent role → Chinese label ──────────────────────────────
+const AGENT_LABELS: Record<string, string> = {
+    conversation: '会话区',
+    planner:      '规划区',
+    developer:    '开发区',
+    reviewer:     '审核区',
+    delivery:     '交付区',
 }
 
 // ─── Task status → display color ─────────────────────────────
@@ -49,14 +65,26 @@ const STATUS_COLORS: Record<string, number> = {
     need_user_decision:   0xeab308,
 }
 
-// ─── Fixed agent positions ───────────────────────────────────
-const AGENT_POSITIONS: Record<string, { x: number; y: number }> = {
-    conversation: { x: 160, y: 160 },
-    planner:      { x: 800, y: 160 },
-    developer:    { x: 480, y: 300 },
-    reviewer:     { x: 160, y: 420 },
-    delivery:     { x: 800, y: 420 },
+// ─── Zone definitions ────────────────────────────────────────
+interface ZoneDef {
+    id: string
+    x: number
+    y: number
+    w: number
+    h: number
+    agentX: number
+    agentY: number
+    deskX: number
+    deskY: number
 }
+
+const ZONES: ZoneDef[] = [
+    { id: 'conversation', x: 30,  y: 60,  w: 260, h: 200, agentX: 160, agentY: 170, deskX: 120, deskY: 200 },
+    { id: 'planner',      x: 670, y: 60,  w: 260, h: 200, agentX: 800, agentY: 170, deskX: 760, deskY: 200 },
+    { id: 'developer',    x: 350, y: 180, w: 260, h: 200, agentX: 480, agentY: 290, deskX: 440, deskY: 320 },
+    { id: 'reviewer',     x: 30,  y: 320, w: 260, h: 180, agentX: 160, agentY: 420, deskX: 120, deskY: 450 },
+    { id: 'delivery',     x: 670, y: 320, w: 260, h: 180, agentX: 800, agentY: 420, deskX: 760, deskY: 450 },
+]
 
 // ─── State interface ─────────────────────────────────────────
 interface AgentDisplayState {
@@ -85,6 +113,8 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
     private taskStatusDot: Phaser.GameObjects.Graphics | null = null
 
     private instanceId: string
+    private tilemapLoaded = false
+    private spritesheetKeys: Set<string> = new Set()
 
     constructor(instanceId: string) {
         super({ key: 'AgentRoomOfficeScene' })
@@ -97,6 +127,14 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
     }
 
     create() {
+        // Check which assets loaded successfully
+        this.tilemapLoaded = this.textures.exists('office_tilemap')
+        for (let i = 1; i <= 25; i++) {
+            if (this.textures.exists(`char_${i}`)) {
+                this.spritesheetKeys.add(`char_${i}`)
+            }
+        }
+
         this.drawFloor()
         this.drawWalls()
         this.drawZones()
@@ -128,66 +166,103 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
 
     private drawFloor() {
         const g = this.add.graphics()
-        g.fillStyle(C.floor, 1)
-        g.fillRect(0, 0, SCENE_W, SCENE_H)
-        g.lineStyle(1, C.floorGrid, 0.3)
-        for (let x = 0; x <= SCENE_W; x += TILE * 4) {
-            g.lineBetween(x, 0, x, SCENE_H)
-        }
-        for (let y = 0; y <= SCENE_H; y += TILE * 4) {
-            g.lineBetween(0, y, SCENE_W, y)
+
+        if (this.tilemapLoaded) {
+            // Use office tilemap as background
+            const tilemap = this.add.image(SCENE_W / 2, SCENE_H / 2, 'office_tilemap')
+            tilemap.setDisplaySize(SCENE_W, SCENE_H)
+        } else {
+            // Fallback: dark floor with grid
+            g.fillStyle(C.floor, 1)
+            g.fillRect(0, 0, SCENE_W, SCENE_H)
+            g.lineStyle(1, C.floorGrid, 0.3)
+            for (let x = 0; x <= SCENE_W; x += TILE * 4) {
+                g.lineBetween(x, 0, x, SCENE_H)
+            }
+            for (let y = 0; y <= SCENE_H; y += TILE * 4) {
+                g.lineBetween(0, y, SCENE_W, y)
+            }
         }
     }
 
     private drawWalls() {
         const g = this.add.graphics()
+        // Top wall
         g.fillStyle(C.wall)
         g.fillRect(0, 0, SCENE_W, TILE * 2)
         g.fillStyle(C.wallTop)
         g.fillRect(0, TILE * 2 - 2, SCENE_W, 2)
+        // Side walls
         g.fillStyle(C.wall)
         g.fillRect(0, 0, TILE, SCENE_H)
         g.fillRect(SCENE_W - TILE, 0, TILE, SCENE_H)
+        // Bottom wall
+        g.fillStyle(C.wall)
+        g.fillRect(0, SCENE_H - TILE, SCENE_W, TILE)
     }
 
     private drawZones() {
-        // Central work zone
-        const g = this.add.graphics()
-        g.fillStyle(C.zoneBg, 0.08)
-        g.fillRoundedRect(80, 60, SCENE_W - 160, SCENE_H - 100, 8)
-        g.lineStyle(1, C.zoneBorder, 0.15)
-        g.strokeRoundedRect(80, 60, SCENE_W - 160, SCENE_H - 100, 8)
+        for (const zone of ZONES) {
+            const g = this.add.graphics()
+            // Zone background
+            g.fillStyle(C.zoneBg, 0.12)
+            g.fillRoundedRect(zone.x, zone.y, zone.w, zone.h, 6)
+            g.lineStyle(1, C.zoneBorder, 0.2)
+            g.strokeRoundedRect(zone.x, zone.y, zone.w, zone.h, 6)
 
-        // Zone label
-        const labelBg = this.add.graphics()
-        labelBg.fillStyle(C.labelBg, 0.6)
-        labelBg.fillRoundedRect(84, 64, 120, 18, 3)
-        this.add.text(88, 66, '🏢 Agent 工作室', {
-            fontSize: '10px',
-            fontFamily: 'monospace',
-            color: '#94a3b8',
-        })
+            // Zone label background
+            const labelBg = this.add.graphics()
+            labelBg.fillStyle(C.labelBg, 0.6)
+            labelBg.fillRoundedRect(zone.x + 4, zone.y + 4, 80, 18, 3)
+
+            // Zone label text
+            const label = AGENT_LABELS[zone.id] ?? zone.id
+            const color = AGENT_COLORS[zone.id] ?? 0x94a3b8
+            this.add.text(zone.x + 8, zone.y + 6, label, {
+                fontSize: '10px',
+                fontFamily: 'monospace',
+                color: `#${color.toString(16).padStart(6, '0')}`,
+            })
+        }
     }
 
     private drawFurniture() {
-        // Draw a desk-like rectangle under each agent position
-        for (const [, pos] of Object.entries(AGENT_POSITIONS)) {
+        for (const zone of ZONES) {
             const g = this.add.graphics()
+
             // Desk surface
-            g.fillStyle(0x2d3748, 0.6)
-            g.fillRoundedRect(pos.x - 24, pos.y + 12, 48, 8, 2)
+            g.fillStyle(C.desk, 0.7)
+            g.fillRoundedRect(zone.deskX - 28, zone.deskY, 56, 10, 2)
             // Desk legs
-            g.fillStyle(0x1a202c, 0.8)
-            g.fillRect(pos.x - 22, pos.y + 20, 3, 6)
-            g.fillRect(pos.x + 19, pos.y + 20, 3, 6)
+            g.fillStyle(C.deskLeg, 0.8)
+            g.fillRect(zone.deskX - 26, zone.deskY + 10, 3, 8)
+            g.fillRect(zone.deskX + 23, zone.deskY + 10, 3, 8)
+
+            // Monitor on desk
+            g.fillStyle(C.monitorFrame, 0.6)
+            g.fillRoundedRect(zone.deskX - 12, zone.deskY - 18, 24, 16, 2)
+            g.fillStyle(C.monitor, 0.9)
+            g.fillRect(zone.deskX - 10, zone.deskY - 16, 20, 12)
+            // Monitor stand
+            g.fillStyle(C.monitorFrame, 0.5)
+            g.fillRect(zone.deskX - 2, zone.deskY - 2, 4, 4)
+
+            // Chair (below desk)
+            g.fillStyle(C.chair, 0.5)
+            g.fillRoundedRect(zone.deskX - 10, zone.deskY + 22, 20, 8, 3)
+            // Chair back
+            g.fillStyle(C.chair, 0.4)
+            g.fillRoundedRect(zone.deskX - 8, zone.deskY + 18, 16, 6, 2)
         }
     }
 
     // ─── Agent Sprites ───────────────────────────────────────
 
     private createAgentSprites() {
-        for (const agentId of Object.keys(AGENT_POSITIONS)) {
-            const pos = AGENT_POSITIONS[agentId]
+        const charKeys = Array.from(this.spritesheetKeys)
+
+        for (const zone of ZONES) {
+            const agentId = zone.id
             const color = AGENT_COLORS[agentId] ?? 0x6b7280
 
             // Glow (hidden by default)
@@ -196,7 +271,7 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
             this.agentGlows.set(agentId, glow)
 
             // Container: shadow + body
-            const container = this.add.container(pos.x, pos.y)
+            const container = this.add.container(zone.agentX, zone.agentY)
 
             // Shadow
             const shadow = this.add.graphics()
@@ -204,27 +279,38 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
             shadow.fillEllipse(0, 10, 20, 6)
             container.add(shadow)
 
-            // Body (simple pixel character)
-            const body = this.add.graphics()
-            // Head
-            body.fillStyle(0xf0d0a0, 1)
-            body.fillRect(-4, -16, 8, 8)
-            // Hair
-            body.fillStyle(color, 1)
-            body.fillRect(-5, -18, 10, 4)
-            // Body
-            body.fillStyle(color, 1)
-            body.fillRect(-5, -8, 10, 12)
-            // Eyes
-            body.fillStyle(0x1a1a2e, 1)
-            body.fillRect(-3, -13, 2, 2)
-            body.fillRect(1, -13, 2, 2)
-            container.add(body)
+            // Body — use spritesheet if available, otherwise graphics fallback
+            if (charKeys.length > 0) {
+                // Pick a character sprite based on zone index
+                const zoneIdx = ZONES.indexOf(zone)
+                const spriteKey = charKeys[zoneIdx % charKeys.length]
+                const sprite = this.add.sprite(0, -8, spriteKey, 0)
+                sprite.setScale(2)
+                sprite.setTint(color)
+                container.add(sprite)
+            } else {
+                // Graphics fallback: pixel character
+                const body = this.add.graphics()
+                // Head
+                body.fillStyle(0xf0d0a0, 1)
+                body.fillRect(-4, -16, 8, 8)
+                // Hair
+                body.fillStyle(color, 1)
+                body.fillRect(-5, -18, 10, 4)
+                // Body
+                body.fillStyle(color, 1)
+                body.fillRect(-5, -8, 10, 12)
+                // Eyes
+                body.fillStyle(0x1a1a2e, 1)
+                body.fillRect(-3, -13, 2, 2)
+                body.fillRect(1, -13, 2, 2)
+                container.add(body)
+            }
 
             this.agentSprites.set(agentId, container)
 
             // Name label below
-            const label = this.add.text(pos.x, pos.y + 24, '', {
+            const label = this.add.text(zone.agentX, zone.agentY + 24, '', {
                 fontSize: '10px',
                 fontFamily: 'monospace',
                 color: '#94a3b8',
@@ -325,15 +411,17 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
             this.pulseTimers.delete(agent.id)
         }
 
+        const zone = ZONES.find(z => z.id === agent.id)
+        const baseY = zone?.agentY ?? sprite.y
+
         switch (agent.status) {
             case 'active': {
                 // Show glow + pulse
-                const pos = AGENT_POSITIONS[agent.id]
-                if (pos) {
+                if (zone) {
                     const color = AGENT_COLORS[agent.id] ?? 0x3b82f6
                     glow.clear()
                     glow.fillStyle(color, 0.3)
-                    glow.fillCircle(pos.x, pos.y, 24)
+                    glow.fillCircle(zone.agentX, zone.agentY, 28)
                     glow.setAlpha(1)
                 }
 
@@ -349,7 +437,7 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
                 // Idle bounce
                 this.tweens.add({
                     targets: sprite,
-                    y: sprite.y - 3,
+                    y: baseY - 3,
                     duration: 600,
                     yoyo: true,
                     repeat: -1,
@@ -363,8 +451,7 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
                 glow.setAlpha(0)
                 this.tweens.killTweensOf(sprite)
                 this.tweens.killTweensOf(glow)
-                const pos = AGENT_POSITIONS[agent.id]
-                if (pos) sprite.y = pos.y
+                sprite.y = baseY
                 label.setColor('#22c55e')
                 break
             }
@@ -372,8 +459,7 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
                 glow.setAlpha(0)
                 this.tweens.killTweensOf(sprite)
                 this.tweens.killTweensOf(glow)
-                const pos = AGENT_POSITIONS[agent.id]
-                if (pos) sprite.y = pos.y
+                sprite.y = baseY
                 label.setColor('#ef4444')
                 break
             }
@@ -382,8 +468,7 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
                 glow.setAlpha(0)
                 this.tweens.killTweensOf(sprite)
                 this.tweens.killTweensOf(glow)
-                const pos = AGENT_POSITIONS[agent.id]
-                if (pos) sprite.y = pos.y
+                sprite.y = baseY
                 label.setColor('#94a3b8')
                 break
             }
