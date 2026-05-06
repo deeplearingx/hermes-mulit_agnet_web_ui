@@ -246,3 +246,15 @@ export async function runWorkflow(sessionId: string, taskId: string): Promise<{ 
         method: 'POST',
     })
 }
+
+export async function deleteSession(sessionId: string): Promise<{ success: boolean }> {
+    return request(`${BASE}/sessions/${sessionId}`, {
+        method: 'DELETE',
+    })
+}
+
+export async function deleteTask(sessionId: string, taskId: string): Promise<{ success: boolean }> {
+    return request(`${BASE}/sessions/${sessionId}/tasks/${taskId}`, {
+        method: 'DELETE',
+    })
+}

@@ -717,4 +717,104 @@ describe('Agent Room Service', () => {
       expect(() => svc.updateTaskStatusInSession(s2.id, task.id, 'planned')).toThrow(/belongs to session/)
     })
   })
+
+  describe('Delete cascade', () => {
+    it('deleteSession removes session, tasks, reviews, messages, workflow events', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Delete Me')
+      const task = svc.createTask(session.id, 'Task A', 'desc')
+      // Create some messages
+      svc.addMessage({ sessionId: session.id, senderId: 'user', senderName: 'U', senderRole: 'user', type: 'user_message', content: 'hello' })
+      // Run workflow to create events + messages
+      await svc.runMockWorkflow(session.id, task.id)
+      // Submit review to create reviews
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'ok')
+
+      // Verify data exists
+      expect(svc.listTasks(session.id).length).toBeGreaterThan(0)
+      expect(svc.listMessages(session.id).length).toBeGreaterThan(0)
+      expect(svc.listWorkflowEvents(session.id).length).toBeGreaterThan(0)
+      expect(svc.listReviews(session.id).length).toBeGreaterThan(0)
+
+      // Delete session
+      svc.deleteSession(session.id)
+
+      // Session gone
+      expect(svc.getSession(session.id)).toBeNull()
+      // All child data access throws "Session not found" (cascade verified)
+      expect(() => svc.listTasks(session.id)).toThrow('Session not found')
+      expect(() => svc.listMessages(session.id)).toThrow('Session not found')
+      expect(() => svc.listWorkflowEvents(session.id)).toThrow('Session not found')
+      expect(() => svc.listReviews(session.id)).toThrow('Session not found')
+    })
+
+    it('deleteTask removes task, its reviews, workflow events, and task-scoped messages', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Session')
+      const task = svc.createTask(session.id, 'Task A', 'desc')
+      // Add a user message (not task-scoped)
+      svc.addMessage({ sessionId: session.id, senderId: 'user', senderName: 'U', senderRole: 'user', type: 'user_message', content: 'hello' })
+      // Run workflow to create task-scoped messages + events
+      await svc.runMockWorkflow(session.id, task.id)
+      // Submit review
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'ok')
+
+      const userMsgCount = svc.listMessages(session.id).filter(m => m.type === 'user_message').length
+      const taskMsgCount = svc.listMessages(session.id).filter(m => m.metadata?.taskId === task.id).length
+      expect(taskMsgCount).toBeGreaterThan(0)
+
+      // Delete task
+      svc.deleteTask(session.id, task.id)
+
+      // Task gone
+      expect(svc.listTasks(session.id)).toEqual([])
+      // Task-scoped messages gone, user messages preserved
+      const remaining = svc.listMessages(session.id)
+      expect(remaining.filter(m => m.metadata?.taskId === task.id)).toEqual([])
+      expect(remaining.filter(m => m.type === 'user_message').length).toBe(userMsgCount)
+      // Workflow events gone
+      expect(svc.listWorkflowEvents(session.id)).toEqual([])
+      // Reviews gone
+      expect(svc.listReviews(session.id)).toEqual([])
+    })
+
+    it('deleteTask throws for cross-session access', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const s1 = svc.createSession('S1')
+      const s2 = svc.createSession('S2')
+      const task = svc.createTask(s1.id, 'Task', '')
+
+      expect(() => svc.deleteTask(s2.id, task.id)).toThrow(/belongs to session/)
+    })
+
+    it('deleteTask throws when workflow is running', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Session')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      // Start workflow in background (don't await)
+      const workflowPromise = svc.runMockWorkflow(session.id, task.id)
+
+      // Try to delete while workflow is running
+      expect(() => svc.deleteTask(session.id, task.id)).toThrow('Cannot delete task while workflow is running')
+
+      // Wait for workflow to finish
+      await workflowPromise
+    })
+
+    it('deleteSession throws when workflow is running in session', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Session')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      // Start workflow in background (don't await)
+      const workflowPromise = svc.runMockWorkflow(session.id, task.id)
+
+      // Try to delete session while workflow is running
+      expect(() => svc.deleteSession(session.id)).toThrow('Cannot delete session while workflow is running')
+
+      // Wait for workflow to finish
+      await workflowPromise
+    })
+  })
 })

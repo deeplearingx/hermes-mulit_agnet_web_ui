@@ -303,3 +303,42 @@ export function listWorkflowEventsBySession(sessionId: string): AgentRoomWorkflo
     const rows = db.prepare(`SELECT * FROM ${AR_WORKFLOW_EVENTS_TABLE} WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`).all(sessionId) as Array<Record<string, unknown>>
     return rows.map(mapEventRow)
 }
+
+// ─── Cascade Delete ─────────────────────────────────────────────
+
+/**
+ * Delete a session and all its child records (tasks, reviews, messages, workflow events).
+ * Caller is responsible for transaction management.
+ */
+export function deleteSessionCascade(sessionId: string): void {
+    const db = requireDb()
+    // Delete in dependency order: reviews → workflow_events → messages → tasks → session
+    db.prepare(`DELETE FROM ${AR_REVIEWS_TABLE} WHERE session_id = ?`).run(sessionId)
+    db.prepare(`DELETE FROM ${AR_WORKFLOW_EVENTS_TABLE} WHERE session_id = ?`).run(sessionId)
+    db.prepare(`DELETE FROM ${AR_MESSAGES_TABLE} WHERE session_id = ?`).run(sessionId)
+    db.prepare(`DELETE FROM ${AR_TASKS_TABLE} WHERE session_id = ?`).run(sessionId)
+    db.prepare(`DELETE FROM ${AR_SESSIONS_TABLE} WHERE id = ?`).run(sessionId)
+}
+
+/**
+ * Delete a task and its child records (reviews, workflow events, task-scoped messages).
+ * Task-scoped messages are identified by metadata.taskId === taskId (no SQL LIKE).
+ * Caller is responsible for transaction management.
+ */
+export function deleteTaskCascade(sessionId: string, taskId: string): void {
+    const db = requireDb()
+    // Delete task reviews
+    db.prepare(`DELETE FROM ${AR_REVIEWS_TABLE} WHERE task_id = ?`).run(taskId)
+    // Delete task workflow events
+    db.prepare(`DELETE FROM ${AR_WORKFLOW_EVENTS_TABLE} WHERE task_id = ?`).run(taskId)
+    // Delete task-scoped messages: list all session messages, filter by metadata.taskId, delete by id
+    const sessionMessages = listMessagesBySession(sessionId)
+    const stmt = db.prepare(`DELETE FROM ${AR_MESSAGES_TABLE} WHERE id = ?`)
+    for (const msg of sessionMessages) {
+        if (msg.metadata?.taskId === taskId) {
+            stmt.run(msg.id)
+        }
+    }
+    // Delete the task itself
+    db.prepare(`DELETE FROM ${AR_TASKS_TABLE} WHERE id = ?`).run(taskId)
+}

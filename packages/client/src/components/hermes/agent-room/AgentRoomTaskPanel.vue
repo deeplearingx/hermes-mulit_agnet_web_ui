@@ -17,6 +17,7 @@ const emit = defineEmits<{
     (e: 'open-review', taskId: string): void
     (e: 'deliver-task', taskId: string): void
     (e: 'select-task', taskId: string): void
+    (e: 'delete-task', taskId: string): void
 }>()
 
 // ─── Status Display ────────────────────────────────────────────
@@ -197,6 +198,11 @@ function artifactIcon(status: AgentRoomTaskStatus): string {
                 <div class="task-card-top">
                     <span class="task-icon">{{ getStatusConfig(activeTask.status).icon }}</span>
                     <span class="task-title">{{ activeTask.title }}</span>
+                    <button
+                        class="btn-delete-task"
+                        title="删除任务"
+                        @click="emit('delete-task', activeTask.id)"
+                    >✕</button>
                 </div>
                 <div class="task-status-bar">
                     <span
@@ -245,6 +251,11 @@ function artifactIcon(status: AgentRoomTaskStatus): string {
                     >
                         {{ getStatusConfig(task.status).label }}
                     </span>
+                    <button
+                        class="btn-delete-task"
+                        title="删除任务"
+                        @click.stop="emit('delete-task', task.id)"
+                    >✕</button>
                 </div>
             </div>
         </div>
@@ -377,12 +388,42 @@ function artifactIcon(status: AgentRoomTaskStatus): string {
 }
 
 .task-title {
+    flex: 1;
     font-size: 12px;
     font-weight: 600;
     color: #e2e8f0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.btn-delete-task {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 2px;
+    background: transparent;
+    color: #64748b;
+    cursor: pointer;
+    font-size: 10px;
+    line-height: 1;
+    padding: 0;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+
+    .task-card-top:hover &,
+    .task-list-item:hover & {
+        opacity: 1;
+    }
+
+    &:hover {
+        background: rgba(239, 68, 68, 0.2);
+        color: #fca5a5;
+    }
 }
 
 .task-status-bar {

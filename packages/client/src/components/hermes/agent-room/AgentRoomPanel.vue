@@ -97,6 +97,29 @@ async function handleDeliverTask(taskId: string) {
 function handleSelectTask(taskId: string) {
     store.setActiveTask(taskId)
 }
+
+// ─── Delete Actions ─────────────────────────────────────────────
+async function handleDeleteSession(sessionId: string) {
+    const session = store.sessions.find(s => s.id === sessionId)
+    const name = session?.name ?? sessionId
+    if (!window.confirm(`确认删除会话「${name}」？该会话下任务、消息、审核记录、事件流都会删除。`)) return
+    try {
+        await store.removeSession(sessionId)
+    } catch {
+        // Error already set in store
+    }
+}
+
+async function handleDeleteTask(taskId: string) {
+    const task = store.tasks.find(t => t.id === taskId)
+    const title = task?.title ?? taskId
+    if (!window.confirm(`确认删除任务「${title}」？相关审核记录、工作流事件和任务消息也会删除。`)) return
+    try {
+        await store.removeTask(taskId)
+    } catch {
+        // Error already set in store
+    }
+}
 </script>
 
 <template>
@@ -104,15 +127,20 @@ function handleSelectTask(taskId: string) {
         <!-- Top: Session Tabs -->
         <div class="session-bar">
             <div class="session-list">
-                <button
+                <div
                     v-for="session in store.sessions"
                     :key="session.id"
                     class="session-tab"
                     :class="{ active: session.id === store.currentSessionId }"
                     @click="handleSelectSession(session.id)"
                 >
-                    {{ session.name }}
-                </button>
+                    <span class="session-tab-name">{{ session.name }}</span>
+                    <button
+                        class="btn-delete-session"
+                        title="删除会话"
+                        @click.stop="handleDeleteSession(session.id)"
+                    >✕</button>
+                </div>
             </div>
             <button class="btn-new-session" :disabled="store.creatingSession" @click="showNewSession = !showNewSession">
                 + 新建会话
@@ -176,6 +204,7 @@ function handleSelectTask(taskId: string) {
                         @open-review="handleOpenReview"
                         @deliver-task="handleDeliverTask"
                         @select-task="handleSelectTask"
+                        @delete-task="handleDeleteTask"
                     />
                 </div>
             </div>
@@ -275,7 +304,10 @@ function handleSelectTask(taskId: string) {
 }
 
 .session-tab {
-    padding: 4px 12px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
     border: 1px solid #1e293b;
     border-radius: 3px;
     background: transparent;
@@ -295,6 +327,39 @@ function handleSelectTask(taskId: string) {
         background: #1e3a5f;
         border-color: #3b82f6;
         color: #e2e8f0;
+    }
+}
+
+.session-tab-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.btn-delete-session {
+    width: 14px;
+    height: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 2px;
+    background: transparent;
+    color: #64748b;
+    cursor: pointer;
+    font-size: 9px;
+    line-height: 1;
+    padding: 0;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+
+    .session-tab:hover & {
+        opacity: 1;
+    }
+
+    &:hover {
+        background: rgba(239, 68, 68, 0.2);
+        color: #fca5a5;
     }
 }
 

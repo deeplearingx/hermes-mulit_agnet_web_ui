@@ -27,6 +27,8 @@ import {
     listReviews as apiListReviews,
     listWorkflowEvents as apiListWorkflowEvents,
     runWorkflow as apiRunWorkflow,
+    deleteSession as apiDeleteSession,
+    deleteTask as apiDeleteTask,
 } from '@/api/hermes/agent-room'
 
 
@@ -289,6 +291,51 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         }
     }
 
+    // ─── Delete Actions ─────────────────────────────────────────
+    async function removeSession(sessionId: string) {
+        error.value = null
+        try {
+            await apiDeleteSession(sessionId)
+            // Remove from local list
+            sessions.value = sessions.value.filter(s => s.id !== sessionId)
+            // If deleted the current session, switch or clear
+            if (currentSessionId.value === sessionId) {
+                if (sessions.value.length > 0) {
+                    await selectSession(sessions.value[0].id)
+                } else {
+                    currentSessionId.value = null
+                    messages.value = []
+                    tasks.value = []
+                    reviews.value = []
+                    workflowEvents.value = []
+                    activeTaskId.value = null
+                }
+            }
+        } catch (err: any) {
+            error.value = err.message
+            throw err
+        }
+    }
+
+    async function removeTask(taskId: string) {
+        if (!currentSessionId.value) return
+        error.value = null
+        try {
+            await apiDeleteTask(currentSessionId.value, taskId)
+            // If deleted the active task, reselect next non-terminal or clear
+            if (activeTaskId.value === taskId) {
+                const remaining = tasks.value.filter(t => t.id !== taskId)
+                const nextActive = remaining.find(t => !['completed', 'failed'].includes(t.status))
+                activeTaskId.value = nextActive?.id ?? null
+            }
+            // Refresh to ensure consistency
+            await refreshCurrentSession()
+        } catch (err: any) {
+            error.value = err.message
+            throw err
+        }
+    }
+
     // ─── Mock Workflow (v1) ────────────────────────────────────
     // Calls server-side mock workflow, then reloads all data
     async function runMockWorkflow(taskId: string) {
@@ -362,6 +409,8 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         submitTaskReview,
         retryTask,
         deliverTask,
+        removeSession,
+        removeTask,
         loadReviews,
         loadWorkflowEvents,
         runMockWorkflow,

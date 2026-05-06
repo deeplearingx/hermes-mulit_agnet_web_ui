@@ -537,6 +537,40 @@ export function retryTask(sessionId: string, taskId: string): AgentRoomTask | nu
     return store.getTask(taskId) as AgentRoomTask | null
 }
 
+// ─── Delete ─────────────────────────────────────────────────────
+
+/**
+ * Delete a session and all its child records.
+ * Throws if any task in the session has a running workflow.
+ */
+export function deleteSession(sessionId: string): void {
+    assertSessionExists(sessionId)
+    // Check: no running workflows for any task in this session
+    const tasks = store.listTasksBySession(sessionId)
+    for (const task of tasks) {
+        if (runningWorkflows.has(task.id)) {
+            throw new Error('Cannot delete session while workflow is running')
+        }
+    }
+    store.runInTransaction(() => {
+        store.deleteSessionCascade(sessionId)
+    })
+}
+
+/**
+ * Delete a task and its child records (reviews, workflow events, task-scoped messages).
+ * Throws if the task has a running workflow.
+ */
+export function deleteTask(sessionId: string, taskId: string): void {
+    assertTaskInSession(taskId, sessionId)
+    if (runningWorkflows.has(taskId)) {
+        throw new Error('Cannot delete task while workflow is running')
+    }
+    store.runInTransaction(() => {
+        store.deleteTaskCascade(sessionId, taskId)
+    })
+}
+
 /**
  * Deliver a task: review_passed → delivering → completed.
  * All messages produced via event adapter.

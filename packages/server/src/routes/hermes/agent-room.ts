@@ -243,3 +243,43 @@ agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/events', async (ctx) =>
         ctx.body = { error: err.message }
     }
 })
+
+// ─── Delete ─────────────────────────────────────────────────────
+
+// Delete session (cascade)
+agentRoomRoutes.delete('/api/agent-room/sessions/:sessionId', async (ctx) => {
+    try {
+        agentRoomService.deleteSession(ctx.params.sessionId)
+        ctx.body = { success: true }
+    } catch (err: any) {
+        if (err.message.startsWith('Session not found')) {
+            ctx.status = 404
+        } else if (err.message.includes('while workflow is running')) {
+            ctx.status = 409
+        } else {
+            ctx.status = 400
+        }
+        ctx.body = { error: err.message }
+    }
+})
+
+// Delete task (cascade)
+agentRoomRoutes.delete('/api/agent-room/sessions/:sessionId/tasks/:taskId', async (ctx) => {
+    try {
+        agentRoomService.deleteTask(ctx.params.sessionId, ctx.params.taskId)
+        ctx.body = { success: true }
+    } catch (err: any) {
+        if (err.message.startsWith('Session not found')) {
+            ctx.status = 404
+        } else if (err.message.startsWith('Task not found')) {
+            ctx.status = 404
+        } else if (err.message.includes('belongs to session')) {
+            ctx.status = 403
+        } else if (err.message.includes('while workflow is running')) {
+            ctx.status = 409
+        } else {
+            ctx.status = 400
+        }
+        ctx.body = { error: err.message }
+    }
+})
