@@ -139,7 +139,7 @@ watch(
 .agent-room-workspace {
     width: 100%;
     height: 100%;
-    min-height: 300px;
+    min-height: 400px;
     border-radius: 6px;
     overflow: hidden;
     background: #0f1729;

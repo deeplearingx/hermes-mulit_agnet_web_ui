@@ -5,6 +5,7 @@ import type { AgentRoomTask } from '@/api/hermes/agent-room'
 import AgentRoomWorkspace from './AgentRoomWorkspace.vue'
 import AgentRoomMessageList from './AgentRoomMessageList.vue'
 import AgentRoomTaskPanel from './AgentRoomTaskPanel.vue'
+import AgentRoomEventFeed from './AgentRoomEventFeed.vue'
 import CreateTaskModal from './CreateTaskModal.vue'
 import ReviewDecisionModal from './ReviewDecisionModal.vue'
 
@@ -22,14 +23,10 @@ const creatingTask = ref(false)
 const submittingReview = ref(false)
 
 // ─── Session Management ────────────────────────────────────────
-// NOTE: loadSessions is called once in AgentRoomView.vue onMounted;
-// do NOT duplicate it here.
-
 async function handleCreateSession() {
     const name = newSessionName.value.trim() || `会话 ${store.sessions.length + 1}`
     try {
         await store.createSession(name)
-        // Only close form on success
         newSessionName.value = ''
         showNewSession.value = false
     } catch {
@@ -105,7 +102,7 @@ function handleSelectTask(taskId: string) {
 
 <template>
     <div class="agent-room-panel">
-        <!-- Session List (top bar) -->
+        <!-- Top: Session Tabs -->
         <div class="session-bar">
             <div class="session-list">
                 <button
@@ -142,14 +139,39 @@ function handleSelectTask(taskId: string) {
 
         <!-- Main Content -->
         <div v-if="store.currentSessionId" class="room-content">
-            <!-- Top: Pixel Workspace (main visual area) -->
-            <div class="workspace-area">
-                <AgentRoomWorkspace />
+            <!-- Middle: Workspace + Right Info Panel -->
+            <div class="workspace-main">
+                <div class="workspace-center">
+                    <div class="workspace-canvas">
+                        <AgentRoomWorkspace />
+                    </div>
+                </div>
+                <div class="workspace-panel">
+                    <AgentRoomTaskPanel
+                        :tasks="store.tasks"
+                        :reviews="store.reviews"
+                        :workflow-events="store.workflowEvents"
+                        :agents="store.agents"
+                        :active-task-id="store.activeTaskId"
+                        :action-loading-task-id="store.actionLoadingTaskId"
+                        @create-task="showCreateTask = true"
+                        @run-workflow="handleRunWorkflow"
+                        @open-review="handleOpenReview"
+                        @deliver-task="handleDeliverTask"
+                        @select-task="handleSelectTask"
+                    />
+                </div>
             </div>
 
-            <!-- Bottom: Messages + Task Panel -->
+            <!-- Bottom: Event Feed + Message Input -->
             <div class="bottom-panels">
-                <!-- Left: Chat Messages -->
+                <div class="event-feed-area">
+                    <AgentRoomEventFeed
+                        :messages="store.messages"
+                        :workflow-events="store.workflowEvents"
+                        :reviews="store.reviews"
+                    />
+                </div>
                 <div class="chat-area">
                     <AgentRoomMessageList :messages="store.messages" />
                     <div class="chat-input-area">
@@ -164,20 +186,6 @@ function handleSelectTask(taskId: string) {
                         </button>
                     </div>
                 </div>
-
-                <!-- Right: Task Panel -->
-                <AgentRoomTaskPanel
-                    :tasks="store.tasks"
-                    :reviews="store.reviews"
-                    :workflow-events="store.workflowEvents"
-                    :active-task-id="store.activeTaskId"
-                    :action-loading-task-id="store.actionLoadingTaskId"
-                    @create-task="showCreateTask = true"
-                    @run-workflow="handleRunWorkflow"
-                    @open-review="handleOpenReview"
-                    @deliver-task="handleDeliverTask"
-                    @select-task="handleSelectTask"
-                />
             </div>
         </div>
 
@@ -215,10 +223,12 @@ function handleSelectTask(taskId: string) {
     height: 100%;
     display: flex;
     flex-direction: column;
-    background: var(--vscode-editor-background, #1e1e1e);
-    color: var(--vscode-editor-foreground, #cccccc);
+    background: #0a0f1e;
+    color: #e2e8f0;
+    font-family: 'Courier New', monospace;
 }
 
+// ─── Error Banner ──────────────────────────────────────────────
 .error-banner {
     display: flex;
     align-items: center;
@@ -248,57 +258,68 @@ function handleSelectTask(taskId: string) {
     }
 }
 
+// ─── Session Bar ───────────────────────────────────────────────
 .session-bar {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--vscode-widget-border, #3c3c3c);
-    background: var(--vscode-sideBar-background, #252526);
+    padding: 6px 12px;
+    border-bottom: 1px solid #1e293b;
+    background: #111827;
     flex-shrink: 0;
     position: relative;
 }
 
 .session-list {
     display: flex;
-    gap: 4px;
+    gap: 2px;
     overflow-x: auto;
     flex: 1;
+    scrollbar-width: none;
+
+    &::-webkit-scrollbar {
+        display: none;
+    }
 }
 
 .session-tab {
     padding: 4px 12px;
-    border: 1px solid var(--vscode-widget-border, #3c3c3c);
-    border-radius: 4px;
+    border: 1px solid #1e293b;
+    border-radius: 3px;
     background: transparent;
-    color: var(--vscode-editor-foreground, #cccccc);
+    color: #94a3b8;
     cursor: pointer;
+    font-size: 11px;
+    font-family: 'Courier New', monospace;
     white-space: nowrap;
-    font-size: 12px;
+    transition: all 0.15s;
 
-    &.active {
-        background: var(--vscode-button-background, #0e639c);
-        color: var(--vscode-button-foreground, #ffffff);
-        border-color: var(--vscode-button-background, #0e639c);
+    &:hover {
+        background: #1e293b;
+        color: #e2e8f0;
     }
 
-    &:hover:not(.active) {
-        background: var(--vscode-list-hoverBackground, #2a2d2e);
+    &.active {
+        background: #1e3a5f;
+        border-color: #3b82f6;
+        color: #e2e8f0;
     }
 }
 
 .btn-new-session {
     padding: 4px 10px;
-    border: 1px solid var(--vscode-widget-border, #3c3c3c);
-    border-radius: 4px;
+    border: 1px solid #334155;
+    border-radius: 3px;
     background: transparent;
-    color: var(--vscode-editor-foreground, #cccccc);
+    color: #94a3b8;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
+    font-family: 'Courier New', monospace;
     white-space: nowrap;
 
     &:hover {
-        background: var(--vscode-list-hoverBackground, #2a2d2e);
+        background: #1e293b;
+        color: #e2e8f0;
     }
 }
 
@@ -310,40 +331,43 @@ function handleSelectTask(taskId: string) {
     display: flex;
     gap: 4px;
     padding: 8px;
-    background: var(--vscode-dropdown-background, #252526);
-    border: 1px solid var(--vscode-widget-border, #3c3c3c);
+    background: #111827;
+    border: 1px solid #1e293b;
     border-radius: 4px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 
     input {
         padding: 4px 8px;
-        border: 1px solid var(--vscode-input-border, #3c3c3c);
+        border: 1px solid #334155;
         border-radius: 3px;
-        background: var(--vscode-input-background, #3c3c3c);
-        color: var(--vscode-input-foreground, #cccccc);
+        background: #0f1729;
+        color: #e2e8f0;
         font-size: 12px;
+        font-family: 'Courier New', monospace;
         outline: none;
 
         &:focus {
-            border-color: var(--vscode-focusBorder, #007fd4);
+            border-color: #3b82f6;
         }
     }
 
     button {
         padding: 4px 10px;
-        border: none;
+        border: 1px solid #3b82f6;
         border-radius: 3px;
-        background: var(--vscode-button-background, #0e639c);
-        color: var(--vscode-button-foreground, #ffffff);
+        background: #1e3a5f;
+        color: #e2e8f0;
         cursor: pointer;
-        font-size: 12px;
+        font-size: 11px;
+        font-family: 'Courier New', monospace;
 
         &:hover {
-            background: var(--vscode-button-hoverBackground, #1177bb);
+            background: #2563eb;
         }
     }
 }
 
+// ─── Main Content ──────────────────────────────────────────────
 .room-content {
     flex: 1;
     display: flex;
@@ -351,17 +375,49 @@ function handleSelectTask(taskId: string) {
     min-height: 0;
 }
 
-.workspace-area {
-    flex: 1 1 60%;
-    min-height: 280px;
-    border-bottom: 1px solid var(--vscode-widget-border, #3c3c3c);
+// ─── Workspace Main (middle area) ──────────────────────────────
+.workspace-main {
+    flex: 1;
+    display: flex;
+    gap: 8px;
+    min-height: 0;
+    padding: 8px;
+    background: #0a0f1e;
 }
 
-.bottom-panels {
-    flex: 0 0 auto;
+.workspace-center {
+    flex: 1;
     display: flex;
-    max-height: 40%;
-    min-height: 180px;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+
+.workspace-canvas {
+    flex: 1;
+    min-height: 300px;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.workspace-panel {
+    width: 280px;
+    flex-shrink: 0;
+    min-height: 0;
+}
+
+// ─── Bottom Panels ─────────────────────────────────────────────
+.bottom-panels {
+    display: flex;
+    gap: 8px;
+    padding: 0 8px 8px;
+    flex-shrink: 0;
+    max-height: 280px;
+}
+
+.event-feed-area {
+    width: 360px;
+    flex-shrink: 0;
 }
 
 .chat-area {
@@ -369,47 +425,96 @@ function handleSelectTask(taskId: string) {
     display: flex;
     flex-direction: column;
     min-width: 0;
-    border-right: 1px solid var(--vscode-widget-border, #3c3c3c);
+    background: #0c1222;
+    border: 1px solid #1e293b;
+    border-radius: 6px;
+    overflow: hidden;
 }
 
 .chat-input-area {
     display: flex;
-    gap: 8px;
-    padding: 8px 12px;
-    border-top: 1px solid var(--vscode-widget-border, #3c3c3c);
-    background: var(--vscode-sideBar-background, #252526);
-    flex-shrink: 0;
+    gap: 4px;
+    padding: 6px 8px;
+    border-top: 1px solid #1e293b;
+    background: #111827;
 
     textarea {
         flex: 1;
+        padding: 4px 8px;
+        border: 1px solid #334155;
+        border-radius: 3px;
+        background: #0f1729;
+        color: #e2e8f0;
+        font-size: 12px;
+        font-family: 'Courier New', monospace;
         resize: none;
-        padding: 6px 8px;
-        border: 1px solid var(--vscode-input-border, #3c3c3c);
-        border-radius: 4px;
-        background: var(--vscode-input-background, #3c3c3c);
-        color: var(--vscode-input-foreground, #cccccc);
-        font-size: 13px;
-        font-family: inherit;
         outline: none;
 
         &:focus {
-            border-color: var(--vscode-focusBorder, #007fd4);
+            border-color: #3b82f6;
         }
     }
 }
 
 .btn-send {
-    padding: 6px 16px;
-    border: none;
-    border-radius: 4px;
-    background: var(--vscode-button-background, #0e639c);
-    color: var(--vscode-button-foreground, #ffffff);
+    padding: 4px 12px;
+    border: 1px solid #3b82f6;
+    border-radius: 3px;
+    background: #1e3a5f;
+    color: #e2e8f0;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 11px;
+    font-family: 'Courier New', monospace;
     align-self: flex-end;
 
     &:hover:not(:disabled) {
-        background: var(--vscode-button-hoverBackground, #1177bb);
+        background: #2563eb;
+    }
+
+    &:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+}
+
+// ─── Empty State ───────────────────────────────────────────────
+.empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: #64748b;
+
+    .empty-icon {
+        font-size: 48px;
+    }
+
+    h2 {
+        font-size: 18px;
+        color: #94a3b8;
+        font-family: 'Courier New', monospace;
+    }
+
+    p {
+        font-size: 13px;
+        font-family: 'Courier New', monospace;
+    }
+}
+
+.btn-primary {
+    padding: 8px 20px;
+    border: 1px solid #3b82f6;
+    border-radius: 4px;
+    background: #1e3a5f;
+    color: #e2e8f0;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: 'Courier New', monospace;
+
+    &:hover:not(:disabled) {
+        background: #2563eb;
     }
 
     &:disabled {
@@ -418,42 +523,24 @@ function handleSelectTask(taskId: string) {
     }
 }
 
-.empty-state {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    color: var(--vscode-descriptionForeground, #999999);
-
-    .empty-icon {
-        font-size: 48px;
+// ─── Responsive ────────────────────────────────────────────────
+@media (max-width: 900px) {
+    .workspace-main {
+        flex-direction: column;
     }
 
-    h2 {
-        margin: 0;
-        font-size: 20px;
-        color: var(--vscode-editor-foreground, #cccccc);
+    .workspace-panel {
+        width: 100%;
+        max-height: 300px;
     }
 
-    p {
-        margin: 0;
-        font-size: 14px;
+    .bottom-panels {
+        flex-direction: column;
+        max-height: none;
     }
-}
 
-.btn-primary {
-    padding: 8px 20px;
-    border: none;
-    border-radius: 4px;
-    background: var(--vscode-button-background, #0e639c);
-    color: var(--vscode-button-foreground, #ffffff);
-    cursor: pointer;
-    font-size: 14px;
-
-    &:hover {
-        background: var(--vscode-button-hoverBackground, #1177bb);
+    .event-feed-area {
+        width: 100%;
     }
 }
 </style>

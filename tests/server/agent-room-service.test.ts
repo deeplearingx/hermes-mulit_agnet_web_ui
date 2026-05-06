@@ -647,6 +647,30 @@ describe('Agent Room Service', () => {
       ])
     })
 
+    it('retry path does not emit task_planned', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      // Walk to revision_required (manual status updates don't emit workflow events)
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix')
+
+      // Record event count before retry workflow
+      const beforeCount = svc.listWorkflowEvents(session.id).length
+
+      await svc.runMockWorkflow(session.id, task.id)
+
+      const events = svc.listWorkflowEvents(session.id)
+      const retryEvents = events.slice(beforeCount)
+      const taskPlannedInRetry = retryEvents.filter(e => e.type === 'task_planned')
+      // Retry path must not emit task_planned
+      expect(taskPlannedInRetry).toHaveLength(0)
+    })
+
     it('duplicate workflow still throws', async () => {
       const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
       const session = svc.createSession('Test')

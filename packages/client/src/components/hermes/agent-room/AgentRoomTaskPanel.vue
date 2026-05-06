@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { AgentRoomTask, AgentRoomReview, AgentRoomWorkflowEvent, AgentRoomTaskStatus } from '@/api/hermes/agent-room'
+import type { AgentRoomTask, AgentRoomReview, AgentRoomWorkflowEvent, AgentRoomTaskStatus, AgentRoomAgent } from '@/api/hermes/agent-room'
 
 const props = defineProps<{
     tasks: AgentRoomTask[]
     reviews: AgentRoomReview[]
     workflowEvents: AgentRoomWorkflowEvent[]
+    agents: AgentRoomAgent[]
     activeTaskId?: string | null
     actionLoadingTaskId?: string | null
 }>()
@@ -86,218 +87,289 @@ function handleAction(task: AgentRoomTask, action: TaskAction) {
     }
 }
 
-function handleSelectTask(taskId: string) {
-    emit('select-task', taskId)
-}
-
-// ─── Recent Events ─────────────────────────────────────────────
-const recentEvents = computed(() =>
-    [...props.workflowEvents].sort((a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    ).slice(0, 10),
-)
-
-function formatTime(iso: string): string {
-    const d = new Date(iso)
-    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-}
-
-function eventLabel(type: string): string {
-    const map: Record<string, string> = {
-        task_created: '任务创建',
-        task_planned: '任务规划',
-        task_assigned: '任务分配',
-        task_started: '开始开发',
-        task_submitted: '提交审核',
-        review_passed: '审核通过',
-        review_rejected: '审核驳回',
-        revision_started: '开始修改',
-        delivery_started: '开始交付',
-        delivery_completed: '交付完成',
-        task_failed: '任务失败',
-        need_user_decision: '等待用户决策',
+// ─── Active Task ───────────────────────────────────────────────
+const activeTask = computed(() => {
+    if (props.activeTaskId) {
+        const found = props.tasks.find(t => t.id === props.activeTaskId)
+        if (found) return found
     }
-    return map[type] ?? type
+    return props.tasks.find(t => !['completed', 'failed'].includes(t.status)) ?? null
+})
+
+// ─── Agent Status (derived from task status) ───────────────────
+const STATUS_TO_ACTIVE_ROLE: Partial<Record<AgentRoomTaskStatus, string>> = {
+    created: 'conversation',
+    planned: 'planner',
+    assigned: 'developer',
+    in_progress: 'developer',
+    submitted_for_review: 'reviewer',
+    review_passed: 'delivery',
+    review_rejected: 'reviewer',
+    revision_required: 'developer',
+    delivering: 'delivery',
+    completed: 'delivery',
+    failed: 'developer',
+    need_user_decision: 'conversation',
+}
+
+const AGENT_ROLE_COLORS: Record<string, string> = {
+    conversation: '#3b82f6',
+    planner: '#a855f7',
+    developer: '#22c55e',
+    reviewer: '#f59e0b',
+    delivery: '#06b6d4',
+}
+
+interface AgentStatusItem {
+    id: string
+    name: string
+    role: string
+    status: 'idle' | 'active' | 'completed' | 'failed'
+    color: string
+}
+
+const agentStatuses = computed<AgentStatusItem[]>(() => {
+    const activeRole = activeTask.value
+        ? STATUS_TO_ACTIVE_ROLE[activeTask.value.status] ?? null
+        : null
+
+    return props.agents.map(agent => {
+        let status: AgentStatusItem['status'] = 'idle'
+        if (activeTask.value) {
+            if (agent.role === activeRole) {
+                status = 'active'
+            } else if (activeTask.value.status === 'completed') {
+                status = 'completed'
+            } else if (activeTask.value.status === 'failed') {
+                status = 'failed'
+            }
+        }
+        return {
+            id: agent.id,
+            name: agent.name,
+            role: agent.role,
+            status,
+            color: AGENT_ROLE_COLORS[agent.role] ?? '#94a3b8',
+        }
+    })
+})
+
+const STATUS_DOT_COLORS: Record<string, string> = {
+    idle: '#475569',
+    active: '#22c55e',
+    completed: '#22c55e',
+    failed: '#ef4444',
+}
+
+const STATUS_DOT_LABELS: Record<string, string> = {
+    idle: '待命',
+    active: '工作中',
+    completed: '已完成',
+    failed: '失败',
+}
+
+// ─── Artifacts (delivering/completed tasks) ─────────────────────
+const artifacts = computed(() => {
+    return props.tasks.filter(t =>
+        ['delivering', 'completed', 'submitted_for_review', 'review_passed'].includes(t.status),
+    )
+})
+
+function artifactIcon(status: AgentRoomTaskStatus): string {
+    if (status === 'completed') return '🎉'
+    if (status === 'delivering') return '📦'
+    if (status === 'review_passed') return '✅'
+    return '🔍'
 }
 </script>
 
 <template>
-    <div class="task-panel">
-        <div class="panel-header">
-            <span class="header-icon">📋</span>
-            <span>任务状态</span>
-            <button class="btn-create" @click="emit('create-task')">+ 新任务</button>
-        </div>
-
-        <!-- Task List -->
-        <div class="task-list">
-            <div v-if="tasks.length === 0" class="empty-tasks">
-                <span>📭</span>
-                <p>暂无任务</p>
+    <div class="info-panel">
+        <!-- Section A: Main Task -->
+        <div class="section-main-task">
+            <div class="section-header">
+                <span class="header-icon">🎯</span>
+                <span class="header-title">主任务</span>
+                <button class="btn-add" @click="emit('create-task')">+</button>
             </div>
-            <div
-                v-for="task in tasks"
-                :key="task.id"
-                class="task-card"
-                :class="{ selected: task.id === activeTaskId }"
-                @click="handleSelectTask(task.id)"
-            >
-                <div class="task-header">
-                    <span class="task-icon">{{ getStatusConfig(task.status).icon }}</span>
-                    <span class="task-title">{{ task.title }}</span>
+
+            <div v-if="activeTask" class="task-card">
+                <div class="task-card-top">
+                    <span class="task-icon">{{ getStatusConfig(activeTask.status).icon }}</span>
+                    <span class="task-title">{{ activeTask.title }}</span>
                 </div>
                 <div class="task-status-bar">
                     <span
                         class="status-badge"
-                        :style="{ background: getStatusConfig(task.status).color + '22', color: getStatusConfig(task.status).color }"
+                        :style="{ background: getStatusConfig(activeTask.status).color + '22', color: getStatusConfig(activeTask.status).color }"
                     >
-                        {{ getStatusConfig(task.status).label }}
+                        {{ getStatusConfig(activeTask.status).label }}
                     </span>
-                    <span v-if="task.revisionRound > 0" class="round-badge">
-                        修改轮次: {{ task.revisionRound }}/{{ task.maxRevisionRounds }}
+                    <span v-if="activeTask.revisionRound > 0" class="round-badge">
+                        {{ activeTask.revisionRound }}/{{ activeTask.maxRevisionRounds }}
                     </span>
                 </div>
-                <div v-if="task.description" class="task-desc">{{ task.description }}</div>
-
-                <!-- Task Actions -->
+                <div v-if="activeTask.description" class="task-desc">{{ activeTask.description }}</div>
                 <div class="task-actions">
                     <button
-                        v-for="action in getTaskActions(task)"
+                        v-for="action in getTaskActions(activeTask)"
                         :key="action.action"
-                        class="task-action-btn"
+                        class="action-btn"
                         :style="{ borderColor: action.color, color: action.color }"
-                        :disabled="actionLoadingTaskId === task.id"
-                        @click.stop="handleAction(task, action)"
+                        :disabled="actionLoadingTaskId === activeTask.id"
+                        @click="handleAction(activeTask, action)"
                     >
-                        <span v-if="actionLoadingTaskId === task.id" class="loading-spinner">⏳</span>
+                        <span v-if="actionLoadingTaskId === activeTask.id" class="loading-spinner">⏳</span>
                         {{ action.icon }} {{ action.label }}
                     </button>
                 </div>
             </div>
-        </div>
-
-        <!-- Recent Reviews -->
-        <div v-if="reviews.length > 0" class="section">
-            <div class="section-header">
-                <span>🔍 审核记录</span>
+            <div v-else class="empty-task">
+                <span>📭</span>
+                <p>暂无任务，点击 + 创建</p>
             </div>
-            <div class="review-list">
-                <div v-for="review in reviews.slice(-5).reverse()" :key="review.id" class="review-item">
-                    <span class="review-status" :class="review.status">
-                        {{ review.status === 'passed' ? '✅ 通过' : '❌ 驳回' }}
+
+            <!-- Task list (compact) -->
+            <div v-if="tasks.length > 1" class="task-list-compact">
+                <div
+                    v-for="task in tasks.filter(t => t.id !== activeTask?.id).slice(0, 4)"
+                    :key="task.id"
+                    class="task-list-item"
+                    @click="emit('select-task', task.id)"
+                >
+                    <span class="tli-icon">{{ getStatusConfig(task.status).icon }}</span>
+                    <span class="tli-title">{{ task.title }}</span>
+                    <span
+                        class="tli-badge"
+                        :style="{ color: getStatusConfig(task.status).color }"
+                    >
+                        {{ getStatusConfig(task.status).label }}
                     </span>
-                    <span v-if="review.comment" class="review-comment">{{ review.comment }}</span>
-                    <span v-else class="review-no-comment">（无审核意见）</span>
                 </div>
             </div>
         </div>
 
-        <!-- Workflow Events -->
-        <div v-if="recentEvents.length > 0" class="section">
+        <!-- Section B: Agent Status -->
+        <div class="section-agents">
             <div class="section-header">
-                <span>📡 工作流事件</span>
+                <span class="header-icon">🤖</span>
+                <span class="header-title">Agent 状态</span>
             </div>
-            <div class="event-list">
-                <div v-for="evt in recentEvents" :key="evt.id" class="event-item">
-                    <span class="event-time">{{ formatTime(evt.createdAt) }}</span>
-                    <span class="event-label">{{ eventLabel(evt.type) }}</span>
-                    <span class="event-agent">{{ evt.agentRole }}</span>
+            <div class="agent-list">
+                <div
+                    v-for="agent in agentStatuses"
+                    :key="agent.id"
+                    class="agent-item"
+                    :class="{ active: agent.status === 'active' }"
+                >
+                    <span class="agent-dot" :style="{ background: STATUS_DOT_COLORS[agent.status] }" />
+                    <span class="agent-name" :style="{ color: agent.color }">{{ agent.name }}</span>
+                    <span class="agent-role">{{ agent.role }}</span>
+                    <span class="agent-status-label">{{ STATUS_DOT_LABELS[agent.status] }}</span>
                 </div>
+            </div>
+        </div>
+
+        <!-- Section C: Artifacts -->
+        <div class="section-artifacts">
+            <div class="section-header">
+                <span class="header-icon">📦</span>
+                <span class="header-title">产出物</span>
+            </div>
+            <div v-if="artifacts.length > 0" class="artifact-list">
+                <div
+                    v-for="task in artifacts"
+                    :key="task.id"
+                    class="artifact-item"
+                >
+                    <span class="artifact-icon">{{ artifactIcon(task.status) }}</span>
+                    <span class="artifact-name">{{ task.title }}</span>
+                    <span
+                        class="artifact-status"
+                        :style="{ color: getStatusConfig(task.status).color }"
+                    >
+                        {{ getStatusConfig(task.status).label }}
+                    </span>
+                </div>
+            </div>
+            <div v-else class="empty-artifacts">
+                <span>📭</span>
+                <p>暂无产出物</p>
             </div>
         </div>
     </div>
 </template>
 
 <style scoped lang="scss">
-.task-panel {
+.info-panel {
     width: 280px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    background: var(--vscode-sideBar-background, #252526);
+    gap: 1px;
+    background: #0c1222;
+    border: 1px solid #1e293b;
+    border-radius: 6px;
     overflow-y: auto;
+    font-family: 'Courier New', monospace;
 }
 
-.panel-header {
+.section-header {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 10px 12px;
-    font-size: 12px;
+    padding: 8px 10px;
+    background: #111827;
+    border-bottom: 1px solid #1e293b;
+    font-size: 11px;
     font-weight: 600;
-    color: var(--vscode-sideBarSectionHeader-foreground, #bbbbbb);
-    border-bottom: 1px solid var(--vscode-widget-border, #3c3c3c);
+    color: #94a3b8;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-
-    .header-icon {
-        font-size: 14px;
-    }
 }
 
-.btn-create {
-    margin-left: auto;
-    padding: 2px 8px;
-    border: 1px solid var(--vscode-widget-border, #3c3c3c);
+.header-icon {
+    font-size: 12px;
+}
+
+.header-title {
+    flex: 1;
+}
+
+.btn-add {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #334155;
     border-radius: 3px;
     background: transparent;
-    color: var(--vscode-editor-foreground, #cccccc);
+    color: #94a3b8;
     cursor: pointer;
-    font-size: 11px;
+    font-size: 12px;
+    line-height: 1;
 
     &:hover {
-        background: var(--vscode-list-hoverBackground, #2a2d2e);
+        background: #1e293b;
+        color: #e2e8f0;
     }
 }
 
-.task-list {
-    padding: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.empty-tasks {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 20px;
-    color: var(--vscode-descriptionForeground, #999999);
-    font-size: 13px;
-
-    span {
-        font-size: 24px;
-    }
-
-    p {
-        margin: 0;
-    }
+// ─── Section A: Main Task ──────────────────────────────────────
+.section-main-task {
+    background: #0f1729;
 }
 
 .task-card {
-    padding: 10px;
-    border-radius: 6px;
-    background: var(--vscode-editorWidget-background, #252526);
-    border: 1px solid var(--vscode-widget-border, #3c3c3c);
-    cursor: pointer;
-    transition: border-color 0.15s;
-
-    &:hover {
-        border-color: var(--vscode-focusBorder, #007fd4);
-    }
-
-    &.selected {
-        border-color: var(--vscode-button-background, #0e639c);
-        background: rgba(14, 99, 156, 0.08);
-    }
+    padding: 8px 10px;
 }
 
-.task-header {
+.task-card-top {
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
 }
 
 .task-icon {
@@ -305,50 +377,56 @@ function eventLabel(type: string): string {
 }
 
 .task-title {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
-    color: var(--vscode-editor-foreground, #cccccc);
+    color: #e2e8f0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .task-status-bar {
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
 }
 
 .status-badge {
     font-size: 10px;
-    padding: 2px 6px;
+    padding: 1px 6px;
     border-radius: 3px;
     font-weight: 600;
 }
 
 .round-badge {
     font-size: 10px;
-    color: var(--vscode-descriptionForeground, #999999);
+    color: #64748b;
 }
 
 .task-desc {
     font-size: 11px;
-    color: var(--vscode-descriptionForeground, #999999);
-    margin-bottom: 8px;
-    line-height: 1.4;
+    color: #64748b;
+    margin-bottom: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .task-actions {
     display: flex;
-    flex-wrap: wrap;
     gap: 4px;
+    flex-wrap: wrap;
 }
 
-.task-action-btn {
+.action-btn {
     padding: 3px 8px;
     border: 1px solid;
     border-radius: 3px;
     background: transparent;
     cursor: pointer;
-    font-size: 11px;
+    font-size: 10px;
+    font-family: 'Courier New', monospace;
     transition: background 0.15s;
 
     &:hover:not(:disabled) {
@@ -359,10 +437,10 @@ function eventLabel(type: string): string {
         opacity: 0.5;
         cursor: not-allowed;
     }
+}
 
-    .loading-spinner {
-        animation: spin 1s linear infinite;
-    }
+.loading-spinner {
+    animation: spin 1s linear infinite;
 }
 
 @keyframes spin {
@@ -370,89 +448,160 @@ function eventLabel(type: string): string {
     to { transform: rotate(360deg); }
 }
 
-.section {
-    border-top: 1px solid var(--vscode-widget-border, #3c3c3c);
-    padding: 8px;
-}
-
-.section-header {
+.empty-task {
+    padding: 16px 10px;
+    text-align: center;
+    color: #475569;
     font-size: 11px;
-    font-weight: 600;
-    color: var(--vscode-sideBarSectionHeader-foreground, #bbbbbb);
-    margin-bottom: 6px;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
+
+    span {
+        font-size: 20px;
+        display: block;
+        margin-bottom: 4px;
+    }
 }
 
-.review-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+.task-list-compact {
+    border-top: 1px solid #1e293b;
+    padding: 4px 0;
 }
 
-.review-item {
+.task-list-item {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 6px;
-    border-radius: 3px;
-    background: var(--vscode-editorWidget-background, #252526);
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: background 0.15s;
+
+    &:hover {
+        background: #1e293b;
+    }
+}
+
+.tli-icon {
     font-size: 11px;
+    flex-shrink: 0;
 }
 
-.review-status {
-    font-weight: 600;
-    white-space: nowrap;
-
-    &.passed {
-        color: #81c784;
-    }
-
-    &.rejected {
-        color: #e57373;
-    }
-}
-
-.review-comment {
-    color: var(--vscode-descriptionForeground, #999999);
+.tli-title {
+    flex: 1;
+    font-size: 11px;
+    color: #94a3b8;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.review-no-comment {
-    color: var(--vscode-descriptionForeground, #666666);
-    font-style: italic;
+.tli-badge {
+    font-size: 9px;
+    flex-shrink: 0;
 }
 
-.event-list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+// ─── Section B: Agent Status ───────────────────────────────────
+.section-agents {
+    background: #0f1729;
 }
 
-.event-item {
+.agent-list {
+    padding: 4px 0;
+}
+
+.agent-item {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 3px 6px;
-    font-size: 10px;
-    color: var(--vscode-descriptionForeground, #999999);
+    padding: 4px 10px;
+    transition: background 0.15s;
+
+    &.active {
+        background: rgba(34, 197, 94, 0.06);
+    }
 }
 
-.event-time {
-    color: var(--vscode-descriptionForeground, #666666);
-    font-family: monospace;
+.agent-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.agent-item.active .agent-dot {
+    animation: pulse-dot 2s infinite;
+}
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.agent-name {
+    font-size: 11px;
+    font-weight: 600;
+    flex-shrink: 0;
+    max-width: 70px;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.event-label {
+.agent-role {
+    font-size: 10px;
+    color: #475569;
     flex: 1;
-    color: var(--vscode-editor-foreground, #cccccc);
 }
 
-.event-agent {
-    color: var(--vscode-descriptionForeground, #999999);
-    font-style: italic;
+.agent-status-label {
+    font-size: 10px;
+    color: #64748b;
+    flex-shrink: 0;
+}
+
+// ─── Section C: Artifacts ──────────────────────────────────────
+.section-artifacts {
+    background: #0f1729;
+}
+
+.artifact-list {
+    padding: 4px 0;
+}
+
+.artifact-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+}
+
+.artifact-icon {
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.artifact-name {
+    flex: 1;
+    font-size: 11px;
+    color: #94a3b8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.artifact-status {
+    font-size: 9px;
+    flex-shrink: 0;
+}
+
+.empty-artifacts {
+    padding: 16px 10px;
+    text-align: center;
+    color: #475569;
+    font-size: 11px;
+
+    span {
+        font-size: 16px;
+        display: block;
+        margin-bottom: 2px;
+    }
 }
 </style>
