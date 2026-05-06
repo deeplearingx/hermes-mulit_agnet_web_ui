@@ -69,6 +69,7 @@ export interface AgentRoomTask {
 
 export interface AgentRoomReview {
     id: string
+    sessionId: string
     taskId: string
     reviewerAgentId: string
     status: 'passed' | 'rejected'
@@ -205,6 +206,7 @@ export function addMessage(msg: Omit<AgentRoomMessage, 'id' | 'createdAt'>): Age
         createdAt: new Date().toISOString(),
     }
     store.createMessage(full as store.AgentRoomMessage)
+    store.updateSessionTimestamp(msg.sessionId)
     return full
 }
 
@@ -237,6 +239,7 @@ export function createTask(sessionId: string, title: string, description: string
         store.createTask(task as store.AgentRoomTask)
         // Emit task_created event + chat message
         emitEventAndMessage(sessionId, task.id, 'task_created', 'conversation', title)
+        store.updateSessionTimestamp(sessionId)
     })
 
     return task
@@ -294,7 +297,7 @@ export function submitReview(
     }
 
     // 1. Record the review (comment can be empty)
-    const review: AgentRoomReview & { sessionId: string } = {
+    const review: AgentRoomReview = {
         id: randomUUID(),
         sessionId,
         taskId,
@@ -346,6 +349,7 @@ export function submitReview(
         }
     })
 
+    store.updateSessionTimestamp(sessionId)
     return review
 }
 
@@ -432,6 +436,7 @@ export async function runMockWorkflow(sessionId: string, taskId: string): Promis
         // Workflow stops here at submitted_for_review.
         // Actual review must be triggered manually via ReviewDecisionModal.
     } finally {
+        store.updateSessionTimestamp(sessionId)
         runningWorkflows.delete(taskId)
     }
 }
@@ -472,6 +477,7 @@ export function retryTask(sessionId: string, taskId: string): AgentRoomTask | nu
         }
     })
 
+    store.updateSessionTimestamp(sessionId)
     return store.getTask(taskId) as AgentRoomTask | null
 }
 
@@ -492,5 +498,6 @@ export function deliverTask(sessionId: string, taskId: string): AgentRoomTask | 
         emitEventAndMessage(sessionId, taskId, 'delivery_completed', 'delivery', task.title)
     })
 
+    store.updateSessionTimestamp(sessionId)
     return store.getTask(taskId) as AgentRoomTask | null
 }

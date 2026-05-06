@@ -117,8 +117,10 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
             this.agentStates.clear()
         })
 
-        // Signal ready
-        window.dispatchEvent(new CustomEvent('agent-room:scene:ready'))
+        // Signal ready — include instanceId so Vue can scope the event
+        window.dispatchEvent(new CustomEvent('agent-room:scene:ready', {
+            detail: { instanceId: this.instanceId },
+        }))
     }
 
     // ─── Drawing ─────────────────────────────────────────────
@@ -284,8 +286,10 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
             task: TaskDisplayState | null
         }
 
+        // Guard: ignore events if this scene has no instanceId yet (not initialized)
+        if (!this.instanceId) return
         // Only process events from our own instance
-        if (this.instanceId && detail.instanceId && detail.instanceId !== this.instanceId) return
+        if (!detail.instanceId || detail.instanceId !== this.instanceId) return
 
         // Update agents
         for (const agent of detail.agents) {

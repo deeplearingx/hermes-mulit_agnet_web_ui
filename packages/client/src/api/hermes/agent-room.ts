@@ -45,6 +45,7 @@ export interface AgentRoomTask {
 // ─── Review Entity ─────────────────────────────────────────────
 export interface AgentRoomReview {
     id: string
+    sessionId: string
     taskId: string
     reviewerAgentId: string
     status: 'passed' | 'rejected'

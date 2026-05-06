@@ -116,4 +116,51 @@ describe('Hermes schema migrations', () => {
     })
     expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='session_usage_old'`).get()).toBeUndefined()
   })
+
+  it('initAllHermesTables creates all agent_room tables and indexes', async () => {
+    const { initAllHermesTables } = await import('../../packages/server/src/db/hermes/schemas')
+
+    expect(() => initAllHermesTables()).not.toThrow()
+
+    // Verify all 5 agent_room tables exist
+    const tables = [
+      'agent_room_sessions',
+      'agent_room_tasks',
+      'agent_room_reviews',
+      'agent_room_messages',
+      'agent_room_workflow_events',
+    ]
+    for (const table of tables) {
+      const row = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(table) as any
+      expect(row, `Table ${table} should exist`).toBeDefined()
+      expect(row.name).toBe(table)
+    }
+
+    // Verify all idx_ar_* indexes exist
+    const indexes = [
+      'idx_ar_tasks_session',
+      'idx_ar_tasks_status',
+      'idx_ar_reviews_session',
+      'idx_ar_reviews_task',
+      'idx_ar_messages_session',
+      'idx_ar_events_session',
+      'idx_ar_events_task',
+    ]
+    for (const idx of indexes) {
+      const row = db.prepare(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`).get(idx) as any
+      expect(row, `Index ${idx} should exist`).toBeDefined()
+      expect(row.name).toBe(idx)
+    }
+  })
+
+  it('initAllHermesTables is idempotent (no error on second call)', async () => {
+    const { initAllHermesTables } = await import('../../packages/server/src/db/hermes/schemas')
+
+    expect(() => initAllHermesTables()).not.toThrow()
+    expect(() => initAllHermesTables()).not.toThrow()
+
+    // Tables still exist
+    const row = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='agent_room_sessions'`).get() as any
+    expect(row).toBeDefined()
+  })
 })

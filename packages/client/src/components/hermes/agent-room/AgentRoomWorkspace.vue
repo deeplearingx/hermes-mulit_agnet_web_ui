@@ -120,7 +120,10 @@ onBeforeUnmount(() => {
     window.removeEventListener('agent-room:scene:ready', onSceneReady as EventListener)
 })
 
-function onSceneReady() {
+function onSceneReady(e: Event) {
+    const detail = (e as CustomEvent).detail as { instanceId?: string }
+    // Only accept ready events from our own Phaser instance
+    if (!detail.instanceId || detail.instanceId !== instanceId) return
     sceneReady = true
     pushStateToScene()
 }

@@ -198,7 +198,7 @@ export function getSession(id: string): AgentRoomSession | null {
 
 export function listSessions(): AgentRoomSession[] {
     const db = requireDb()
-    const rows = db.prepare(`SELECT * FROM ${AR_SESSIONS_TABLE} ORDER BY created_at DESC`).all() as Array<Record<string, unknown>>
+    const rows = db.prepare(`SELECT * FROM ${AR_SESSIONS_TABLE} ORDER BY updated_at DESC`).all() as Array<Record<string, unknown>>
     return rows.map(mapSessionRow)
 }
 

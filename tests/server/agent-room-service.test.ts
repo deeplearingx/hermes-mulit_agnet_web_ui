@@ -415,4 +415,96 @@ describe('Agent Room Service', () => {
       )
     })
   })
+
+  // ─── submitReview returns sessionId ──────────────────────────
+
+  describe('submitReview returns sessionId', () => {
+    it('review object includes sessionId', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+
+      const review = svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      expect(review).not.toBeNull()
+      expect(review!.sessionId).toBe(session.id)
+    })
+  })
+
+  // ─── listSessions orders by updated_at DESC ──────────────────
+
+  describe('listSessions ordering', () => {
+    it('most recently active session appears first', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const s1 = svc.createSession('Session 1')
+      // Small delay to ensure different timestamps
+      await new Promise(r => setTimeout(r, 10))
+      const s2 = svc.createSession('Session 2')
+
+      // s2 should be first (most recent)
+      const all = svc.listSessions()
+      expect(all[0].id).toBe(s2.id)
+      expect(all[1].id).toBe(s1.id)
+
+      // Now touch s1 (create a task) — should bump it to first
+      svc.createTask(s1.id, 'Task', '')
+      const all2 = svc.listSessions()
+      expect(all2[0].id).toBe(s1.id)
+    })
+  })
+
+  // ─── updateSessionTimestamp after content actions ────────────
+
+  describe('updateSessionTimestamp after content actions', () => {
+    it('addMessage bumps session updated_at', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const before = svc.getSession(session.id)!.updatedAt
+
+      await new Promise(r => setTimeout(r, 10))
+      svc.addMessage({ sessionId: session.id, senderId: 'user', senderName: 'User', senderRole: 'user', type: 'user_message', content: 'Hi' })
+
+      const after = svc.getSession(session.id)!.updatedAt
+      expect(after > before).toBe(true)
+    })
+
+    it('retryTask bumps session updated_at', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix')
+
+      const before = svc.getSession(session.id)!.updatedAt
+      await new Promise(r => setTimeout(r, 10))
+      svc.retryTask(session.id, task.id)
+
+      const after = svc.getSession(session.id)!.updatedAt
+      expect(after > before).toBe(true)
+    })
+
+    it('deliverTask bumps session updated_at', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+
+      const before = svc.getSession(session.id)!.updatedAt
+      await new Promise(r => setTimeout(r, 10))
+      svc.deliverTask(session.id, task.id)
+
+      const after = svc.getSession(session.id)!.updatedAt
+      expect(after > before).toBe(true)
+    })
+  })
 })
