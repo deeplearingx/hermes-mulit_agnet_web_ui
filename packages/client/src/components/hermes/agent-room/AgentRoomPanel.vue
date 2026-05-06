@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import { useAgentRoomStore } from '@/stores/hermes/agent-room'
 import type { AgentRoomTask } from '@/api/hermes/agent-room'
 import AgentRoomWorkspace from './AgentRoomWorkspace.vue'
@@ -20,15 +20,19 @@ const showReviewDecision = ref(false)
 const reviewTargetTask = ref<AgentRoomTask | null>(null)
 
 // ─── Session Management ────────────────────────────────────────
-onMounted(async () => {
-    await store.loadSessions()
-})
+// NOTE: loadSessions is called once in AgentRoomView.vue onMounted;
+// do NOT duplicate it here.
 
 async function handleCreateSession() {
     const name = newSessionName.value.trim() || `会话 ${store.sessions.length + 1}`
-    await store.createSession(name)
-    newSessionName.value = ''
-    showNewSession.value = false
+    try {
+        await store.createSession(name)
+        // Only close form on success
+        newSessionName.value = ''
+        showNewSession.value = false
+    } catch {
+        // Error already set in store; keep form open for retry
+    }
 }
 
 async function handleSelectSession(sessionId: string) {
@@ -100,16 +104,19 @@ function handleSelectTask(taskId: string) {
                     {{ session.name }}
                 </button>
             </div>
-            <button class="btn-new-session" @click="showNewSession = !showNewSession">
+            <button class="btn-new-session" :disabled="store.creatingSession" @click="showNewSession = !showNewSession">
                 + 新建会话
             </button>
             <div v-if="showNewSession" class="new-session-form">
                 <input
                     v-model="newSessionName"
                     placeholder="会话名称"
+                    :disabled="store.creatingSession"
                     @keydown.enter="handleCreateSession"
                 />
-                <button @click="handleCreateSession">创建</button>
+                <button :disabled="store.creatingSession" @click="handleCreateSession">
+                    {{ store.creatingSession ? '创建中...' : '创建' }}
+                </button>
             </div>
         </div>
 
@@ -166,8 +173,8 @@ function handleSelectTask(taskId: string) {
             <div class="empty-icon">🤖</div>
             <h2>Agent 工作室</h2>
             <p>选择一个会话或创建新会话开始工作</p>
-            <button class="btn-primary" @click="handleCreateSession">
-                创建第一个会话
+            <button class="btn-primary" :disabled="store.creatingSession" @click="handleCreateSession">
+                {{ store.creatingSession ? '创建中...' : '创建第一个会话' }}
             </button>
         </div>
 

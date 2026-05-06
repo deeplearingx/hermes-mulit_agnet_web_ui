@@ -44,6 +44,8 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     const error = ref<string | null>(null)
     const activeTaskId = ref<string | null>(null)
     const actionLoadingTaskId = ref<string | null>(null)
+    const creatingSession = ref(false)
+    let sessionsLoadSeq = 0
 
     // ─── Computed ──────────────────────────────────────────────
     const currentSession = computed(() =>
@@ -70,22 +72,42 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
 
     // ─── Session Actions ───────────────────────────────────────
     async function loadSessions() {
+        const seq = ++sessionsLoadSeq
         try {
-            sessions.value = await apiListSessions()
+            const result = await apiListSessions()
+            // Stale request guard: discard if a newer loadSessions was issued
+            if (seq !== sessionsLoadSeq) return
+            sessions.value = result
         } catch (err: any) {
+            if (seq !== sessionsLoadSeq) return
             error.value = err.message
         }
     }
 
     async function createSession(name: string) {
+        creatingSession.value = true
+        error.value = null
         try {
             const session = await apiCreateSession(name)
-            sessions.value.push(session)
+            // Dedup insert: skip if session id already present
+            if (!sessions.value.some(s => s.id === session.id)) {
+                sessions.value.push(session)
+            }
             currentSessionId.value = session.id
+            activeTaskId.value = null
+            // Clear stale data from previous session
+            messages.value = []
+            tasks.value = []
+            reviews.value = []
+            workflowEvents.value = []
+            // Load data for the newly created session
+            await refreshCurrentSession()
             return session
         } catch (err: any) {
             error.value = err.message
             throw err
+        } finally {
+            creatingSession.value = false
         }
     }
 
@@ -273,6 +295,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         error.value = null
         activeTaskId.value = null
         actionLoadingTaskId.value = null
+        creatingSession.value = false
     }
 
     return {
@@ -288,6 +311,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         error,
         activeTaskId,
         actionLoadingTaskId,
+        creatingSession,
         // Computed
         currentSession,
         activeTask,
