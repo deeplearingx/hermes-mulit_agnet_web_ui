@@ -5,12 +5,19 @@ import type { AgentRoomAgent, AgentRoomTask, AgentRoomMessage, AgentRoomTaskStat
 import AgentRoomMessageList from './AgentRoomMessageList.vue'
 import AgentRoomTaskPanel from './AgentRoomTaskPanel.vue'
 import AgentRoomAgentList from './AgentRoomAgentList.vue'
+import CreateTaskModal from './CreateTaskModal.vue'
+import ReviewDecisionModal from './ReviewDecisionModal.vue'
 
 const store = useAgentRoomStore()
 
 const inputText = ref('')
 const showNewSession = ref(false)
 const newSessionName = ref('')
+
+// ─── Modal State ───────────────────────────────────────────────
+const showCreateTask = ref(false)
+const showReviewDecision = ref(false)
+const reviewTargetTask = ref<AgentRoomTask | null>(null)
 
 // ─── Session Management ────────────────────────────────────────
 onMounted(async () => {
@@ -44,21 +51,25 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 // ─── Task Actions ──────────────────────────────────────────────
-async function handleCreateTask() {
-    if (!store.currentSessionId) return
-    const title = prompt('输入任务标题：')
-    if (!title) return
-    const description = prompt('输入任务描述（可选）：') ?? ''
-    await store.addTask(title, description || undefined)
+async function handleCreateTaskSubmit(data: { title: string; description: string }) {
+    await store.addTask(data.title, data.description || undefined)
 }
 
 async function handleRunWorkflow(taskId: string) {
     await store.runMockWorkflow(taskId)
 }
 
-async function handleSubmitReview(taskId: string, status: 'passed' | 'rejected') {
-    const comment = status === 'rejected' ? (prompt('输入审核意见（可为空）：') ?? '') : ''
-    await store.submitTaskReview(taskId, 'reviewer', status, comment)
+function handleOpenReview(taskId: string) {
+    const task = store.tasks.find(t => t.id === taskId)
+    if (!task) return
+    reviewTargetTask.value = task
+    showReviewDecision.value = true
+}
+
+async function handleReviewSubmit(data: { status: 'passed' | 'rejected'; comment: string }) {
+    if (!reviewTargetTask.value) return
+    await store.submitTaskReview(reviewTargetTask.value.id, 'reviewer', data.status, data.comment)
+    reviewTargetTask.value = null
 }
 
 async function handleRetryTask(taskId: string) {
@@ -127,9 +138,9 @@ async function handleDeliverTask(taskId: string) {
                 :tasks="store.tasks"
                 :reviews="store.reviews"
                 :workflow-events="store.workflowEvents"
-                @create-task="handleCreateTask"
+                @create-task="showCreateTask = true"
                 @run-workflow="handleRunWorkflow"
-                @submit-review="handleSubmitReview"
+                @open-review="handleOpenReview"
                 @retry-task="handleRetryTask"
                 @deliver-task="handleDeliverTask"
             />
@@ -144,6 +155,21 @@ async function handleDeliverTask(taskId: string) {
                 创建第一个会话
             </button>
         </div>
+
+        <!-- Modals -->
+        <CreateTaskModal
+            :visible="showCreateTask"
+            @close="showCreateTask = false"
+            @submit="handleCreateTaskSubmit"
+        />
+        <ReviewDecisionModal
+            :visible="showReviewDecision"
+            :task-title="reviewTargetTask?.title ?? ''"
+            :revision-round="reviewTargetTask?.revisionRound ?? 0"
+            :max-revision-rounds="reviewTargetTask?.maxRevisionRounds ?? 3"
+            @close="showReviewDecision = false; reviewTargetTask = null"
+            @submit="handleReviewSubmit"
+        />
     </div>
 </template>
 

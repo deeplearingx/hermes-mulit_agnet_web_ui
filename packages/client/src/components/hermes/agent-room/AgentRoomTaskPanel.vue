@@ -11,7 +11,7 @@ const props = defineProps<{
 const emit = defineEmits<{
     (e: 'create-task'): void
     (e: 'run-workflow', taskId: string): void
-    (e: 'submit-review', taskId: string, status: 'passed' | 'rejected'): void
+    (e: 'open-review', taskId: string): void
     (e: 'retry-task', taskId: string): void
     (e: 'deliver-task', taskId: string): void
 }>()
@@ -40,7 +40,7 @@ function getStatusConfig(status: AgentRoomTaskStatus) {
 interface TaskAction {
     label: string
     icon: string
-    action: 'run-workflow' | 'submit-review-passed' | 'submit-review-rejected' | 'retry' | 'deliver'
+    action: 'run-workflow' | 'open-review' | 'retry' | 'deliver'
     color: string
 }
 
@@ -51,19 +51,16 @@ function getTaskActions(task: AgentRoomTask): TaskAction[] {
             actions.push({ label: '启动工作流', icon: '🚀', action: 'run-workflow', color: '#0e639c' })
             break
         case 'submitted_for_review':
-            actions.push({ label: '审核通过', icon: '✅', action: 'submit-review-passed', color: '#388e3c' })
-            actions.push({ label: '打回修改', icon: '↩️', action: 'submit-review-rejected', color: '#d32f2f' })
+            actions.push({ label: '审核', icon: '🔍', action: 'open-review', color: '#ffb74d' })
             break
         case 'review_passed':
             actions.push({ label: '开始交付', icon: '📦', action: 'deliver', color: '#0e639c' })
             break
-        case 'review_rejected':
         case 'revision_required':
             actions.push({ label: '重新开发', icon: '🔄', action: 'retry', color: '#f57c00' })
             break
         case 'need_user_decision':
             actions.push({ label: '继续修改', icon: '🔄', action: 'retry', color: '#f57c00' })
-            actions.push({ label: '放弃任务', icon: '💀', action: 'submit-review-rejected', color: '#d32f2f' })
             break
         case 'failed':
             actions.push({ label: '重新开始', icon: '🔄', action: 'retry', color: '#f57c00' })
@@ -77,11 +74,8 @@ function handleAction(task: AgentRoomTask, action: TaskAction) {
         case 'run-workflow':
             emit('run-workflow', task.id)
             break
-        case 'submit-review-passed':
-            emit('submit-review', task.id, 'passed')
-            break
-        case 'submit-review-rejected':
-            emit('submit-review', task.id, 'rejected')
+        case 'open-review':
+            emit('open-review', task.id)
             break
         case 'retry':
             emit('retry-task', task.id)

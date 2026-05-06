@@ -90,7 +90,7 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks', async (ctx) =>
     ctx.body = task
 })
 
-// Update task status
+// Update task status (with session boundary check)
 agentRoomRoutes.patch('/api/agent-room/sessions/:sessionId/tasks/:taskId/status', async (ctx) => {
     const { status } = ctx.request.body as { status?: string }
     if (!status) {
@@ -99,12 +99,19 @@ agentRoomRoutes.patch('/api/agent-room/sessions/:sessionId/tasks/:taskId/status'
         return
     }
     try {
-        const task = agentRoomService.updateTaskStatus(ctx.params.taskId, status as any)
-        if (!task) {
+        // Session boundary check
+        const existing = agentRoomService.getTask(ctx.params.taskId)
+        if (!existing) {
             ctx.status = 404
             ctx.body = { error: 'Task not found' }
             return
         }
+        if (existing.sessionId !== ctx.params.sessionId) {
+            ctx.status = 403
+            ctx.body = { error: 'Task does not belong to this session' }
+            return
+        }
+        const task = agentRoomService.updateTaskStatus(ctx.params.taskId, status as any)
         ctx.body = task
     } catch (err: any) {
         ctx.status = 400
@@ -126,42 +133,58 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/review',
         ctx.body = { error: 'reviewerAgentId and status are required' }
         return
     }
-    const review = agentRoomService.submitReview(
-        ctx.params.taskId,
-        reviewerAgentId,
-        status,
-        comment ?? '',
-    )
-    if (!review) {
-        ctx.status = 404
-        ctx.body = { error: 'Task not found' }
-        return
+    try {
+        const review = agentRoomService.submitReview(
+            ctx.params.sessionId,
+            ctx.params.taskId,
+            reviewerAgentId,
+            status,
+            comment ?? '',
+        )
+        if (!review) {
+            ctx.status = 404
+            ctx.body = { error: 'Task not found' }
+            return
+        }
+        ctx.body = review
+    } catch (err: any) {
+        ctx.status = 400
+        ctx.body = { error: err.message }
     }
-    ctx.body = review
 })
 
 // ─── Task Actions ──────────────────────────────────────────────
 
 // Retry task
 agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/retry', async (ctx) => {
-    const task = agentRoomService.retryTask(ctx.params.taskId)
-    if (!task) {
-        ctx.status = 404
-        ctx.body = { error: 'Task not found' }
-        return
+    try {
+        const task = agentRoomService.retryTask(ctx.params.sessionId, ctx.params.taskId)
+        if (!task) {
+            ctx.status = 404
+            ctx.body = { error: 'Task not found' }
+            return
+        }
+        ctx.body = task
+    } catch (err: any) {
+        ctx.status = 400
+        ctx.body = { error: err.message }
     }
-    ctx.body = task
 })
 
 // Deliver task
 agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/deliver', async (ctx) => {
-    const task = agentRoomService.deliverTask(ctx.params.sessionId, ctx.params.taskId)
-    if (!task) {
-        ctx.status = 404
-        ctx.body = { error: 'Task not found' }
-        return
+    try {
+        const task = agentRoomService.deliverTask(ctx.params.sessionId, ctx.params.taskId)
+        if (!task) {
+            ctx.status = 404
+            ctx.body = { error: 'Task not found' }
+            return
+        }
+        ctx.body = task
+    } catch (err: any) {
+        ctx.status = 400
+        ctx.body = { error: err.message }
     }
-    ctx.body = task
 })
 
 // Run mock workflow

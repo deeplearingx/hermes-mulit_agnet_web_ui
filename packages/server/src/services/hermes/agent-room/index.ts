@@ -3,6 +3,7 @@
 // Manages sessions, tasks, reviews, messages, and workflow events.
 
 import { randomUUID } from 'node:crypto'
+import { buildMessageFromEvent } from './event-adapter'
 
 // ─── Types ─────────────────────────────────────────────────────
 export type AgentRoomTaskStatus =
@@ -106,6 +107,8 @@ export interface AgentRoomWorkflowEvent {
 const MAX_REVISION_ROUNDS = 3
 
 // ─── Status Transition Rules ───────────────────────────────────
+// review_rejected is a TRANSIENT state — submitReview always immediately
+// transitions it to either revision_required or need_user_decision.
 const VALID_TRANSITIONS: Record<AgentRoomTaskStatus, AgentRoomTaskStatus[]> = {
     created: ['planned'],
     planned: ['assigned'],
@@ -113,7 +116,7 @@ const VALID_TRANSITIONS: Record<AgentRoomTaskStatus, AgentRoomTaskStatus[]> = {
     in_progress: ['submitted_for_review', 'failed'],
     submitted_for_review: ['review_passed', 'review_rejected'],
     review_passed: ['delivering'],
-    review_rejected: ['revision_required', 'need_user_decision', 'in_progress'],
+    review_rejected: ['revision_required', 'need_user_decision'],
     revision_required: ['in_progress'],
     delivering: ['completed', 'failed'],
     completed: [],
@@ -127,6 +130,35 @@ const tasks = new Map<string, AgentRoomTask>()
 const reviews = new Map<string, AgentRoomReview[]>()
 const messages = new Map<string, AgentRoomMessage[]>()
 const workflowEvents = new Map<string, AgentRoomWorkflowEvent[]>()
+
+// ─── Session Boundary Helper ───────────────────────────────────
+function assertTaskInSession(taskId: string, sessionId: string): AgentRoomTask {
+    const task = tasks.get(taskId)
+    if (!task) throw new Error(`Task not found: ${taskId}`)
+    if (task.sessionId !== sessionId) {
+        throw new Error(`Task ${taskId} belongs to session ${task.sessionId}, not ${sessionId}`)
+    }
+    return task
+}
+
+// ─── Event + Message Helper ────────────────────────────────────
+// Emits a workflow event AND produces the corresponding chat message.
+function emitEventAndMessage(
+    sessionId: string,
+    taskId: string,
+    type: AgentRoomWorkflowEventType,
+    agentRole: AgentRoomRole,
+    taskTitle: string,
+    payload?: Record<string, unknown>,
+): { event: AgentRoomWorkflowEvent; message: AgentRoomMessage } {
+    const event = addWorkflowEvent(sessionId, taskId, type, agentRole, agentRole, payload)
+    const adapted = buildMessageFromEvent(type, agentRole, taskTitle, taskId, payload)
+    const message = addMessage({
+        sessionId,
+        ...adapted,
+    })
+    return { event, message }
+}
 
 // ─── Session CRUD ──────────────────────────────────────────────
 export function createSession(name: string): AgentRoomSession {
@@ -229,15 +261,30 @@ export function listReviews(sessionId: string): AgentRoomReview[] {
     return result
 }
 
+/**
+ * Submit a review for a task.
+ * - passed:  submitted_for_review → review_passed
+ * - rejected: submitted_for_review → review_rejected → (revision_required | need_user_decision)
+ *
+ * reviewComment is allowed to be empty.
+ * revisionRound is incremented when entering revision_required.
+ * When revisionRound would exceed maxRevisionRounds, transitions to need_user_decision instead.
+ */
 export function submitReview(
+    sessionId: string,
     taskId: string,
     reviewerAgentId: string,
     status: 'passed' | 'rejected',
     comment: string,
 ): AgentRoomReview | null {
-    const task = tasks.get(taskId)
-    if (!task) return null
+    const task = assertTaskInSession(taskId, sessionId)
 
+    // Only allow review when task is in submitted_for_review
+    if (task.status !== 'submitted_for_review') {
+        throw new Error(`Cannot review task in status "${task.status}". Expected: submitted_for_review`)
+    }
+
+    // 1. Record the review (comment can be empty)
     const review: AgentRoomReview = {
         id: randomUUID(),
         taskId,
@@ -246,20 +293,37 @@ export function submitReview(
         comment,
         createdAt: new Date().toISOString(),
     }
-
     const list = reviews.get(taskId) ?? []
     list.push(review)
     reviews.set(taskId, list)
 
-    // Auto-advance task based on review result
     if (status === 'passed') {
+        // 2a. submitted_for_review → review_passed
         updateTaskStatus(taskId, 'review_passed')
+        emitEventAndMessage(sessionId, taskId, 'review_passed', 'reviewer', task.title, { comment })
     } else {
-        // Check revision round limit
-        if (task.revisionRound >= task.maxRevisionRounds) {
+        // 2b. submitted_for_review → review_rejected (transient)
+        updateTaskStatus(taskId, 'review_rejected')
+        emitEventAndMessage(sessionId, taskId, 'review_rejected', 'reviewer', task.title, {
+            comment,
+            revisionRound: task.revisionRound,
+        })
+
+        // 3. Check revision round limit
+        // revisionRound will be incremented when entering revision_required
+        if (task.revisionRound + 1 > task.maxRevisionRounds) {
+            // Exceeded max rounds → need_user_decision
             updateTaskStatus(taskId, 'need_user_decision')
+            emitEventAndMessage(sessionId, taskId, 'need_user_decision', 'reviewer', task.title, {
+                revisionRound: task.revisionRound,
+                maxRevisionRounds: task.maxRevisionRounds,
+            })
         } else {
-            updateTaskStatus(taskId, 'review_rejected')
+            // Within limit → revision_required (increments revisionRound)
+            updateTaskStatus(taskId, 'revision_required')
+            emitEventAndMessage(sessionId, taskId, 'revision_started', 'developer', task.title, {
+                revisionRound: task.revisionRound,
+            })
         }
     }
 
@@ -296,121 +360,90 @@ export function addWorkflowEvent(
 }
 
 // ─── Workflow Engine (v1 mock) ─────────────────────────────────
-// Simulates the full agent workflow with mock responses
+// Simulates the full agent workflow with mock responses.
+// All messages are produced via the event adapter — no direct addMessage calls.
 export async function runMockWorkflow(sessionId: string, taskId: string): Promise<void> {
-    const task = tasks.get(taskId)
-    if (!task) throw new Error('Task not found')
+    const task = assertTaskInSession(taskId, sessionId)
 
     const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 
     // Step 1: Conversation Agent receives
-    addMessage({
-        sessionId,
-        senderId: 'conversation',
-        senderName: '会话 Agent',
-        senderRole: 'conversation',
-        type: 'agent_message',
-        content: `收到任务需求：${task.title}。正在转交规划 Agent 处理。`,
-        metadata: { taskId, event: 'task_created' },
-    })
-    addWorkflowEvent(sessionId, taskId, 'task_created', 'conversation', 'conversation')
     updateTaskStatus(taskId, 'planned')
+    emitEventAndMessage(sessionId, taskId, 'task_created', 'conversation', task.title)
     await delay(300)
 
     // Step 2: Planner Agent plans
-    addMessage({
-        sessionId,
-        senderId: 'planner',
-        senderName: '规划 Agent',
-        senderRole: 'planner',
-        type: 'agent_message',
-        content: `已分析任务「${task.title}」，制定执行计划如下：\n1. 需求分析\n2. 方案设计\n3. 编码实现\n4. 测试验证`,
-        metadata: { taskId, event: 'task_planned' },
-    })
-    addWorkflowEvent(sessionId, taskId, 'task_planned', 'planner', 'planner')
     updateTaskStatus(taskId, 'assigned')
+    emitEventAndMessage(sessionId, taskId, 'task_planned', 'planner', task.title)
     await delay(300)
 
     // Step 3: Developer starts
-    addMessage({
-        sessionId,
-        senderId: 'developer',
-        senderName: '开发 Agent',
-        senderRole: 'developer',
-        type: 'agent_message',
-        content: '已接收任务，开始执行开发工作...',
-        metadata: { taskId, event: 'task_assigned' },
-    })
-    addWorkflowEvent(sessionId, taskId, 'task_assigned', 'developer', 'developer')
     updateTaskStatus(taskId, 'in_progress')
+    emitEventAndMessage(sessionId, taskId, 'task_assigned', 'developer', task.title)
     await delay(500)
 
     // Step 4: Developer submits for review
-    addMessage({
-        sessionId,
-        senderId: 'developer',
-        senderName: '开发 Agent',
-        senderRole: 'developer',
-        type: 'agent_message',
-        content: '开发完成，提交审核。',
-        metadata: { taskId, event: 'task_submitted' },
-    })
-    addWorkflowEvent(sessionId, taskId, 'task_started', 'developer', 'developer')
     updateTaskStatus(taskId, 'submitted_for_review')
-    addWorkflowEvent(sessionId, taskId, 'task_submitted', 'developer', 'developer')
+    emitEventAndMessage(sessionId, taskId, 'task_started', 'developer', task.title)
+    emitEventAndMessage(sessionId, taskId, 'task_submitted', 'developer', task.title)
     await delay(300)
 
-    // Step 5: Reviewer reviews
-    addMessage({
-        sessionId,
-        senderId: 'reviewer',
-        senderName: '审核 Agent',
-        senderRole: 'reviewer',
-        type: 'agent_message',
-        content: `正在审核任务「${task.title}」的实现...`,
-        metadata: { taskId },
-    })
+    // Step 5: Reviewer reviews (mock always passes)
+    updateTaskStatus(taskId, 'review_passed')
+    emitEventAndMessage(sessionId, taskId, 'review_passed', 'reviewer', task.title)
 }
 
 // ─── Retry / Deliver ───────────────────────────────────────────
-export function retryTask(taskId: string): AgentRoomTask | null {
-    const task = tasks.get(taskId)
-    if (!task) return null
+
+/**
+ * Retry a task: transitions from a retryable status to in_progress.
+ * Retryable statuses: revision_required, need_user_decision, failed.
+ * Note: review_rejected is NOT retryable — it's a transient state that
+ * submitReview immediately transitions to revision_required or need_user_decision.
+ */
+export function retryTask(sessionId: string, taskId: string): AgentRoomTask | null {
+    const task = assertTaskInSession(taskId, sessionId)
 
     // Validate: only retryable statuses can be retried
     const retryableStatuses: AgentRoomTaskStatus[] = [
-        'review_rejected', 'revision_required', 'need_user_decision', 'failed',
+        'revision_required', 'need_user_decision', 'failed',
     ]
     if (!retryableStatuses.includes(task.status)) {
         throw new Error(`Cannot retry task in status "${task.status}". Expected one of: ${retryableStatuses.join(', ')}`)
     }
 
+    // Save old status BEFORE mutation (updateTaskStatus modifies task in-place)
+    const oldStatus = task.status
+
     // Use state machine to transition to in_progress
-    return updateTaskStatus(taskId, 'in_progress')
+    const result = updateTaskStatus(taskId, 'in_progress')
+
+    // Emit appropriate event based on the ORIGINAL status
+    if (oldStatus === 'revision_required' || oldStatus === 'need_user_decision') {
+        emitEventAndMessage(sessionId, taskId, 'revision_started', 'developer', task.title, {
+            revisionRound: task.revisionRound,
+        })
+    } else if (oldStatus === 'failed') {
+        emitEventAndMessage(sessionId, taskId, 'task_started', 'developer', task.title)
+    }
+
+    return result
 }
 
+/**
+ * Deliver a task: review_passed → delivering → completed.
+ * All messages produced via event adapter.
+ */
 export function deliverTask(sessionId: string, taskId: string): AgentRoomTask | null {
-    const task = tasks.get(taskId)
-    if (!task) return null
+    const task = assertTaskInSession(taskId, sessionId)
 
     // Transition to delivering via state machine
-    let result = updateTaskStatus(taskId, 'delivering')
-
-    // Add delivery message
-    addMessage({
-        sessionId,
-        senderId: 'delivery',
-        senderName: '交付 Agent',
-        senderRole: 'delivery',
-        type: 'final_delivery',
-        content: `任务「${task.title}」已完成交付。`,
-        metadata: { taskId, event: 'delivery_completed' },
-    })
-    addWorkflowEvent(sessionId, taskId, 'delivery_started', 'delivery', 'delivery')
+    updateTaskStatus(taskId, 'delivering')
+    emitEventAndMessage(sessionId, taskId, 'delivery_started', 'delivery', task.title)
 
     // Complete via state machine
-    result = updateTaskStatus(taskId, 'completed')
-    addWorkflowEvent(sessionId, taskId, 'delivery_completed', 'delivery', 'delivery')
+    const result = updateTaskStatus(taskId, 'completed')
+    emitEventAndMessage(sessionId, taskId, 'delivery_completed', 'delivery', task.title)
 
     return result
 }
