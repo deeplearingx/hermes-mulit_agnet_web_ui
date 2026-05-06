@@ -2,6 +2,7 @@
 import { ref, watch, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useAgentRoomStore } from '@/stores/hermes/agent-room'
 import type { AgentRoomTaskStatus } from '@/api/hermes/agent-room'
+import type { AgentRoomOfficeScene } from './scenes/AgentRoomOfficeScene'
 
 const store = useAgentRoomStore()
 const containerRef = ref<HTMLDivElement>()
@@ -102,6 +103,12 @@ onMounted(async () => {
         },
         banner: false,
         audio: { noAudio: true },
+    })
+
+    // Bind instanceId to the Phaser scene after it's created
+    queueMicrotask(() => {
+        const scene = game?.scene.getScene('AgentRoomOfficeScene') as AgentRoomOfficeScene | undefined
+        scene?.setInstanceId(instanceId)
     })
 })
 

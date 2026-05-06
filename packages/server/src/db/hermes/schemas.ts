@@ -230,6 +230,79 @@ export const GC_ARTIFACTS_SCHEMA: Record<string, string> = {
 }
 
 // ============================================================================
+// Agent Room (services/hermes/agent-room/index.ts)
+// ============================================================================
+
+export const AR_SESSIONS_TABLE = 'agent_room_sessions'
+export const AR_SESSIONS_SCHEMA: Record<string, string> = {
+    id: 'TEXT PRIMARY KEY',
+    name: 'TEXT NOT NULL',
+    created_at: 'TEXT NOT NULL',
+    updated_at: 'TEXT NOT NULL',
+}
+
+export const AR_TASKS_TABLE = 'agent_room_tasks'
+export const AR_TASKS_SCHEMA: Record<string, string> = {
+    id: 'TEXT PRIMARY KEY',
+    session_id: 'TEXT NOT NULL',
+    title: 'TEXT NOT NULL',
+    description: "TEXT NOT NULL DEFAULT ''",
+    assigned_agent_id: 'TEXT',
+    status: "TEXT NOT NULL DEFAULT 'created'",
+    parent_task_id: 'TEXT',
+    revision_round: 'INTEGER NOT NULL DEFAULT 0',
+    max_revision_rounds: 'INTEGER NOT NULL DEFAULT 3',
+    created_at: 'TEXT NOT NULL',
+    updated_at: 'TEXT NOT NULL',
+}
+
+export const AR_REVIEWS_TABLE = 'agent_room_reviews'
+export const AR_REVIEWS_SCHEMA: Record<string, string> = {
+    id: 'TEXT PRIMARY KEY',
+    session_id: 'TEXT NOT NULL',
+    task_id: 'TEXT NOT NULL',
+    reviewer_agent_id: 'TEXT NOT NULL',
+    status: "TEXT NOT NULL DEFAULT 'passed'",
+    comment: "TEXT NOT NULL DEFAULT ''",
+    created_at: 'TEXT NOT NULL',
+}
+
+export const AR_MESSAGES_TABLE = 'agent_room_messages'
+export const AR_MESSAGES_SCHEMA: Record<string, string> = {
+    id: 'TEXT PRIMARY KEY',
+    session_id: 'TEXT NOT NULL',
+    sender_id: 'TEXT NOT NULL',
+    sender_name: 'TEXT NOT NULL',
+    sender_role: 'TEXT NOT NULL',
+    type: 'TEXT NOT NULL',
+    content: 'TEXT NOT NULL',
+    metadata: 'TEXT',
+    created_at: 'TEXT NOT NULL',
+}
+
+export const AR_WORKFLOW_EVENTS_TABLE = 'agent_room_workflow_events'
+export const AR_WORKFLOW_EVENTS_SCHEMA: Record<string, string> = {
+    id: 'TEXT PRIMARY KEY',
+    session_id: 'TEXT NOT NULL',
+    task_id: 'TEXT NOT NULL',
+    type: 'TEXT NOT NULL',
+    agent_id: 'TEXT NOT NULL',
+    agent_role: 'TEXT NOT NULL',
+    payload: 'TEXT',
+    created_at: 'TEXT NOT NULL',
+}
+
+export const AR_INDEXES = [
+    'CREATE INDEX IF NOT EXISTS idx_ar_tasks_session ON agent_room_tasks(session_id)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_tasks_status ON agent_room_tasks(session_id, status)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_reviews_session ON agent_room_reviews(session_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_reviews_task ON agent_room_reviews(task_id)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_messages_session ON agent_room_messages(session_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_events_session ON agent_room_workflow_events(session_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_events_task ON agent_room_workflow_events(task_id)',
+]
+
+// ============================================================================
 // Unified Initializer
 // ============================================================================
 
@@ -413,5 +486,15 @@ export function initAllHermesTables(): void {
     db.exec(`ALTER TABLE ${GC_ROOM_MEMBERS_TABLE}_new RENAME TO ${GC_ROOM_MEMBERS_TABLE}`)
   } catch {
     // Table already has correct schema or migration failed
+  }
+
+  // Agent Room tables
+  ensureTable(AR_SESSIONS_TABLE, AR_SESSIONS_SCHEMA)
+  ensureTable(AR_TASKS_TABLE, AR_TASKS_SCHEMA)
+  ensureTable(AR_REVIEWS_TABLE, AR_REVIEWS_SCHEMA)
+  ensureTable(AR_MESSAGES_TABLE, AR_MESSAGES_SCHEMA)
+  ensureTable(AR_WORKFLOW_EVENTS_TABLE, AR_WORKFLOW_EVENTS_SCHEMA)
+  for (const idx of AR_INDEXES) {
+    try { db.exec(idx) } catch { /* ignore */ }
   }
 }

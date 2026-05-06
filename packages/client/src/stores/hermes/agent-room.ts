@@ -46,6 +46,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     const actionLoadingTaskId = ref<string | null>(null)
     const creatingSession = ref(false)
     let sessionsLoadSeq = 0
+    let sessionDataLoadSeq = 0
 
     // ─── Computed ──────────────────────────────────────────────
     const currentSession = computed(() =>
@@ -112,25 +113,55 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     }
 
     async function selectSession(sessionId: string) {
+        const seq = ++sessionDataLoadSeq
         currentSessionId.value = sessionId
         activeTaskId.value = null
-        await Promise.all([
-            loadMessages(sessionId),
-            loadTasks(sessionId),
-            loadReviews(sessionId),
-            loadWorkflowEvents(sessionId),
-        ])
+        error.value = null
+
+        try {
+            const [nextMessages, nextTasks, nextReviews, nextWorkflowEvents] = await Promise.all([
+                apiListMessages(sessionId),
+                apiListTasks(sessionId),
+                apiListReviews(sessionId),
+                apiListWorkflowEvents(sessionId),
+            ])
+
+            if (seq !== sessionDataLoadSeq || currentSessionId.value !== sessionId) return
+
+            messages.value = nextMessages
+            tasks.value = nextTasks
+            reviews.value = nextReviews
+            workflowEvents.value = nextWorkflowEvents
+        } catch (err: any) {
+            if (seq !== sessionDataLoadSeq) return
+            error.value = err.message
+        }
     }
 
     // ─── Unified Refresh ───────────────────────────────────────
     async function refreshCurrentSession() {
         if (!currentSessionId.value) return
-        await Promise.all([
-            loadMessages(currentSessionId.value),
-            loadTasks(currentSessionId.value),
-            loadReviews(currentSessionId.value),
-            loadWorkflowEvents(currentSessionId.value),
-        ])
+        const sessionId = currentSessionId.value
+        const seq = ++sessionDataLoadSeq
+
+        try {
+            const [nextMessages, nextTasks, nextReviews, nextWorkflowEvents] = await Promise.all([
+                apiListMessages(sessionId),
+                apiListTasks(sessionId),
+                apiListReviews(sessionId),
+                apiListWorkflowEvents(sessionId),
+            ])
+
+            if (seq !== sessionDataLoadSeq || currentSessionId.value !== sessionId) return
+
+            messages.value = nextMessages
+            tasks.value = nextTasks
+            reviews.value = nextReviews
+            workflowEvents.value = nextWorkflowEvents
+        } catch (err: any) {
+            if (seq !== sessionDataLoadSeq) return
+            error.value = err.message
+        }
     }
 
     // ─── Message Actions ───────────────────────────────────────
@@ -285,6 +316,8 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     }
 
     function $reset() {
+        sessionsLoadSeq++
+        sessionDataLoadSeq++
         sessions.value = []
         currentSessionId.value = null
         messages.value = []

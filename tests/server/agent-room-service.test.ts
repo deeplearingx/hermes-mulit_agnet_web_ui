@@ -1,0 +1,418 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replace(/"/g, '""')}"`
+}
+
+function ensureTableForTest(db: any, tableName: string, schema: Record<string, string>): void {
+  const colDefs = Object.entries(schema)
+    .map(([col, def]) => `${quoteIdentifier(col)} ${def}`)
+    .join(', ')
+  db.exec(`CREATE TABLE IF NOT EXISTS ${quoteIdentifier(tableName)} (${colDefs})`)
+
+  const rows = db.prepare(`PRAGMA table_info(${quoteIdentifier(tableName)})`).all() as Array<{ name: string }>
+  const existingCols = new Set(rows.map(row => row.name))
+
+  for (const [col, def] of Object.entries(schema)) {
+    if (!existingCols.has(col)) {
+      db.exec(`ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${quoteIdentifier(col)} ${def}`)
+    }
+  }
+}
+
+describe('Agent Room Service', () => {
+  let db: any = null
+
+  beforeEach(async () => {
+    vi.resetModules()
+    const { DatabaseSync } = await import('node:sqlite')
+    db = new DatabaseSync(':memory:')
+    vi.doMock('../../packages/server/src/db/index', () => ({
+      getDb: () => db,
+      ensureTable: (tableName: string, schema: Record<string, string>) => ensureTableForTest(db, tableName, schema),
+    }))
+
+    // Create all agent_room tables
+    const schemas = await import('../../packages/server/src/db/hermes/schemas')
+    ensureTableForTest(db, schemas.AR_SESSIONS_TABLE, schemas.AR_SESSIONS_SCHEMA)
+    ensureTableForTest(db, schemas.AR_TASKS_TABLE, schemas.AR_TASKS_SCHEMA)
+    ensureTableForTest(db, schemas.AR_REVIEWS_TABLE, schemas.AR_REVIEWS_SCHEMA)
+    ensureTableForTest(db, schemas.AR_MESSAGES_TABLE, schemas.AR_MESSAGES_SCHEMA)
+    ensureTableForTest(db, schemas.AR_WORKFLOW_EVENTS_TABLE, schemas.AR_WORKFLOW_EVENTS_SCHEMA)
+    for (const idx of schemas.AR_INDEXES) {
+      try { db.exec(idx) } catch { /* ignore */ }
+    }
+  })
+
+  afterEach(() => {
+    db?.close()
+    db = null
+    vi.doUnmock('../../packages/server/src/db/index')
+    vi.resetModules()
+  })
+
+  // ─── Session CRUD ──────────────────────────────────────────────
+
+  describe('Session CRUD', () => {
+    it('createSession → listSessions contains new session', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test Session')
+      expect(session.name).toBe('Test Session')
+      expect(session.id).toBeDefined()
+
+      const all = svc.listSessions()
+      expect(all).toHaveLength(1)
+      expect(all[0].id).toBe(session.id)
+    })
+
+    it('getSession returns correct session', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('My Session')
+      const found = svc.getSession(session.id)
+      expect(found).toMatchObject({ id: session.id, name: 'My Session' })
+    })
+
+    it('assertSessionExists throws for nonexistent sessionId', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      expect(() => svc.listMessages('nonexistent')).toThrow('Session not found')
+    })
+  })
+
+  // ─── Task CRUD ─────────────────────────────────────────────────
+
+  describe('Task CRUD', () => {
+    it('createTask → listTasks contains new task with status created', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Build feature', 'Description')
+      expect(task.status).toBe('created')
+      expect(task.revisionRound).toBe(0)
+
+      const tasks = svc.listTasks(session.id)
+      expect(tasks).toHaveLength(1)
+      expect(tasks[0].id).toBe(task.id)
+    })
+
+    it('createTask auto-emits task_created event + message', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      svc.createTask(session.id, 'Build feature', '')
+
+      const events = svc.listWorkflowEvents(session.id)
+      expect(events).toHaveLength(1)
+      expect(events[0].type).toBe('task_created')
+
+      const messages = svc.listMessages(session.id)
+      expect(messages).toHaveLength(1)
+      expect(messages[0].type).toBe('task_event')
+    })
+
+    it('updateTaskStatus validates state machine transitions', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      // created → planned is valid
+      const updated = svc.updateTaskStatus(task.id, 'planned')
+      expect(updated!.status).toBe('planned')
+    })
+
+    it('updateTaskStatus throws on invalid transition', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      // created → completed is invalid
+      expect(() => svc.updateTaskStatus(task.id, 'completed')).toThrow('Invalid transition')
+    })
+  })
+
+  // ─── Review ────────────────────────────────────────────────────
+
+  describe('Review', () => {
+    async function setupTaskForReview() {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      // Walk through workflow to submitted_for_review
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      return { svc, session, task }
+    }
+
+    it('submitReview passed: submitted_for_review → review_passed', async () => {
+      const { svc, session, task } = await setupTaskForReview()
+      const review = svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      expect(review).not.toBeNull()
+      expect(review!.status).toBe('passed')
+
+      const updated = svc.getTask(task.id)
+      expect(updated!.status).toBe('review_passed')
+    })
+
+    it('submitReview rejected: submitted_for_review → revision_required', async () => {
+      const { svc, session, task } = await setupTaskForReview()
+      const review = svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Needs work')
+      expect(review).not.toBeNull()
+      expect(review!.status).toBe('rejected')
+
+      const updated = svc.getTask(task.id)
+      expect(updated!.status).toBe('revision_required')
+      expect(updated!.revisionRound).toBe(1)
+    })
+
+    it('submitReview rejected with empty comment is allowed', async () => {
+      const { svc, session, task } = await setupTaskForReview()
+      const review = svc.submitReview(session.id, task.id, 'reviewer', 'rejected', '')
+      expect(review).not.toBeNull()
+      expect(review!.comment).toBe('')
+    })
+
+    it('submitReview rejected at maxRevisionRounds → need_user_decision', async () => {
+      const { svc, session, task } = await setupTaskForReview()
+
+      // First rejection: revisionRound 0 → 1
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 1')
+      let updated = svc.getTask(task.id)!
+      expect(updated.status).toBe('revision_required')
+      expect(updated.revisionRound).toBe(1)
+
+      // Retry → in_progress, then → submitted_for_review
+      svc.retryTask(session.id, task.id)
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+
+      // Second rejection: revisionRound 1 → 2
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 2')
+      updated = svc.getTask(task.id)!
+      expect(updated.status).toBe('revision_required')
+      expect(updated.revisionRound).toBe(2)
+
+      // Retry → in_progress, then → submitted_for_review
+      svc.retryTask(session.id, task.id)
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+
+      // Third rejection: revisionRound 2 → 3, which >= maxRevisionRounds(3) → need_user_decision
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 3')
+      updated = svc.getTask(task.id)!
+      expect(updated.status).toBe('need_user_decision')
+      expect(updated.revisionRound).toBe(3)
+    })
+
+    it('submitReview throws when task is not in submitted_for_review', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      expect(() => svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')).toThrow(
+        'Cannot review task in status "created"',
+      )
+    })
+  })
+
+  // ─── Workflow ──────────────────────────────────────────────────
+
+  describe('Workflow', () => {
+    it('runMockWorkflow walks from created to submitted_for_review', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      await svc.runMockWorkflow(session.id, task.id)
+
+      const updated = svc.getTask(task.id)
+      expect(updated!.status).toBe('submitted_for_review')
+    })
+
+    it('runMockWorkflow throws on duplicate run', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      // Start first workflow (don't await to keep runningWorkflows populated)
+      const p1 = svc.runMockWorkflow(session.id, task.id)
+      await expect(svc.runMockWorkflow(session.id, task.id)).rejects.toThrow('Workflow is already running')
+      await p1
+    })
+
+    it('runMockWorkflow throws on invalid start status', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      svc.updateTaskStatus(task.id, 'planned')
+
+      await expect(svc.runMockWorkflow(session.id, task.id)).rejects.toThrow('Cannot start workflow in status "planned"')
+    })
+  })
+
+  // ─── Retry / Deliver ──────────────────────────────────────────
+
+  describe('Retry / Deliver', () => {
+    it('retryTask from revision_required → in_progress', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix')
+
+      const result = svc.retryTask(session.id, task.id)
+      expect(result!.status).toBe('in_progress')
+    })
+
+    it('retryTask from need_user_decision → in_progress', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      // First iteration: walk through full workflow to submitted_for_review
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 0')
+
+      // Second iteration: retry → in_progress → submitted_for_review → reject
+      svc.retryTask(session.id, task.id)
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 1')
+
+      // Third iteration: retry → in_progress → submitted_for_review → reject → need_user_decision
+      svc.retryTask(session.id, task.id)
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 2')
+
+      // After 3 rejections, task should be in need_user_decision
+      const beforeRetry = svc.getTask(task.id)!
+      expect(beforeRetry.status).toBe('need_user_decision')
+
+      const result = svc.retryTask(session.id, task.id)
+      expect(result!.status).toBe('in_progress')
+    })
+
+    it('retryTask from failed → in_progress', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'failed')
+
+      const result = svc.retryTask(session.id, task.id)
+      expect(result!.status).toBe('in_progress')
+    })
+
+    it('retryTask throws on non-retryable status', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      expect(() => svc.retryTask(session.id, task.id)).toThrow('Cannot retry task in status "created"')
+    })
+
+    it('deliverTask review_passed → delivering → completed', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+
+      const result = svc.deliverTask(session.id, task.id)
+      expect(result!.status).toBe('completed')
+    })
+  })
+
+  // ─── Persistence ───────────────────────────────────────────────
+
+  describe('Persistence', () => {
+    it('session persists across store reads', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Persistent Session')
+
+      // Re-read from store
+      const found = svc.getSession(session.id)
+      expect(found).not.toBeNull()
+      expect(found!.name).toBe('Persistent Session')
+    })
+
+    it('task + review persist correctly', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'Good')
+
+      const reviews = svc.listReviews(session.id)
+      expect(reviews).toHaveLength(1)
+      expect(reviews[0].status).toBe('passed')
+    })
+
+    it('workflow events persist correctly', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      svc.createTask(session.id, 'Task', '')
+
+      const events = svc.listWorkflowEvents(session.id)
+      expect(events).toHaveLength(1)
+      expect(events[0].type).toBe('task_created')
+    })
+  })
+
+  // ─── Session Boundary ──────────────────────────────────────────
+
+  describe('Session Boundary', () => {
+    it('listTasks only returns tasks for the given session', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const s1 = svc.createSession('Session 1')
+      const s2 = svc.createSession('Session 2')
+      svc.createTask(s1.id, 'Task 1', '')
+      svc.createTask(s2.id, 'Task 2', '')
+
+      expect(svc.listTasks(s1.id)).toHaveLength(1)
+      expect(svc.listTasks(s2.id)).toHaveLength(1)
+    })
+
+    it('listReviews only returns reviews for the given session', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const s1 = svc.createSession('Session 1')
+      const task = svc.createTask(s1.id, 'Task', '')
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(s1.id, task.id, 'reviewer', 'passed', '')
+
+      const s2 = svc.createSession('Session 2')
+      expect(svc.listReviews(s1.id)).toHaveLength(1)
+      expect(svc.listReviews(s2.id)).toHaveLength(0)
+    })
+
+    it('assertTaskInSession throws for cross-session access', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const s1 = svc.createSession('Session 1')
+      const s2 = svc.createSession('Session 2')
+      const task = svc.createTask(s1.id, 'Task', '')
+
+      expect(() => svc.getTask(task.id)).not.toThrow()
+      // Accessing task from wrong session should throw
+      expect(() => svc.updateTaskStatus(task.id, 'planned')).not.toThrow() // updateTaskStatus doesn't check session
+      // But submitReview does check session boundary
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      expect(() => svc.submitReview(s2.id, task.id, 'reviewer', 'passed', '')).toThrow(
+        `Task ${task.id} belongs to session ${s1.id}, not ${s2.id}`,
+      )
+    })
+  })
+})

@@ -1,9 +1,11 @@
 // ─── Agent Room Service ────────────────────────────────────────
 // Independent domain service for Agent Room workflow.
 // Manages sessions, tasks, reviews, messages, and workflow events.
+// Persistence: SQLite via agent-room-store.ts (no in-memory Maps).
 
 import { randomUUID } from 'node:crypto'
 import { buildMessageFromEvent } from './event-adapter'
+import * as store from '../../../db/hermes/agent-room-store'
 
 // ─── Types ─────────────────────────────────────────────────────
 export type AgentRoomTaskStatus =
@@ -124,12 +126,7 @@ const VALID_TRANSITIONS: Record<AgentRoomTaskStatus, AgentRoomTaskStatus[]> = {
     need_user_decision: ['in_progress', 'failed'],
 }
 
-// ─── In-Memory Storage (v1) ────────────────────────────────────
-const sessions = new Map<string, AgentRoomSession>()
-const tasks = new Map<string, AgentRoomTask>()
-const reviews = new Map<string, AgentRoomReview[]>()
-const messages = new Map<string, AgentRoomMessage[]>()
-const workflowEvents = new Map<string, AgentRoomWorkflowEvent[]>()
+// ─── In-Memory: only runtime concurrency lock ──────────────────
 const runningWorkflows = new Set<string>()
 
 // ─── Workflow Startable Statuses ───────────────────────────────
@@ -139,23 +136,24 @@ const WORKFLOW_STARTABLE_STATUSES: AgentRoomTaskStatus[] = [
 
 // ─── Session Boundary Helpers ──────────────────────────────────
 function assertSessionExists(sessionId: string): AgentRoomSession {
-    const session = sessions.get(sessionId)
+    const session = store.getSession(sessionId)
     if (!session) throw new Error(`Session not found: ${sessionId}`)
     return session
 }
 
 function assertTaskInSession(taskId: string, sessionId: string): AgentRoomTask {
     assertSessionExists(sessionId)
-    const task = tasks.get(taskId)
+    const task = store.getTask(taskId)
     if (!task) throw new Error(`Task not found: ${taskId}`)
     if (task.sessionId !== sessionId) {
         throw new Error(`Task ${taskId} belongs to session ${task.sessionId}, not ${sessionId}`)
     }
-    return task
+    return task as AgentRoomTask
 }
 
 // ─── Event + Message Helper ────────────────────────────────────
 // Emits a workflow event AND produces the corresponding chat message.
+// Does NOT open a transaction — caller is responsible.
 function emitEventAndMessage(
     sessionId: string,
     taskId: string,
@@ -181,26 +179,22 @@ export function createSession(name: string): AgentRoomSession {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
     }
-    sessions.set(session.id, session)
-    messages.set(session.id, [])
-    workflowEvents.set(session.id, [])
+    store.createSession(session)
     return session
 }
 
 export function getSession(sessionId: string): AgentRoomSession | null {
-    return sessions.get(sessionId) ?? null
+    return store.getSession(sessionId)
 }
 
 export function listSessions(): AgentRoomSession[] {
-    return [...sessions.values()].sort((a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-    )
+    return store.listSessions()
 }
 
 // ─── Message CRUD ──────────────────────────────────────────────
 export function listMessages(sessionId: string): AgentRoomMessage[] {
     assertSessionExists(sessionId)
-    return messages.get(sessionId) ?? []
+    return store.listMessagesBySession(sessionId) as AgentRoomMessage[]
 }
 
 export function addMessage(msg: Omit<AgentRoomMessage, 'id' | 'createdAt'>): AgentRoomMessage {
@@ -210,20 +204,18 @@ export function addMessage(msg: Omit<AgentRoomMessage, 'id' | 'createdAt'>): Age
         id: randomUUID(),
         createdAt: new Date().toISOString(),
     }
-    const list = messages.get(msg.sessionId) ?? []
-    list.push(full)
-    messages.set(msg.sessionId, list)
+    store.createMessage(full as store.AgentRoomMessage)
     return full
 }
 
 // ─── Task CRUD ─────────────────────────────────────────────────
 export function listTasks(sessionId: string): AgentRoomTask[] {
     assertSessionExists(sessionId)
-    return [...tasks.values()].filter(t => t.sessionId === sessionId)
+    return store.listTasksBySession(sessionId) as AgentRoomTask[]
 }
 
 export function getTask(taskId: string): AgentRoomTask | null {
-    return tasks.get(taskId) ?? null
+    return store.getTask(taskId) as AgentRoomTask | null
 }
 
 export function createTask(sessionId: string, title: string, description: string, assignedAgentId?: string): AgentRoomTask {
@@ -240,16 +232,18 @@ export function createTask(sessionId: string, title: string, description: string
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
     }
-    tasks.set(task.id, task)
 
-    // Emit task_created event + chat message
-    emitEventAndMessage(sessionId, task.id, 'task_created', 'conversation', title)
+    store.runInTransaction(() => {
+        store.createTask(task as store.AgentRoomTask)
+        // Emit task_created event + chat message
+        emitEventAndMessage(sessionId, task.id, 'task_created', 'conversation', title)
+    })
 
     return task
 }
 
 export function updateTaskStatus(taskId: string, newStatus: AgentRoomTaskStatus): AgentRoomTask | null {
-    const task = tasks.get(taskId)
+    const task = store.getTask(taskId) as AgentRoomTask | null
     if (!task) return null
 
     // Validate transition
@@ -266,21 +260,14 @@ export function updateTaskStatus(taskId: string, newStatus: AgentRoomTaskStatus)
         task.revisionRound++
     }
 
+    store.updateTask(task as store.AgentRoomTask)
     return task
 }
 
 // ─── Review CRUD ───────────────────────────────────────────────
 export function listReviews(sessionId: string): AgentRoomReview[] {
     assertSessionExists(sessionId)
-    const sessionTasks = listTasks(sessionId)
-    const taskIds = new Set(sessionTasks.map(t => t.id))
-    const result: AgentRoomReview[] = []
-    for (const [taskId, taskReviews] of reviews) {
-        if (taskIds.has(taskId)) {
-            result.push(...taskReviews)
-        }
-    }
-    return result
+    return store.listReviewsBySession(sessionId) as AgentRoomReview[]
 }
 
 /**
@@ -307,52 +294,57 @@ export function submitReview(
     }
 
     // 1. Record the review (comment can be empty)
-    const review: AgentRoomReview = {
+    const review: AgentRoomReview & { sessionId: string } = {
         id: randomUUID(),
+        sessionId,
         taskId,
         reviewerAgentId,
         status,
         comment,
         createdAt: new Date().toISOString(),
     }
-    const list = reviews.get(taskId) ?? []
-    list.push(review)
-    reviews.set(taskId, list)
 
-    if (status === 'passed') {
-        // 2a. submitted_for_review → review_passed
-        updateTaskStatus(taskId, 'review_passed')
-        emitEventAndMessage(sessionId, taskId, 'review_passed', 'reviewer', task.title, { comment })
-    } else {
-        // 2b. submitted_for_review → review_rejected (transient)
-        // Compute nextRevisionRound BEFORE any state mutation
-        const nextRevisionRound = task.revisionRound + 1
-        updateTaskStatus(taskId, 'review_rejected')
-        emitEventAndMessage(sessionId, taskId, 'review_rejected', 'reviewer', task.title, {
-            comment,
-            revisionRound: nextRevisionRound,
-        })
+    store.runInTransaction(() => {
+        store.createReview(review as store.AgentRoomReview)
 
-        // 3. Check revision round limit
-        // maxRevisionRounds = max allowed revision rounds.
-        // If nextRevisionRound >= maxRevisionRounds, no more revisions allowed.
-        if (nextRevisionRound >= task.maxRevisionRounds) {
-            // Exceeded max rounds → need_user_decision
-            // Manually persist nextRevisionRound (updateTaskStatus only increments on revision_required)
-            task.revisionRound = nextRevisionRound
-            updateTaskStatus(taskId, 'need_user_decision')
-            emitEventAndMessage(sessionId, taskId, 'need_user_decision', 'reviewer', task.title, {
-                revisionRound: nextRevisionRound,
-                maxRevisionRounds: task.maxRevisionRounds,
-            })
+        if (status === 'passed') {
+            // 2a. submitted_for_review → review_passed
+            updateTaskStatus(taskId, 'review_passed')
+            emitEventAndMessage(sessionId, taskId, 'review_passed', 'reviewer', task.title, { comment })
         } else {
-            // Within limit → revision_required (updateTaskStatus auto-increments revisionRound)
-            updateTaskStatus(taskId, 'revision_required')
-            emitEventAndMessage(sessionId, taskId, 'revision_started', 'developer', task.title, {
+            // 2b. submitted_for_review → review_rejected (transient)
+            // Compute nextRevisionRound BEFORE any state mutation
+            const nextRevisionRound = task.revisionRound + 1
+            updateTaskStatus(taskId, 'review_rejected')
+            emitEventAndMessage(sessionId, taskId, 'review_rejected', 'reviewer', task.title, {
+                comment,
                 revisionRound: nextRevisionRound,
             })
+
+            // 3. Check revision round limit
+            // maxRevisionRounds = max allowed revision rounds.
+            // If nextRevisionRound >= maxRevisionRounds, no more revisions allowed.
+            if (nextRevisionRound >= task.maxRevisionRounds) {
+                // Exceeded max rounds → need_user_decision
+                // Re-read task from DB (updateTaskStatus wrote review_rejected),
+                // then explicitly persist nextRevisionRound before transitioning.
+                const freshTask = store.getTask(taskId)!
+                freshTask.revisionRound = nextRevisionRound
+                store.updateTask(freshTask)
+                updateTaskStatus(taskId, 'need_user_decision')
+                emitEventAndMessage(sessionId, taskId, 'need_user_decision', 'reviewer', task.title, {
+                    revisionRound: nextRevisionRound,
+                    maxRevisionRounds: task.maxRevisionRounds,
+                })
+            } else {
+                // Within limit → revision_required (updateTaskStatus auto-increments revisionRound)
+                updateTaskStatus(taskId, 'revision_required')
+                emitEventAndMessage(sessionId, taskId, 'revision_started', 'developer', task.title, {
+                    revisionRound: nextRevisionRound,
+                })
+            }
         }
-    }
+    })
 
     return review
 }
@@ -360,7 +352,7 @@ export function submitReview(
 // ─── Workflow Events ───────────────────────────────────────────
 export function listWorkflowEvents(sessionId: string): AgentRoomWorkflowEvent[] {
     assertSessionExists(sessionId)
-    return workflowEvents.get(sessionId) ?? []
+    return store.listWorkflowEventsBySession(sessionId) as AgentRoomWorkflowEvent[]
 }
 
 export function addWorkflowEvent(
@@ -381,9 +373,7 @@ export function addWorkflowEvent(
         payload,
         createdAt: new Date().toISOString(),
     }
-    const list = workflowEvents.get(sessionId) ?? []
-    list.push(event)
-    workflowEvents.set(sessionId, list)
+    store.createWorkflowEvent(event as store.AgentRoomWorkflowEvent)
     return event
 }
 
@@ -410,25 +400,33 @@ export async function runMockWorkflow(sessionId: string, taskId: string): Promis
     try {
         const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-        // Step 1: Conversation Agent receives
-        updateTaskStatus(taskId, 'planned')
-        emitEventAndMessage(sessionId, taskId, 'task_created', 'conversation', task.title)
+        // Step 1: Conversation Agent receives → planned
+        store.runInTransaction(() => {
+            updateTaskStatus(taskId, 'planned')
+            emitEventAndMessage(sessionId, taskId, 'task_planned', 'conversation', task.title)
+        })
         await delay(300)
 
-        // Step 2: Planner Agent plans
-        updateTaskStatus(taskId, 'assigned')
-        emitEventAndMessage(sessionId, taskId, 'task_planned', 'planner', task.title)
+        // Step 2: Planner Agent plans → assigned
+        store.runInTransaction(() => {
+            updateTaskStatus(taskId, 'assigned')
+            emitEventAndMessage(sessionId, taskId, 'task_planned', 'planner', task.title)
+        })
         await delay(300)
 
-        // Step 3: Developer starts
-        updateTaskStatus(taskId, 'in_progress')
-        emitEventAndMessage(sessionId, taskId, 'task_assigned', 'developer', task.title)
+        // Step 3: Developer starts → in_progress
+        store.runInTransaction(() => {
+            updateTaskStatus(taskId, 'in_progress')
+            emitEventAndMessage(sessionId, taskId, 'task_assigned', 'developer', task.title)
+        })
         await delay(500)
 
-        // Step 4: Developer submits for review
-        updateTaskStatus(taskId, 'submitted_for_review')
-        emitEventAndMessage(sessionId, taskId, 'task_started', 'developer', task.title)
-        emitEventAndMessage(sessionId, taskId, 'task_submitted', 'developer', task.title)
+        // Step 4: Developer submits for review → submitted_for_review
+        store.runInTransaction(() => {
+            updateTaskStatus(taskId, 'submitted_for_review')
+            emitEventAndMessage(sessionId, taskId, 'task_started', 'developer', task.title)
+            emitEventAndMessage(sessionId, taskId, 'task_submitted', 'developer', task.title)
+        })
         await delay(300)
 
         // Workflow stops here at submitted_for_review.
@@ -460,19 +458,21 @@ export function retryTask(sessionId: string, taskId: string): AgentRoomTask | nu
     // Save old status BEFORE mutation (updateTaskStatus modifies task in-place)
     const oldStatus = task.status
 
-    // Use state machine to transition to in_progress
-    const result = updateTaskStatus(taskId, 'in_progress')
+    store.runInTransaction(() => {
+        // Use state machine to transition to in_progress
+        updateTaskStatus(taskId, 'in_progress')
 
-    // Emit appropriate event based on the ORIGINAL status
-    if (oldStatus === 'revision_required' || oldStatus === 'need_user_decision') {
-        emitEventAndMessage(sessionId, taskId, 'revision_started', 'developer', task.title, {
-            revisionRound: task.revisionRound,
-        })
-    } else if (oldStatus === 'failed') {
-        emitEventAndMessage(sessionId, taskId, 'task_started', 'developer', task.title)
-    }
+        // Emit appropriate event based on the ORIGINAL status
+        if (oldStatus === 'revision_required' || oldStatus === 'need_user_decision') {
+            emitEventAndMessage(sessionId, taskId, 'revision_started', 'developer', task.title, {
+                revisionRound: task.revisionRound,
+            })
+        } else if (oldStatus === 'failed') {
+            emitEventAndMessage(sessionId, taskId, 'task_started', 'developer', task.title)
+        }
+    })
 
-    return result
+    return store.getTask(taskId) as AgentRoomTask | null
 }
 
 /**
@@ -482,13 +482,15 @@ export function retryTask(sessionId: string, taskId: string): AgentRoomTask | nu
 export function deliverTask(sessionId: string, taskId: string): AgentRoomTask | null {
     const task = assertTaskInSession(taskId, sessionId)
 
-    // Transition to delivering via state machine
-    updateTaskStatus(taskId, 'delivering')
-    emitEventAndMessage(sessionId, taskId, 'delivery_started', 'delivery', task.title)
+    store.runInTransaction(() => {
+        // Transition to delivering via state machine
+        updateTaskStatus(taskId, 'delivering')
+        emitEventAndMessage(sessionId, taskId, 'delivery_started', 'delivery', task.title)
 
-    // Complete via state machine
-    const result = updateTaskStatus(taskId, 'completed')
-    emitEventAndMessage(sessionId, taskId, 'delivery_completed', 'delivery', task.title)
+        // Complete via state machine
+        updateTaskStatus(taskId, 'completed')
+        emitEventAndMessage(sessionId, taskId, 'delivery_completed', 'delivery', task.title)
+    })
 
-    return result
+    return store.getTask(taskId) as AgentRoomTask | null
 }

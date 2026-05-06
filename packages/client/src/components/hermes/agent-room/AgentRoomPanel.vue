@@ -18,6 +18,8 @@ const newSessionName = ref('')
 const showCreateTask = ref(false)
 const showReviewDecision = ref(false)
 const reviewTargetTask = ref<AgentRoomTask | null>(null)
+const creatingTask = ref(false)
+const submittingReview = ref(false)
 
 // ─── Session Management ────────────────────────────────────────
 // NOTE: loadSessions is called once in AgentRoomView.vue onMounted;
@@ -56,7 +58,15 @@ function handleKeydown(e: KeyboardEvent) {
 
 // ─── Task Actions ──────────────────────────────────────────────
 async function handleCreateTaskSubmit(data: { title: string; description: string }) {
-    await store.addTask(data.title, data.description || undefined)
+    creatingTask.value = true
+    try {
+        await store.addTask(data.title, data.description || undefined)
+        showCreateTask.value = false
+    } catch {
+        // Failure: keep modal open for retry
+    } finally {
+        creatingTask.value = false
+    }
 }
 
 async function handleRunWorkflow(taskId: string) {
@@ -72,8 +82,16 @@ function handleOpenReview(taskId: string) {
 
 async function handleReviewSubmit(data: { status: 'passed' | 'rejected'; comment: string }) {
     if (!reviewTargetTask.value) return
-    await store.submitTaskReview(reviewTargetTask.value.id, 'reviewer', data.status, data.comment)
-    reviewTargetTask.value = null
+    submittingReview.value = true
+    try {
+        await store.submitTaskReview(reviewTargetTask.value.id, 'reviewer', data.status, data.comment)
+        showReviewDecision.value = false
+        reviewTargetTask.value = null
+    } catch {
+        // Failure: keep modal open for retry
+    } finally {
+        submittingReview.value = false
+    }
 }
 
 async function handleRetryTask(taskId: string) {
@@ -181,11 +199,13 @@ function handleSelectTask(taskId: string) {
         <!-- Modals -->
         <CreateTaskModal
             :visible="showCreateTask"
+            :loading="creatingTask"
             @close="showCreateTask = false"
             @submit="handleCreateTaskSubmit"
         />
         <ReviewDecisionModal
             :visible="showReviewDecision"
+            :loading="submittingReview"
             :task-title="reviewTargetTask?.title ?? ''"
             :revision-round="reviewTargetTask?.revisionRound ?? 0"
             :max-revision-rounds="reviewTargetTask?.maxRevisionRounds ?? 3"

@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 
 const props = defineProps<{
     visible: boolean
+    loading?: boolean
     taskTitle: string
     revisionRound: number
     maxRevisionRounds: number
@@ -33,7 +34,6 @@ function handleSubmit() {
         status: decision.value,
         comment: comment.value.trim(),
     })
-    emit('close')
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -103,6 +103,7 @@ function handleKeydown(e: KeyboardEvent) {
                     <button
                         class="btn-submit"
                         :class="{ 'btn-reject': decision === 'rejected' }"
+                        :disabled="props.loading"
                         @click="handleSubmit"
                     >
                         {{ decision === 'passed' ? '确认通过' : '确认打回' }}

@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 
 const props = defineProps<{
     visible: boolean
+    loading?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -27,7 +28,6 @@ function handleSubmit() {
     const t = title.value.trim()
     if (!t) return
     emit('submit', { title: t, description: description.value.trim() })
-    emit('close')
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -73,7 +73,7 @@ function handleKeydown(e: KeyboardEvent) {
                 </div>
                 <div class="modal-footer">
                     <button class="btn-cancel" @click="emit('close')">取消</button>
-                    <button class="btn-submit" :disabled="!title.trim()" @click="handleSubmit">
+                    <button class="btn-submit" :disabled="props.loading || !title.trim()" @click="handleSubmit">
                         创建任务
                     </button>
                 </div>
