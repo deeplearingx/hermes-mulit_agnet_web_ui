@@ -507,4 +507,190 @@ describe('Agent Room Service', () => {
       expect(after > before).toBe(true)
     })
   })
+
+  // ─── Workflow dual-path + event order ─────────────────────────
+
+  describe('Workflow dual-path + event order', () => {
+    it('created path: events are task_planned, task_assigned, task_started, task_submitted', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      await svc.runMockWorkflow(session.id, task.id)
+
+      const updated = svc.getTask(task.id)
+      expect(updated!.status).toBe('submitted_for_review')
+
+      // Workflow events: task_created (from createTask) + 4 workflow steps
+      const events = svc.listWorkflowEvents(session.id)
+      const workflowEvents = events.filter(e => e.type !== 'task_created')
+      expect(workflowEvents.map(e => e.type)).toEqual([
+        'task_planned',
+        'task_assigned',
+        'task_started',
+        'task_submitted',
+      ])
+    })
+
+    it('created path: no duplicate task_planned', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      await svc.runMockWorkflow(session.id, task.id)
+
+      const events = svc.listWorkflowEvents(session.id)
+      const taskPlannedEvents = events.filter(e => e.type === 'task_planned')
+      expect(taskPlannedEvents).toHaveLength(1)
+    })
+
+    it('retry path from revision_required: events are revision_started, task_submitted', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      // Walk to revision_required
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix')
+
+      expect(svc.getTask(task.id)!.status).toBe('revision_required')
+
+      // Record event count before workflow
+      const eventsBefore = svc.listWorkflowEvents(session.id)
+      const beforeCount = eventsBefore.length
+
+      await svc.runMockWorkflow(session.id, task.id)
+
+      const updated = svc.getTask(task.id)
+      expect(updated!.status).toBe('submitted_for_review')
+
+      const events = svc.listWorkflowEvents(session.id)
+      const workflowEvents = events.slice(beforeCount)
+      expect(workflowEvents.map(e => e.type)).toEqual([
+        'revision_started',
+        'task_submitted',
+      ])
+    })
+
+    it('retry path from need_user_decision: events are revision_started, task_submitted', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      // Walk to need_user_decision via 3 rejections
+      // Round 1: created → planned → assigned → in_progress → submitted_for_review → rejected
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 0')
+
+      // Round 2: retry → in_progress → submitted_for_review → rejected
+      svc.retryTask(session.id, task.id)
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 1')
+
+      // Round 3: retry → in_progress → submitted_for_review → rejected → need_user_decision
+      svc.retryTask(session.id, task.id)
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 2')
+
+      expect(svc.getTask(task.id)!.status).toBe('need_user_decision')
+
+      await svc.runMockWorkflow(session.id, task.id)
+
+      const updated = svc.getTask(task.id)
+      expect(updated!.status).toBe('submitted_for_review')
+
+      const events = svc.listWorkflowEvents(session.id)
+      // The 3rd rejection emits review_rejected + need_user_decision
+      // Find the last need_user_decision event (workflow starts after it)
+      let lastIdx = -1
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (events[i].type === 'need_user_decision') { lastIdx = i; break }
+      }
+      const afterNud = events.slice(lastIdx + 1)
+      expect(afterNud.map(e => e.type)).toEqual([
+        'revision_started',
+        'task_submitted',
+      ])
+    })
+
+    it('retry path from failed: events are task_started, task_submitted', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      // Walk to failed
+      svc.updateTaskStatus(task.id, 'planned')
+      svc.updateTaskStatus(task.id, 'assigned')
+      svc.updateTaskStatus(task.id, 'in_progress')
+      svc.updateTaskStatus(task.id, 'failed')
+
+      // Record event count before workflow
+      const eventsBefore = svc.listWorkflowEvents(session.id)
+      const beforeCount = eventsBefore.length
+
+      await svc.runMockWorkflow(session.id, task.id)
+
+      const updated = svc.getTask(task.id)
+      expect(updated!.status).toBe('submitted_for_review')
+
+      const events = svc.listWorkflowEvents(session.id)
+      const workflowEvents = events.slice(beforeCount)
+      expect(workflowEvents.map(e => e.type)).toEqual([
+        'task_started',
+        'task_submitted',
+      ])
+    })
+
+    it('duplicate workflow still throws', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      const p1 = svc.runMockWorkflow(session.id, task.id)
+      await expect(svc.runMockWorkflow(session.id, task.id)).rejects.toThrow('Workflow is already running')
+      await p1
+    })
+  })
+
+  // ─── updateTaskStatusInSession ────────────────────────────────
+
+  describe('updateTaskStatusInSession', () => {
+    it('updates task status and bumps session updatedAt', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      const before = svc.getSession(session.id)!.updatedAt
+      await new Promise(r => setTimeout(r, 10))
+
+      const updated = svc.updateTaskStatusInSession(session.id, task.id, 'planned')
+      expect(updated.status).toBe('planned')
+
+      const after = svc.getSession(session.id)!.updatedAt
+      expect(after > before).toBe(true)
+    })
+
+    it('throws for nonexistent session', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      expect(() => svc.updateTaskStatusInSession('nonexistent', task.id, 'planned')).toThrow('Session not found')
+    })
+
+    it('throws for task not in session', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const s1 = svc.createSession('S1')
+      const s2 = svc.createSession('S2')
+      const task = svc.createTask(s1.id, 'Task', '')
+
+      expect(() => svc.updateTaskStatusInSession(s2.id, task.id, 'planned')).toThrow(/belongs to session/)
+    })
+  })
 })

@@ -267,6 +267,33 @@ export function updateTaskStatus(taskId: string, newStatus: AgentRoomTaskStatus)
     return task
 }
 
+/**
+ * Update task status with session boundary check and timestamp refresh.
+ * Intended for external callers (routes) that operate on a specific session.
+ */
+export function updateTaskStatusInSession(sessionId: string, taskId: string, newStatus: AgentRoomTaskStatus): AgentRoomTask {
+    assertSessionExists(sessionId)
+    const task = assertTaskInSession(taskId, sessionId)
+
+    // Validate transition
+    const allowed = VALID_TRANSITIONS[task.status]
+    if (!allowed.includes(newStatus)) {
+        throw new Error(`Invalid transition: ${task.status} → ${newStatus}`)
+    }
+
+    task.status = newStatus
+    task.updatedAt = new Date().toISOString()
+
+    // Increment revision round on revision_required
+    if (newStatus === 'revision_required') {
+        task.revisionRound++
+    }
+
+    store.updateTask(task as store.AgentRoomTask)
+    store.updateSessionTimestamp(sessionId)
+    return task as AgentRoomTask
+}
+
 // ─── Review CRUD ───────────────────────────────────────────────
 export function listReviews(sessionId: string): AgentRoomReview[] {
     assertSessionExists(sessionId)
@@ -384,6 +411,10 @@ export function addWorkflowEvent(
 // ─── Workflow Engine (v1 mock) ─────────────────────────────────
 // Simulates the full agent workflow with mock responses.
 // All messages are produced via the event adapter — no direct addMessage calls.
+//
+// Two paths:
+//   created  → planned → assigned → in_progress → submitted_for_review
+//   retry (revision_required | need_user_decision | failed) → in_progress → submitted_for_review
 export async function runMockWorkflow(sessionId: string, taskId: string): Promise<void> {
     const task = assertTaskInSession(taskId, sessionId)
 
@@ -400,38 +431,63 @@ export async function runMockWorkflow(sessionId: string, taskId: string): Promis
         )
     }
 
+    const startStatus = task.status
     runningWorkflows.add(taskId)
     try {
         const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-        // Step 1: Conversation Agent receives → planned
-        store.runInTransaction(() => {
-            updateTaskStatus(taskId, 'planned')
-            emitEventAndMessage(sessionId, taskId, 'task_planned', 'conversation', task.title)
-        })
-        await delay(300)
+        if (startStatus === 'created') {
+            // ── created path: full new-task pipeline ──────────────
+            // Step 1: Planner plans → planned
+            store.runInTransaction(() => {
+                updateTaskStatus(taskId, 'planned')
+                emitEventAndMessage(sessionId, taskId, 'task_planned', 'planner', task.title)
+            })
+            await delay(300)
 
-        // Step 2: Planner Agent plans → assigned
-        store.runInTransaction(() => {
-            updateTaskStatus(taskId, 'assigned')
-            emitEventAndMessage(sessionId, taskId, 'task_planned', 'planner', task.title)
-        })
-        await delay(300)
+            // Step 2: Developer assigned → assigned
+            store.runInTransaction(() => {
+                updateTaskStatus(taskId, 'assigned')
+                emitEventAndMessage(sessionId, taskId, 'task_assigned', 'developer', task.title)
+            })
+            await delay(300)
 
-        // Step 3: Developer starts → in_progress
-        store.runInTransaction(() => {
-            updateTaskStatus(taskId, 'in_progress')
-            emitEventAndMessage(sessionId, taskId, 'task_assigned', 'developer', task.title)
-        })
-        await delay(500)
+            // Step 3: Developer starts → in_progress
+            store.runInTransaction(() => {
+                updateTaskStatus(taskId, 'in_progress')
+                emitEventAndMessage(sessionId, taskId, 'task_started', 'developer', task.title)
+            })
+            await delay(500)
 
-        // Step 4: Developer submits for review → submitted_for_review
-        store.runInTransaction(() => {
-            updateTaskStatus(taskId, 'submitted_for_review')
-            emitEventAndMessage(sessionId, taskId, 'task_started', 'developer', task.title)
-            emitEventAndMessage(sessionId, taskId, 'task_submitted', 'developer', task.title)
-        })
-        await delay(300)
+            // Step 4: Developer submits → submitted_for_review
+            store.runInTransaction(() => {
+                updateTaskStatus(taskId, 'submitted_for_review')
+                emitEventAndMessage(sessionId, taskId, 'task_submitted', 'developer', task.title)
+            })
+            await delay(300)
+        } else {
+            // ── retry path: skip planning/assignment ──────────────
+            // Step 1: Developer resumes → in_progress
+            store.runInTransaction(() => {
+                updateTaskStatus(taskId, 'in_progress')
+                if (startStatus === 'revision_required' || startStatus === 'need_user_decision') {
+                    emitEventAndMessage(sessionId, taskId, 'revision_started', 'developer', task.title, {
+                        revisionRound: task.revisionRound,
+                    })
+                } else {
+                    // failed
+                    emitEventAndMessage(sessionId, taskId, 'task_started', 'developer', task.title)
+                }
+            })
+            await delay(500)
+
+            // Step 2: Developer submits → submitted_for_review
+            store.runInTransaction(() => {
+                updateTaskStatus(taskId, 'submitted_for_review')
+                emitEventAndMessage(sessionId, taskId, 'task_submitted', 'developer', task.title)
+            })
+            await delay(300)
+        }
 
         // Workflow stops here at submitted_for_review.
         // Actual review must be triggered manually via ReviewDecisionModal.

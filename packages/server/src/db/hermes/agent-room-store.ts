@@ -300,6 +300,6 @@ export function createWorkflowEvent(event: AgentRoomWorkflowEvent): void {
 
 export function listWorkflowEventsBySession(sessionId: string): AgentRoomWorkflowEvent[] {
     const db = requireDb()
-    const rows = db.prepare(`SELECT * FROM ${AR_WORKFLOW_EVENTS_TABLE} WHERE session_id = ? ORDER BY created_at ASC`).all(sessionId) as Array<Record<string, unknown>>
+    const rows = db.prepare(`SELECT * FROM ${AR_WORKFLOW_EVENTS_TABLE} WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`).all(sessionId) as Array<Record<string, unknown>>
     return rows.map(mapEventRow)
 }

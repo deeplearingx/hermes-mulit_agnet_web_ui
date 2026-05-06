@@ -110,7 +110,7 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks', async (ctx) =>
     }
 })
 
-// Update task status (with session boundary check)
+// Update task status (with session boundary check + updatedAt refresh)
 agentRoomRoutes.patch('/api/agent-room/sessions/:sessionId/tasks/:taskId/status', async (ctx) => {
     const { status } = ctx.request.body as { status?: string }
     if (!status) {
@@ -119,22 +119,20 @@ agentRoomRoutes.patch('/api/agent-room/sessions/:sessionId/tasks/:taskId/status'
         return
     }
     try {
-        // Session boundary check
-        const existing = agentRoomService.getTask(ctx.params.taskId)
-        if (!existing) {
-            ctx.status = 404
-            ctx.body = { error: 'Task not found' }
-            return
-        }
-        if (existing.sessionId !== ctx.params.sessionId) {
-            ctx.status = 403
-            ctx.body = { error: 'Task does not belong to this session' }
-            return
-        }
-        const task = agentRoomService.updateTaskStatus(ctx.params.taskId, status as any)
+        const task = agentRoomService.updateTaskStatusInSession(
+            ctx.params.sessionId,
+            ctx.params.taskId,
+            status as any,
+        )
         ctx.body = task
     } catch (err: any) {
-        ctx.status = 400
+        if (err.message === 'Session not found') {
+            ctx.status = 404
+        } else if (err.message.includes('belongs to session')) {
+            ctx.status = 403
+        } else {
+            ctx.status = 400
+        }
         ctx.body = { error: err.message }
     }
 })

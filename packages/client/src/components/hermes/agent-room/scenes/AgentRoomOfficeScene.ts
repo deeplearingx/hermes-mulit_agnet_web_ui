@@ -84,13 +84,14 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
     private taskStatusText: Phaser.GameObjects.Text | null = null
     private taskStatusDot: Phaser.GameObjects.Graphics | null = null
 
-    private instanceId: string | null = null
+    private instanceId: string
 
-    constructor() {
+    constructor(instanceId: string) {
         super({ key: 'AgentRoomOfficeScene' })
+        this.instanceId = instanceId
     }
 
-    /** Called by Vue before scene starts to set the instance scope */
+    /** Legacy compatibility — no longer required when using constructor injection */
     setInstanceId(id: string) {
         this.instanceId = id
     }

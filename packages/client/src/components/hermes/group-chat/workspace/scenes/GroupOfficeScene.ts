@@ -332,44 +332,6 @@ export class GroupOfficeScene extends Phaser.Scene {
 
     // ─── Environment Animations ────────────────────────────────
 
-    private addScanline() {
-        const scanline = this.add.graphics()
-        scanline.fillStyle(0x60a5fa, 0.03)
-        scanline.fillRect(0, 0, SCENE_W, 2)
-        
-        this.tweens.add({
-            targets: scanline,
-            y: SCENE_H,
-            duration: 8000,
-            repeat: -1,
-            ease: 'Linear',
-        })
-    }
-
-    private addFloatingParticles() {
-        for (let i = 0; i < 15; i++) {
-            const particle = this.add.graphics()
-            const x = Phaser.Math.Between(TILE * 2, SCENE_W - TILE * 2)
-            const y = Phaser.Math.Between(TILE * 4, SCENE_H - TILE * 2)
-            const size = Phaser.Math.Between(1, 3)
-            const alpha = 0.1 + Math.random() * 0.2
-            
-            particle.fillStyle(0x60a5fa, alpha)
-            particle.fillCircle(0, 0, size)
-            particle.setPosition(x, y)
-            
-            this.tweens.add({
-                targets: particle,
-                y: y - Phaser.Math.Between(20, 60),
-                alpha: { from: alpha, to: 0 },
-                duration: 3000 + Math.random() * 4000,
-                repeat: -1,
-                yoyo: true,
-                delay: Math.random() * 2000,
-            })
-        }
-    }
-
     private addMonitorAnimations() {
         for (const seat of DEFAULT_SEATS) {
             const glow = this.add.graphics()
@@ -596,7 +558,6 @@ export class GroupOfficeScene extends Phaser.Scene {
     //   1: nameBg      (Graphics) — P11-8
     //   2: nameText    (Text)     — P11-8
     //   3: statusDot   (Graphics)
-    private static readonly CIDX_BODY = 0
     private static readonly CIDX_NAME_BG = 1
     private static readonly CIDX_NAME_TEXT = 2
     private static readonly CIDX_STATUS_DOT = 3

@@ -49,13 +49,6 @@ const activePhaseIndex = computed(() => {
 // ─── Stats ───────────────────────────────────────────────
 const activeRuns = computed(() => store.activeRunAgentIds.size)
 
-const activeCount = computed(() => {
-    let count = 0
-    for (const [, status] of props.contextStatuses) {
-        if (['compressing', 'replying', 'calling_tool'].includes(status.status)) count++
-    }
-    return count
-})
 
 // ─── Task management ─────────────────────────────────────
 const showNewTaskForm = ref(false)
@@ -191,7 +184,7 @@ const recentIssues = computed(() => {
                 </div>
                 <div class="op-mt-meta">
                     <span v-if="mainTask.assigneeAgentId" class="op-mt-assignee">
-                        → {{ agents.find(a => a.agentId === mainTask.assigneeAgentId)?.name || mainTask.assigneeAgentId }}
+                        → {{ agents.find(a => a.agentId === mainTask!.assigneeAgentId)?.name || mainTask!.assigneeAgentId }}
                     </span>
                 </div>
                 <!-- P11-6: Explicit action buttons -->
