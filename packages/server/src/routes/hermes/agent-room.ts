@@ -40,7 +40,12 @@ agentRoomRoutes.get('/api/agent-room/sessions/:sessionId', async (ctx) => {
 
 // List messages
 agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/messages', async (ctx) => {
-    ctx.body = agentRoomService.listMessages(ctx.params.sessionId)
+    try {
+        ctx.body = agentRoomService.listMessages(ctx.params.sessionId)
+    } catch (err: any) {
+        ctx.status = 404
+        ctx.body = { error: err.message }
+    }
 })
 
 // Send message
@@ -51,22 +56,32 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/messages', async (ctx)
         ctx.body = { error: 'Message content is required' }
         return
     }
-    const msg = agentRoomService.addMessage({
-        sessionId: ctx.params.sessionId,
-        senderId: 'user',
-        senderName: '用户',
-        senderRole: 'user',
-        type: 'user_message',
-        content: content.trim(),
-    })
-    ctx.body = msg
+    try {
+        const msg = agentRoomService.addMessage({
+            sessionId: ctx.params.sessionId,
+            senderId: 'user',
+            senderName: '用户',
+            senderRole: 'user',
+            type: 'user_message',
+            content: content.trim(),
+        })
+        ctx.body = msg
+    } catch (err: any) {
+        ctx.status = 404
+        ctx.body = { error: err.message }
+    }
 })
 
 // ─── Tasks ─────────────────────────────────────────────────────
 
 // List tasks
 agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/tasks', async (ctx) => {
-    ctx.body = agentRoomService.listTasks(ctx.params.sessionId)
+    try {
+        ctx.body = agentRoomService.listTasks(ctx.params.sessionId)
+    } catch (err: any) {
+        ctx.status = 404
+        ctx.body = { error: err.message }
+    }
 })
 
 // Create task
@@ -81,13 +96,18 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks', async (ctx) =>
         ctx.body = { error: 'Task title is required' }
         return
     }
-    const task = agentRoomService.createTask(
-        ctx.params.sessionId,
-        title.trim(),
-        description?.trim() ?? '',
-        assignedAgentId,
-    )
-    ctx.body = task
+    try {
+        const task = agentRoomService.createTask(
+            ctx.params.sessionId,
+            title.trim(),
+            description?.trim() ?? '',
+            assignedAgentId,
+        )
+        ctx.body = task
+    } catch (err: any) {
+        ctx.status = 404
+        ctx.body = { error: err.message }
+    }
 })
 
 // Update task status (with session boundary check)
@@ -202,12 +222,22 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/workflow
 
 // List reviews for a session
 agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/reviews', async (ctx) => {
-    ctx.body = agentRoomService.listReviews(ctx.params.sessionId)
+    try {
+        ctx.body = agentRoomService.listReviews(ctx.params.sessionId)
+    } catch (err: any) {
+        ctx.status = 404
+        ctx.body = { error: err.message }
+    }
 })
 
 // ─── Workflow Events ───────────────────────────────────────────
 
 // List workflow events
 agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/events', async (ctx) => {
-    ctx.body = agentRoomService.listWorkflowEvents(ctx.params.sessionId)
+    try {
+        ctx.body = agentRoomService.listWorkflowEvents(ctx.params.sessionId)
+    } catch (err: any) {
+        ctx.status = 404
+        ctx.body = { error: err.message }
+    }
 })

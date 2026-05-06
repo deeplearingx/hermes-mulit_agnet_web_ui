@@ -130,9 +130,22 @@ const tasks = new Map<string, AgentRoomTask>()
 const reviews = new Map<string, AgentRoomReview[]>()
 const messages = new Map<string, AgentRoomMessage[]>()
 const workflowEvents = new Map<string, AgentRoomWorkflowEvent[]>()
+const runningWorkflows = new Set<string>()
 
-// ─── Session Boundary Helper ───────────────────────────────────
+// ─── Workflow Startable Statuses ───────────────────────────────
+const WORKFLOW_STARTABLE_STATUSES: AgentRoomTaskStatus[] = [
+    'created', 'revision_required', 'need_user_decision', 'failed',
+]
+
+// ─── Session Boundary Helpers ──────────────────────────────────
+function assertSessionExists(sessionId: string): AgentRoomSession {
+    const session = sessions.get(sessionId)
+    if (!session) throw new Error(`Session not found: ${sessionId}`)
+    return session
+}
+
 function assertTaskInSession(taskId: string, sessionId: string): AgentRoomTask {
+    assertSessionExists(sessionId)
     const task = tasks.get(taskId)
     if (!task) throw new Error(`Task not found: ${taskId}`)
     if (task.sessionId !== sessionId) {
@@ -186,10 +199,12 @@ export function listSessions(): AgentRoomSession[] {
 
 // ─── Message CRUD ──────────────────────────────────────────────
 export function listMessages(sessionId: string): AgentRoomMessage[] {
+    assertSessionExists(sessionId)
     return messages.get(sessionId) ?? []
 }
 
 export function addMessage(msg: Omit<AgentRoomMessage, 'id' | 'createdAt'>): AgentRoomMessage {
+    assertSessionExists(msg.sessionId)
     const full: AgentRoomMessage = {
         ...msg,
         id: randomUUID(),
@@ -203,6 +218,7 @@ export function addMessage(msg: Omit<AgentRoomMessage, 'id' | 'createdAt'>): Age
 
 // ─── Task CRUD ─────────────────────────────────────────────────
 export function listTasks(sessionId: string): AgentRoomTask[] {
+    assertSessionExists(sessionId)
     return [...tasks.values()].filter(t => t.sessionId === sessionId)
 }
 
@@ -211,6 +227,7 @@ export function getTask(taskId: string): AgentRoomTask | null {
 }
 
 export function createTask(sessionId: string, title: string, description: string, assignedAgentId?: string): AgentRoomTask {
+    assertSessionExists(sessionId)
     const task: AgentRoomTask = {
         id: randomUUID(),
         sessionId,
@@ -250,6 +267,7 @@ export function updateTaskStatus(taskId: string, newStatus: AgentRoomTaskStatus)
 
 // ─── Review CRUD ───────────────────────────────────────────────
 export function listReviews(sessionId: string): AgentRoomReview[] {
+    assertSessionExists(sessionId)
     const sessionTasks = listTasks(sessionId)
     const taskIds = new Set(sessionTasks.map(t => t.id))
     const result: AgentRoomReview[] = []
@@ -303,27 +321,31 @@ export function submitReview(
         emitEventAndMessage(sessionId, taskId, 'review_passed', 'reviewer', task.title, { comment })
     } else {
         // 2b. submitted_for_review → review_rejected (transient)
+        // Compute nextRevisionRound BEFORE any state mutation
+        const nextRevisionRound = task.revisionRound + 1
         updateTaskStatus(taskId, 'review_rejected')
         emitEventAndMessage(sessionId, taskId, 'review_rejected', 'reviewer', task.title, {
             comment,
-            revisionRound: task.revisionRound,
+            revisionRound: nextRevisionRound,
         })
 
         // 3. Check revision round limit
         // maxRevisionRounds = max allowed revision rounds.
-        // If revisionRound + 1 >= maxRevisionRounds, no more revisions allowed.
-        if (task.revisionRound + 1 >= task.maxRevisionRounds) {
+        // If nextRevisionRound >= maxRevisionRounds, no more revisions allowed.
+        if (nextRevisionRound >= task.maxRevisionRounds) {
             // Exceeded max rounds → need_user_decision
+            // Manually persist nextRevisionRound (updateTaskStatus only increments on revision_required)
+            task.revisionRound = nextRevisionRound
             updateTaskStatus(taskId, 'need_user_decision')
             emitEventAndMessage(sessionId, taskId, 'need_user_decision', 'reviewer', task.title, {
-                revisionRound: task.revisionRound,
+                revisionRound: nextRevisionRound,
                 maxRevisionRounds: task.maxRevisionRounds,
             })
         } else {
-            // Within limit → revision_required (increments revisionRound)
+            // Within limit → revision_required (updateTaskStatus auto-increments revisionRound)
             updateTaskStatus(taskId, 'revision_required')
             emitEventAndMessage(sessionId, taskId, 'revision_started', 'developer', task.title, {
-                revisionRound: task.revisionRound,
+                revisionRound: nextRevisionRound,
             })
         }
     }
@@ -333,6 +355,7 @@ export function submitReview(
 
 // ─── Workflow Events ───────────────────────────────────────────
 export function listWorkflowEvents(sessionId: string): AgentRoomWorkflowEvent[] {
+    assertSessionExists(sessionId)
     return workflowEvents.get(sessionId) ?? []
 }
 
@@ -366,31 +389,49 @@ export function addWorkflowEvent(
 export async function runMockWorkflow(sessionId: string, taskId: string): Promise<void> {
     const task = assertTaskInSession(taskId, sessionId)
 
-    const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
+    // Guard: prevent duplicate workflow runs on the same task
+    if (runningWorkflows.has(taskId)) {
+        throw new Error('Workflow is already running')
+    }
 
-    // Step 1: Conversation Agent receives
-    updateTaskStatus(taskId, 'planned')
-    emitEventAndMessage(sessionId, taskId, 'task_created', 'conversation', task.title)
-    await delay(300)
+    // Guard: only allow starting from specific statuses
+    if (!WORKFLOW_STARTABLE_STATUSES.includes(task.status)) {
+        throw new Error(
+            `Cannot start workflow in status "${task.status}". ` +
+            `Expected one of: ${WORKFLOW_STARTABLE_STATUSES.join(', ')}`,
+        )
+    }
 
-    // Step 2: Planner Agent plans
-    updateTaskStatus(taskId, 'assigned')
-    emitEventAndMessage(sessionId, taskId, 'task_planned', 'planner', task.title)
-    await delay(300)
+    runningWorkflows.add(taskId)
+    try {
+        const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-    // Step 3: Developer starts
-    updateTaskStatus(taskId, 'in_progress')
-    emitEventAndMessage(sessionId, taskId, 'task_assigned', 'developer', task.title)
-    await delay(500)
+        // Step 1: Conversation Agent receives
+        updateTaskStatus(taskId, 'planned')
+        emitEventAndMessage(sessionId, taskId, 'task_created', 'conversation', task.title)
+        await delay(300)
 
-    // Step 4: Developer submits for review
-    updateTaskStatus(taskId, 'submitted_for_review')
-    emitEventAndMessage(sessionId, taskId, 'task_started', 'developer', task.title)
-    emitEventAndMessage(sessionId, taskId, 'task_submitted', 'developer', task.title)
-    await delay(300)
+        // Step 2: Planner Agent plans
+        updateTaskStatus(taskId, 'assigned')
+        emitEventAndMessage(sessionId, taskId, 'task_planned', 'planner', task.title)
+        await delay(300)
 
-    // Workflow stops here at submitted_for_review.
-    // Actual review must be triggered manually via ReviewDecisionModal.
+        // Step 3: Developer starts
+        updateTaskStatus(taskId, 'in_progress')
+        emitEventAndMessage(sessionId, taskId, 'task_assigned', 'developer', task.title)
+        await delay(500)
+
+        // Step 4: Developer submits for review
+        updateTaskStatus(taskId, 'submitted_for_review')
+        emitEventAndMessage(sessionId, taskId, 'task_started', 'developer', task.title)
+        emitEventAndMessage(sessionId, taskId, 'task_submitted', 'developer', task.title)
+        await delay(300)
+
+        // Workflow stops here at submitted_for_review.
+        // Actual review must be triggered manually via ReviewDecisionModal.
+    } finally {
+        runningWorkflows.delete(taskId)
+    }
 }
 
 // ─── Retry / Deliver ───────────────────────────────────────────

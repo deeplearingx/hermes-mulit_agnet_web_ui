@@ -2,9 +2,9 @@
 import { ref, onMounted } from 'vue'
 import { useAgentRoomStore } from '@/stores/hermes/agent-room'
 import type { AgentRoomTask } from '@/api/hermes/agent-room'
+import AgentRoomWorkspace from './AgentRoomWorkspace.vue'
 import AgentRoomMessageList from './AgentRoomMessageList.vue'
 import AgentRoomTaskPanel from './AgentRoomTaskPanel.vue'
-import AgentRoomAgentList from './AgentRoomAgentList.vue'
 import CreateTaskModal from './CreateTaskModal.vue'
 import ReviewDecisionModal from './ReviewDecisionModal.vue'
 
@@ -111,39 +111,41 @@ async function handleDeliverTask(taskId: string) {
 
         <!-- Main Content -->
         <div v-if="store.currentSessionId" class="room-content">
-            <!-- Left: Agent List -->
-            <AgentRoomAgentList
-                :agents="store.agents"
-                :active-task="store.activeTask"
-            />
-
-            <!-- Center: Chat Messages -->
-            <div class="chat-area">
-                <AgentRoomMessageList :messages="store.messages" />
-                <div class="chat-input-area">
-                    <textarea
-                        v-model="inputText"
-                        placeholder="输入消息..."
-                        rows="2"
-                        @keydown="handleKeydown"
-                    />
-                    <button class="btn-send" @click="handleSend" :disabled="!inputText.trim()">
-                        发送
-                    </button>
-                </div>
+            <!-- Top: Pixel Workspace (main visual area) -->
+            <div class="workspace-area">
+                <AgentRoomWorkspace />
             </div>
 
-            <!-- Right: Task Panel -->
-            <AgentRoomTaskPanel
-                :tasks="store.tasks"
-                :reviews="store.reviews"
-                :workflow-events="store.workflowEvents"
-                @create-task="showCreateTask = true"
-                @run-workflow="handleRunWorkflow"
-                @open-review="handleOpenReview"
-                @retry-task="handleRetryTask"
-                @deliver-task="handleDeliverTask"
-            />
+            <!-- Bottom: Messages + Task Panel -->
+            <div class="bottom-panels">
+                <!-- Left: Chat Messages -->
+                <div class="chat-area">
+                    <AgentRoomMessageList :messages="store.messages" />
+                    <div class="chat-input-area">
+                        <textarea
+                            v-model="inputText"
+                            placeholder="输入消息..."
+                            rows="2"
+                            @keydown="handleKeydown"
+                        />
+                        <button class="btn-send" @click="handleSend" :disabled="!inputText.trim()">
+                            发送
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Right: Task Panel -->
+                <AgentRoomTaskPanel
+                    :tasks="store.tasks"
+                    :reviews="store.reviews"
+                    :workflow-events="store.workflowEvents"
+                    @create-task="showCreateTask = true"
+                    @run-workflow="handleRunWorkflow"
+                    @open-review="handleOpenReview"
+                    @retry-task="handleRetryTask"
+                    @deliver-task="handleDeliverTask"
+                />
+            </div>
         </div>
 
         <!-- Empty State -->
@@ -281,7 +283,21 @@ async function handleDeliverTask(taskId: string) {
 .room-content {
     flex: 1;
     display: flex;
+    flex-direction: column;
     min-height: 0;
+}
+
+.workspace-area {
+    flex: 1 1 60%;
+    min-height: 280px;
+    border-bottom: 1px solid var(--vscode-widget-border, #3c3c3c);
+}
+
+.bottom-panels {
+    flex: 0 0 auto;
+    display: flex;
+    max-height: 40%;
+    min-height: 180px;
 }
 
 .chat-area {
@@ -289,7 +305,6 @@ async function handleDeliverTask(taskId: string) {
     display: flex;
     flex-direction: column;
     min-width: 0;
-    border-left: 1px solid var(--vscode-widget-border, #3c3c3c);
     border-right: 1px solid var(--vscode-widget-border, #3c3c3c);
 }
 
