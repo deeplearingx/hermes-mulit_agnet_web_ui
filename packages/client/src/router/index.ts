@@ -81,6 +81,11 @@ const router = createRouter({
       component: () => import('@/views/hermes/GroupChatView.vue'),
     },
     {
+      path: '/hermes/agent-room',
+      name: 'hermes.agentRoom',
+      component: () => import('@/views/hermes/AgentRoomView.vue'),
+    },
+    {
       path: '/hermes/files',
       name: 'hermes.files',
       component: () => import('@/views/hermes/FilesView.vue'),
