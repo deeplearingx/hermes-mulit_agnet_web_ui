@@ -816,5 +816,20 @@ describe('Agent Room Service', () => {
       // Wait for workflow to finish
       await workflowPromise
     })
+
+    it('deleteTask updates session updatedAt', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Session')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      const beforeDelete = svc.getSession(session.id)!.updatedAt
+      // Wait a small moment to ensure timestamp difference
+      await new Promise(r => setTimeout(r, 10))
+
+      svc.deleteTask(session.id, task.id)
+
+      const afterDelete = svc.getSession(session.id)!.updatedAt
+      expect(new Date(afterDelete).getTime()).toBeGreaterThanOrEqual(new Date(beforeDelete).getTime())
+    })
   })
 })

@@ -135,7 +135,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
             reviews.value = nextReviews
             workflowEvents.value = nextWorkflowEvents
         } catch (err: any) {
-            if (seq !== sessionDataLoadSeq) return
+            if (seq !== sessionDataLoadSeq || currentSessionId.value !== sessionId) return
             error.value = err.message
         }
     }
@@ -161,7 +161,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
             reviews.value = nextReviews
             workflowEvents.value = nextWorkflowEvents
         } catch (err: any) {
-            if (seq !== sessionDataLoadSeq) return
+            if (seq !== sessionDataLoadSeq || currentSessionId.value !== sessionId) return
             error.value = err.message
         }
     }
@@ -303,6 +303,8 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
                 if (sessions.value.length > 0) {
                     await selectSession(sessions.value[0].id)
                 } else {
+                    // Invalidate any in-flight session data requests
+                    ++sessionDataLoadSeq
                     currentSessionId.value = null
                     messages.value = []
                     tasks.value = []
