@@ -1004,5 +1004,18 @@ describe('Agent Room Service', () => {
       expect(artifacts[0].name).toContain('Build Widget')
       expect(artifacts[0].content).toBeTruthy()
     })
+
+    it('deliverTask creates exactly one final_delivery artifact (explicit type filter)', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      svc.deliverTask(session.id, task.id)
+
+      const artifacts = svc.listTaskArtifacts(session.id, task.id)
+      expect(artifacts.filter(a => a.type === 'final_delivery')).toHaveLength(1)
+    })
   })
 })
