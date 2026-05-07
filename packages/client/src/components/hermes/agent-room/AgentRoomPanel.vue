@@ -35,6 +35,7 @@ async function handleCreateSession() {
 }
 
 async function handleSelectSession(sessionId: string) {
+    if (sessionId === store.currentSessionId) return
     await store.selectSession(sessionId)
 }
 

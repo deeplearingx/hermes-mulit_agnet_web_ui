@@ -96,10 +96,8 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         ++sessionsLoadSeq
         try {
             const session = await apiCreateSession(name)
-            // Front-insert with dedup: skip if session id already present
-            if (!sessions.value.some(s => s.id === session.id)) {
-                sessions.value.unshift(session)
-            }
+            // Immutable front-insert with dedup
+            sessions.value = [session, ...sessions.value.filter(s => s.id !== session.id)]
             currentSessionId.value = session.id
             activeTaskId.value = null
             // Clear stale data from previous session
@@ -298,6 +296,8 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     // ─── Delete Actions ─────────────────────────────────────────
     async function removeSession(sessionId: string) {
         error.value = null
+        // Invalidate any in-flight loadSessions so stale results don't overwrite
+        ++sessionsLoadSeq
         try {
             await apiDeleteSession(sessionId)
             // Remove from local list
