@@ -13,6 +13,7 @@ const store = useAgentRoomStore()
 const inputText = ref('')
 const showNewSession = ref(false)
 const newSessionName = ref('')
+const taskPanelRef = ref<InstanceType<typeof AgentRoomTaskPanel> | null>(null)
 
 // ─── Modal State ───────────────────────────────────────────────
 const showCreateTask = ref(false)
@@ -129,6 +130,8 @@ async function handleDeleteArtifact(artifactId: string) {
     if (!window.confirm(`确认删除产出物「${name}」？此操作不可恢复。`)) return
     try {
         await store.removeArtifact(artifactId)
+        // Notify TaskPanel to clear expand state after successful deletion
+        taskPanelRef.value?.clearExpandedArtifact(artifactId)
     } catch {
         // Error already set in store
     }
@@ -204,6 +207,7 @@ async function handleDeleteArtifact(artifactId: string) {
                 </div>
                 <div class="workspace-panel">
                     <AgentRoomTaskPanel
+                        ref="taskPanelRef"
                         :tasks="store.tasks"
                         :reviews="store.reviews"
                         :workflow-events="store.workflowEvents"

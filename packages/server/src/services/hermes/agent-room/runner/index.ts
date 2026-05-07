@@ -11,11 +11,15 @@ import type { AgentRoomRunner } from './types'
 import { MockAgentRoomRunner } from './mock-runner'
 import { RealAgentRunner } from './real-agent-runner'
 
-function resolveRunner(): AgentRoomRunner {
-    const env = (process.env.AGENT_ROOM_RUNNER ?? 'mock').toLowerCase()
-    if (env === 'real') return new RealAgentRunner()
+/**
+ * Create a runner instance based on the given mode.
+ * @param mode - 'mock' or 'real'. Defaults to 'mock'.
+ */
+export function createAgentRoomRunner(mode?: string): AgentRoomRunner {
+    const normalized = (mode ?? 'mock').toLowerCase()
+    if (normalized === 'real') return new RealAgentRunner()
     return new MockAgentRoomRunner()
 }
 
 /** Active runner instance — selected by AGENT_ROOM_RUNNER env var. */
-export const activeRunner: AgentRoomRunner = resolveRunner()
+export const activeRunner: AgentRoomRunner = createAgentRoomRunner(process.env.AGENT_ROOM_RUNNER)

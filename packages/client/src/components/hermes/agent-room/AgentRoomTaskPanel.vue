@@ -196,12 +196,18 @@ function toggleArtifact(id: string) {
 }
 
 function handleDeleteArtifact(artifactId: string) {
-    // Clear expand state if the deleted artifact was expanded
+    emit('delete-artifact', artifactId)
+}
+
+function clearExpandedArtifact(artifactId: string) {
     if (expandedArtifactId.value === artifactId) {
         expandedArtifactId.value = null
     }
-    emit('delete-artifact', artifactId)
 }
+
+defineExpose({
+    clearExpandedArtifact
+})
 </script>
 
 <template>
