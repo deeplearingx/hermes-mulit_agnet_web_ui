@@ -176,9 +176,7 @@ async function handleDeleteTask(taskId: string) {
                     </div>
                     <div class="workspace-stream">
                         <AgentRoomEventFeed
-                            :messages="store.messages"
                             :workflow-events="store.workflowEvents"
-                            :reviews="store.reviews"
                         />
                         <div class="stream-input">
                             <textarea

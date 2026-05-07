@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from 'vue'
-import type { AgentRoomMessage, AgentRoomWorkflowEvent, AgentRoomReview } from '@/api/hermes/agent-room'
+import type { AgentRoomWorkflowEvent } from '@/api/hermes/agent-room'
 
 const props = defineProps<{
-    messages: AgentRoomMessage[]
     workflowEvents: AgentRoomWorkflowEvent[]
-    reviews: AgentRoomReview[]
 }>()
 
 const streamRef = ref<HTMLDivElement>()
@@ -38,44 +36,25 @@ const WORKFLOW_ICONS: Record<string, { icon: string; label: string; color: strin
 const events = computed<FeedEvent[]>(() => {
     const result: FeedEvent[] = []
 
-    // Messages — filter out auto-generated non-user messages that have metadata.event
-    // (these are duplicates of workflowEvents produced by the event adapter)
-    for (const msg of props.messages.slice(-30)) {
-        const isAgent = msg.senderRole !== 'user'
-        if (isAgent && msg.metadata?.event) continue
-        result.push({
-            id: `msg-${msg.id}`,
-            icon: isAgent ? '🤖' : '👤',
-            sender: msg.senderName,
-            content: msg.content.length > 80 ? msg.content.slice(0, 80) + '…' : msg.content,
-            time: new Date(msg.createdAt).getTime(),
-            color: isAgent ? '#3b82f6' : '#e2e8f0',
-        })
-    }
-
-    // Workflow events
-    for (const evt of props.workflowEvents.slice(-20)) {
+    // Only consume workflowEvents as the single timeline source.
+    // User messages are displayed separately by AgentRoomMessageList.
+    // Review details (comment) are embedded in review_passed/review_rejected payload.
+    for (const evt of props.workflowEvents.slice(-30)) {
         const meta = WORKFLOW_ICONS[evt.type] || { icon: '📌', label: evt.type, color: '#94a3b8' }
+        let content = meta.label
+
+        // Append review comment from payload when available
+        if ((evt.type === 'review_passed' || evt.type === 'review_rejected') && evt.payload?.comment) {
+            content += `: ${evt.payload.comment}`
+        }
+
         result.push({
             id: `wf-${evt.id}`,
             icon: meta.icon,
             sender: evt.agentRole,
-            content: meta.label,
+            content,
             time: new Date(evt.createdAt).getTime(),
             color: meta.color,
-        })
-    }
-
-    // Reviews
-    for (const rev of props.reviews.slice(-10)) {
-        const passed = rev.status === 'passed'
-        result.push({
-            id: `rev-${rev.id}`,
-            icon: passed ? '✅' : '❌',
-            sender: rev.reviewerAgentId,
-            content: passed ? '审核通过' : `审核驳回${rev.comment ? ': ' + rev.comment : ''}`,
-            time: new Date(rev.createdAt).getTime(),
-            color: passed ? '#22c55e' : '#ef4444',
         })
     }
 

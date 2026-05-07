@@ -394,6 +394,25 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
         }
     }
 
+    /**
+     * Precise tween cleanup for a single agent.
+     * Kills sprite/glow tweens and destroys the pulse timer.
+     * Does NOT use global killAll.
+     */
+    private clearAgentVisualTweens(agentId: string): void {
+        const sprite = this.agentSprites.get(agentId)
+        const glow = this.agentGlows.get(agentId)
+
+        if (sprite) this.tweens.killTweensOf(sprite)
+        if (glow) this.tweens.killTweensOf(glow)
+
+        const timer = this.pulseTimers.get(agentId)
+        if (timer) {
+            timer.destroy()
+            this.pulseTimers.delete(agentId)
+        }
+    }
+
     private updateAgentVisual(agent: AgentDisplayState) {
         this.agentStates.set(agent.id, agent)
 
@@ -405,22 +424,14 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
         // Update label
         label.setText(agent.name)
 
-        // Clear existing pulse
-        const existingTimer = this.pulseTimers.get(agent.id)
-        if (existingTimer) {
-            existingTimer.destroy()
-            this.pulseTimers.delete(agent.id)
-        }
+        // Precise cleanup: kill tweens + pulse timer for this agent only
+        this.clearAgentVisualTweens(agent.id)
 
         const zone = ZONES.find(z => z.id === agent.id)
         const baseY = zone?.agentY ?? sprite.y
 
         switch (agent.status) {
             case 'active': {
-                // Kill existing tweens before applying new visual state
-                this.tweens.killTweensOf(sprite)
-                this.tweens.killTweensOf(glow)
-
                 // Show glow + pulse
                 if (zone) {
                     const color = AGENT_COLORS[agent.id] ?? 0x3b82f6
@@ -454,16 +465,12 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
             }
             case 'completed': {
                 glow.setAlpha(0)
-                this.tweens.killTweensOf(sprite)
-                this.tweens.killTweensOf(glow)
                 sprite.y = baseY
                 label.setColor('#22c55e')
                 break
             }
             case 'failed': {
                 glow.setAlpha(0)
-                this.tweens.killTweensOf(sprite)
-                this.tweens.killTweensOf(glow)
                 sprite.y = baseY
                 label.setColor('#ef4444')
                 break
@@ -471,8 +478,6 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
             default: {
                 // Idle
                 glow.setAlpha(0)
-                this.tweens.killTweensOf(sprite)
-                this.tweens.killTweensOf(glow)
                 sprite.y = baseY
                 label.setColor('#94a3b8')
                 break

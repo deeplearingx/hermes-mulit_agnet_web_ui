@@ -3,9 +3,26 @@
 // Prefix: /api/agent-room
 
 import Router from '@koa/router'
+import type { Context } from 'koa'
 import * as agentRoomService from '../../services/hermes/agent-room'
 
 export const agentRoomRoutes = new Router()
+
+// ─── Unified Error Mapper ─────────────────────────────────────
+function mapAgentRoomError(ctx: Context, err: any): void {
+    const message: string = err?.message ?? 'Unknown error'
+
+    if (message.startsWith('Session not found')) ctx.status = 404
+    else if (message.startsWith('Task not found')) ctx.status = 404
+    else if (message.includes('belongs to session')) ctx.status = 403
+    else if (message.includes('while workflow is running')) ctx.status = 409
+    else if (message.includes('Workflow is already running')) ctx.status = 409
+    else if (message.startsWith('Invalid transition')) ctx.status = 400
+    else if (message.startsWith('Cannot review task')) ctx.status = 400
+    else ctx.status = 400
+
+    ctx.body = { error: message }
+}
 
 // ─── Sessions ──────────────────────────────────────────────────
 
@@ -43,8 +60,7 @@ agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/messages', async (ctx) 
     try {
         ctx.body = agentRoomService.listMessages(ctx.params.sessionId)
     } catch (err: any) {
-        ctx.status = 404
-        ctx.body = { error: err.message }
+        mapAgentRoomError(ctx, err)
     }
 })
 
@@ -67,8 +83,7 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/messages', async (ctx)
         })
         ctx.body = msg
     } catch (err: any) {
-        ctx.status = 404
-        ctx.body = { error: err.message }
+        mapAgentRoomError(ctx, err)
     }
 })
 
@@ -79,8 +94,7 @@ agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/tasks', async (ctx) => 
     try {
         ctx.body = agentRoomService.listTasks(ctx.params.sessionId)
     } catch (err: any) {
-        ctx.status = 404
-        ctx.body = { error: err.message }
+        mapAgentRoomError(ctx, err)
     }
 })
 
@@ -105,8 +119,7 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks', async (ctx) =>
         )
         ctx.body = task
     } catch (err: any) {
-        ctx.status = 404
-        ctx.body = { error: err.message }
+        mapAgentRoomError(ctx, err)
     }
 })
 
@@ -126,18 +139,7 @@ agentRoomRoutes.patch('/api/agent-room/sessions/:sessionId/tasks/:taskId/status'
         )
         ctx.body = task
     } catch (err: any) {
-        if (err.message.startsWith('Session not found')) {
-            ctx.status = 404
-        } else if (err.message.startsWith('Task not found')) {
-            ctx.status = 404
-        } else if (err.message.includes('belongs to session')) {
-            ctx.status = 403
-        } else if (err.message.startsWith('Invalid transition')) {
-            ctx.status = 400
-        } else {
-            ctx.status = 400
-        }
-        ctx.body = { error: err.message }
+        mapAgentRoomError(ctx, err)
     }
 })
 
@@ -170,8 +172,7 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/review',
         }
         ctx.body = review
     } catch (err: any) {
-        ctx.status = 400
-        ctx.body = { error: err.message }
+        mapAgentRoomError(ctx, err)
     }
 })
 
@@ -188,8 +189,7 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/retry', 
         }
         ctx.body = task
     } catch (err: any) {
-        ctx.status = 400
-        ctx.body = { error: err.message }
+        mapAgentRoomError(ctx, err)
     }
 })
 
@@ -204,8 +204,7 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/deliver'
         }
         ctx.body = task
     } catch (err: any) {
-        ctx.status = 400
-        ctx.body = { error: err.message }
+        mapAgentRoomError(ctx, err)
     }
 })
 
@@ -215,8 +214,7 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/workflow
         await agentRoomService.runMockWorkflow(ctx.params.sessionId, ctx.params.taskId)
         ctx.body = { success: true }
     } catch (err: any) {
-        ctx.status = 400
-        ctx.body = { error: err.message }
+        mapAgentRoomError(ctx, err)
     }
 })
 
@@ -227,8 +225,7 @@ agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/reviews', async (ctx) =
     try {
         ctx.body = agentRoomService.listReviews(ctx.params.sessionId)
     } catch (err: any) {
-        ctx.status = 404
-        ctx.body = { error: err.message }
+        mapAgentRoomError(ctx, err)
     }
 })
 
@@ -239,8 +236,7 @@ agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/events', async (ctx) =>
     try {
         ctx.body = agentRoomService.listWorkflowEvents(ctx.params.sessionId)
     } catch (err: any) {
-        ctx.status = 404
-        ctx.body = { error: err.message }
+        mapAgentRoomError(ctx, err)
     }
 })
 
@@ -252,14 +248,7 @@ agentRoomRoutes.delete('/api/agent-room/sessions/:sessionId', async (ctx) => {
         agentRoomService.deleteSession(ctx.params.sessionId)
         ctx.body = { success: true }
     } catch (err: any) {
-        if (err.message.startsWith('Session not found')) {
-            ctx.status = 404
-        } else if (err.message.includes('while workflow is running')) {
-            ctx.status = 409
-        } else {
-            ctx.status = 400
-        }
-        ctx.body = { error: err.message }
+        mapAgentRoomError(ctx, err)
     }
 })
 
@@ -269,17 +258,6 @@ agentRoomRoutes.delete('/api/agent-room/sessions/:sessionId/tasks/:taskId', asyn
         agentRoomService.deleteTask(ctx.params.sessionId, ctx.params.taskId)
         ctx.body = { success: true }
     } catch (err: any) {
-        if (err.message.startsWith('Session not found')) {
-            ctx.status = 404
-        } else if (err.message.startsWith('Task not found')) {
-            ctx.status = 404
-        } else if (err.message.includes('belongs to session')) {
-            ctx.status = 403
-        } else if (err.message.includes('while workflow is running')) {
-            ctx.status = 409
-        } else {
-            ctx.status = 400
-        }
-        ctx.body = { error: err.message }
+        mapAgentRoomError(ctx, err)
     }
 })
