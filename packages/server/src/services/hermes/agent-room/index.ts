@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { buildMessageFromEvent } from './event-adapter'
 import * as store from '../../../db/hermes/agent-room-store'
 import { activeRunner } from './runner'
-import type { AgentRoomRunnerContext } from './runner'
+import type { AgentRoomRunnerContext, AgentRoomRunnerResult } from './runner'
 
 // ─── Types ─────────────────────────────────────────────────────
 export type AgentRoomTaskStatus =
@@ -428,6 +428,66 @@ export function addWorkflowEvent(
 // Delegates actual step execution to the active runner.
 
 /**
+ * Apply a structured RunnerResult to the store.
+ * Used by runWorkflow() when a runner returns AgentRoomRunnerResult instead of void.
+ * All mutations go through existing service-layer helpers to preserve state machine rules.
+ */
+function applyRunnerResult(
+    sessionId: string,
+    taskId: string,
+    taskTitle: string,
+    result: AgentRoomRunnerResult,
+): void {
+    store.runInTransaction(() => {
+        // Apply final task status via state machine (preserves transition rules)
+        if (result.status) {
+            updateTaskStatus(taskId, result.status)
+        }
+
+        // Emit workflow events (each produces both event + message via event-adapter)
+        for (const event of result.events ?? []) {
+            emitEventAndMessage(
+                sessionId,
+                taskId,
+                event.type,
+                event.agentRole,
+                taskTitle,
+                event.payload,
+            )
+        }
+
+        // Create direct chat messages (independent of events)
+        for (const msg of result.messages ?? []) {
+            addMessage({
+                sessionId,
+                senderId: msg.senderRole,
+                senderName: msg.senderRole,
+                senderRole: msg.senderRole,
+                type: 'agent_message',
+                content: msg.content,
+                metadata: { taskId, ...msg.metadata },
+            })
+        }
+
+        // Create artifacts
+        for (const art of result.artifacts ?? []) {
+            const artifact: AgentRoomArtifact = {
+                id: randomUUID(),
+                sessionId,
+                taskId,
+                name: art.name,
+                type: art.type,
+                content: art.content,
+                createdAt: new Date().toISOString(),
+            }
+            store.createArtifact(artifact as store.AgentRoomArtifact)
+        }
+
+        store.updateSessionTimestamp(sessionId)
+    })
+}
+
+/**
  * Run the workflow for a task using the active runner.
  * Locking and startable-status validation remain in this facade.
  */
@@ -461,7 +521,12 @@ export async function runWorkflow(sessionId: string, taskId: string): Promise<vo
             updateSessionTimestamp: (sid) => store.updateSessionTimestamp(sid),
         }
 
-        await activeRunner.run(ctx)
+        const result = await activeRunner.run(ctx)
+
+        // If runner returned a structured result, apply it via facade
+        if (result) {
+            applyRunnerResult(sessionId, taskId, task.title, result)
+        }
     } finally {
         store.updateSessionTimestamp(sessionId)
         runningWorkflows.delete(taskId)
