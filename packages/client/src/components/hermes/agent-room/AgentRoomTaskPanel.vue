@@ -201,6 +201,7 @@ function artifactIcon(status: AgentRoomTaskStatus): string {
                     <button
                         class="btn-delete-task"
                         title="删除任务"
+                        :disabled="actionLoadingTaskId === activeTask.id"
                         @click="emit('delete-task', activeTask.id)"
                     >✕</button>
                 </div>
@@ -254,6 +255,7 @@ function artifactIcon(status: AgentRoomTaskStatus): string {
                     <button
                         class="btn-delete-task"
                         title="删除任务"
+                        :disabled="actionLoadingTaskId === task.id"
                         @click.stop="emit('delete-task', task.id)"
                     >✕</button>
                 </div>

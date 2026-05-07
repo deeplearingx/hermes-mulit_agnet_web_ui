@@ -357,6 +357,10 @@ async function handleDeleteTask(taskId: string) {
         opacity: 1;
     }
 
+    .session-tab.active & {
+        opacity: 1;
+    }
+
     &:hover {
         background: rgba(239, 68, 68, 0.2);
         color: #fca5a5;
