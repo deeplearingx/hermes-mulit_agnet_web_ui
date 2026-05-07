@@ -246,6 +246,49 @@ describe('Agent Room Service', () => {
     })
   })
 
+  describe('runWorkflow (runner facade)', () => {
+    it('runWorkflow walks from created to submitted_for_review', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      await svc.runWorkflow(session.id, task.id)
+
+      const updated = svc.getTask(task.id)
+      expect(updated!.status).toBe('submitted_for_review')
+    })
+
+    it('runMockWorkflow still works as alias', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      await svc.runMockWorkflow(session.id, task.id)
+
+      const updated = svc.getTask(task.id)
+      expect(updated!.status).toBe('submitted_for_review')
+    })
+
+    it('runWorkflow rejects duplicate run', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      const p1 = svc.runWorkflow(session.id, task.id)
+      await expect(svc.runWorkflow(session.id, task.id)).rejects.toThrow('Workflow is already running')
+      await p1
+    })
+
+    it('runWorkflow rejects invalid start status', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      svc.updateTaskStatus(task.id, 'planned')
+
+      await expect(svc.runWorkflow(session.id, task.id)).rejects.toThrow('Cannot start workflow in status "planned"')
+    })
+  })
+
   // ─── Retry / Deliver ──────────────────────────────────────────
 
   describe('Retry / Deliver', () => {

@@ -208,10 +208,10 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/deliver'
     }
 })
 
-// Run mock workflow
+// Run workflow (delegates to active runner)
 agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/workflow', async (ctx) => {
     try {
-        await agentRoomService.runMockWorkflow(ctx.params.sessionId, ctx.params.taskId)
+        await agentRoomService.runWorkflow(ctx.params.sessionId, ctx.params.taskId)
         ctx.body = { success: true }
     } catch (err: any) {
         mapAgentRoomError(ctx, err)
