@@ -568,6 +568,7 @@ export function deleteTask(sessionId: string, taskId: string): void {
     }
     store.runInTransaction(() => {
         store.deleteTaskCascade(sessionId, taskId)
+        store.updateSessionTimestamp(sessionId)
     })
 }
 
