@@ -104,7 +104,7 @@ function handleSelectTask(taskId: string) {
 async function handleDeleteSession(sessionId: string) {
     const session = store.sessions.find(s => s.id === sessionId)
     const name = session?.name ?? sessionId
-    if (!window.confirm(`确认删除会话「${name}」？该会话下任务、消息、审核记录、事件流都会删除。`)) return
+    if (!window.confirm(`确认删除会话「${name}」？该会话下任务、消息、审核记录、事件流和产出物都会删除。`)) return
     try {
         await store.removeSession(sessionId)
     } catch {
@@ -115,9 +115,17 @@ async function handleDeleteSession(sessionId: string) {
 async function handleDeleteTask(taskId: string) {
     const task = store.tasks.find(t => t.id === taskId)
     const title = task?.title ?? taskId
-    if (!window.confirm(`确认删除任务「${title}」？相关审核记录、工作流事件和任务消息也会删除。`)) return
+    if (!window.confirm(`确认删除任务「${title}」？相关审核记录、工作流事件、任务消息和产出物也会删除。`)) return
     try {
         await store.removeTask(taskId)
+    } catch {
+        // Error already set in store
+    }
+}
+
+async function handleDeleteArtifact(artifactId: string) {
+    try {
+        await store.removeArtifact(artifactId)
     } catch {
         // Error already set in store
     }
@@ -206,6 +214,7 @@ async function handleDeleteTask(taskId: string) {
                         @deliver-task="handleDeliverTask"
                         @select-task="handleSelectTask"
                         @delete-task="handleDeleteTask"
+                        @delete-artifact="handleDeleteArtifact"
                     />
                 </div>
             </div>

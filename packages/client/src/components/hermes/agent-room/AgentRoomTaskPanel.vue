@@ -19,6 +19,7 @@ const emit = defineEmits<{
     (e: 'deliver-task', taskId: string): void
     (e: 'select-task', taskId: string): void
     (e: 'delete-task', taskId: string): void
+    (e: 'delete-artifact', artifactId: string): void
 }>()
 
 // ─── Status Display ────────────────────────────────────────────
@@ -312,6 +313,11 @@ function toggleArtifact(id: string) {
                         <span class="artifact-icon">{{ artifactTypeIcon(artifact.type) }}</span>
                         <span class="artifact-name">{{ artifact.name }}</span>
                         <span class="artifact-type">{{ artifact.type }}</span>
+                        <button
+                            class="btn-delete-artifact"
+                            title="删除产出物"
+                            @click.stop="emit('delete-artifact', artifact.id)"
+                        >✕</button>
                         <span class="artifact-expand">{{ expandedArtifactId === artifact.id ? '▾' : '▸' }}</span>
                     </div>
                     <div v-if="expandedArtifactId === artifact.id && artifact.content" class="artifact-content">
@@ -637,6 +643,34 @@ function toggleArtifact(id: string) {
 
     &:hover {
         background: rgba(255, 255, 255, 0.03);
+    }
+}
+
+.btn-delete-artifact {
+    width: 14px;
+    height: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 2px;
+    background: transparent;
+    color: #64748b;
+    cursor: pointer;
+    font-size: 9px;
+    line-height: 1;
+    padding: 0;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+
+    .artifact-item:hover & {
+        opacity: 1;
+    }
+
+    &:hover {
+        background: rgba(239, 68, 68, 0.2);
+        color: #fca5a5;
     }
 }
 

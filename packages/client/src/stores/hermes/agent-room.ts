@@ -28,6 +28,7 @@ import {
     listReviews as apiListReviews,
     listWorkflowEvents as apiListWorkflowEvents,
     listArtifacts as apiListArtifacts,
+    deleteArtifact as apiDeleteArtifact,
     runWorkflow as apiRunWorkflow,
     deleteSession as apiDeleteSession,
     deleteTask as apiDeleteTask,
@@ -108,6 +109,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
             tasks.value = []
             reviews.value = []
             workflowEvents.value = []
+            artifacts.value = []
             // Load data for the newly created session
             await refreshCurrentSession()
             return session
@@ -344,6 +346,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
                     tasks.value = []
                     reviews.value = []
                     workflowEvents.value = []
+                    artifacts.value = []
                     activeTaskId.value = null
                 }
             }
@@ -367,6 +370,20 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
             touchSession(currentSessionId.value)
             // Refresh to ensure consistency
             await refreshCurrentSession()
+        } catch (err: any) {
+            error.value = err.message
+            throw err
+        }
+    }
+
+    // ─── Artifact Actions ──────────────────────────────────────
+    async function removeArtifact(artifactId: string) {
+        if (!currentSessionId.value) return
+        error.value = null
+        try {
+            await apiDeleteArtifact(currentSessionId.value, artifactId)
+            // Local immediate update: filter out the deleted artifact
+            artifacts.value = artifacts.value.filter(a => a.id !== artifactId)
         } catch (err: any) {
             error.value = err.message
             throw err
@@ -451,6 +468,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         deliverTask,
         removeSession,
         removeTask,
+        removeArtifact,
         loadReviews,
         loadWorkflowEvents,
         runMockWorkflow,
