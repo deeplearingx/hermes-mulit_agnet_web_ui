@@ -175,4 +175,78 @@ describe('Agent Room RunnerResult Protocol', () => {
         const events = svc.listWorkflowEvents(session.id)
         expect(events.length).toBeGreaterThanOrEqual(5)
     })
+
+    it('ordered steps drive full created → submitted_for_review workflow', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const session = svc.createSession('Test')
+        const task = svc.createTask(session.id, 'Task', '')
+
+        // Fake runner that returns ordered steps matching the mock workflow
+        setActiveRunnerForTest({
+            name: 'real',
+            run: async () => ({
+                steps: [
+                    { status: 'planned' as const, events: [{ type: 'task_planned' as const, agentRole: 'planner' as const }] },
+                    { status: 'assigned' as const, events: [{ type: 'task_assigned' as const, agentRole: 'developer' as const }] },
+                    { status: 'in_progress' as const, events: [{ type: 'task_started' as const, agentRole: 'developer' as const }] },
+                    { status: 'submitted_for_review' as const, events: [{ type: 'task_submitted' as const, agentRole: 'developer' as const }] },
+                ],
+            }),
+        })
+
+        await svc.runWorkflow(session.id, task.id)
+
+        // Verify final status
+        const updatedTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(updatedTask.status).toBe('submitted_for_review')
+
+        // Verify all events were emitted
+        const events = svc.listWorkflowEvents(session.id)
+        expect(events.some(e => e.type === 'task_planned')).toBe(true)
+        expect(events.some(e => e.type === 'task_assigned')).toBe(true)
+        expect(events.some(e => e.type === 'task_started')).toBe(true)
+        expect(events.some(e => e.type === 'task_submitted')).toBe(true)
+
+        resetActiveRunnerForTest()
+    })
+
+    it('ordered steps with artifacts creates artifacts after all steps', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const session = svc.createSession('Test')
+        const task = svc.createTask(session.id, 'Task', '')
+
+        setActiveRunnerForTest({
+            name: 'real',
+            run: async () => ({
+                steps: [
+                    { status: 'planned' as const },
+                    { status: 'assigned' as const },
+                    { status: 'in_progress' as const },
+                    { status: 'submitted_for_review' as const },
+                ],
+                artifacts: [
+                    { name: 'Final Output', type: 'final_delivery' as const, content: 'Done' },
+                ],
+            }),
+        })
+
+        await svc.runWorkflow(session.id, task.id)
+
+        const updatedTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(updatedTask.status).toBe('submitted_for_review')
+
+        const artifacts = svc.listTaskArtifacts(session.id, task.id)
+        expect(artifacts.length).toBe(1)
+        expect(artifacts[0].name).toBe('Final Output')
+
+        resetActiveRunnerForTest()
+    })
 })

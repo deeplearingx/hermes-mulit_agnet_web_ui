@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { buildMessageFromEvent } from './event-adapter'
 import * as store from '../../../db/hermes/agent-room-store'
 import { activeRunner } from './runner'
-import type { AgentRoomRunnerContext, AgentRoomRunnerResult } from './runner'
+import type { AgentRoomRunnerContext, AgentRoomRunnerResult, AgentRoomRunnerStep } from './runner'
 
 // ─── Types ─────────────────────────────────────────────────────
 export type AgentRoomTaskStatus =
@@ -428,9 +428,55 @@ export function addWorkflowEvent(
 // Delegates actual step execution to the active runner.
 
 /**
+ * Apply a single step to the store.
+ * Each step: status transition → events → messages.
+ */
+function applyRunnerStep(
+    sessionId: string,
+    taskId: string,
+    taskTitle: string,
+    step: AgentRoomRunnerStep,
+): void {
+    // Transition status via state machine (validates each transition)
+    if (step.status) {
+        updateTaskStatus(taskId, step.status)
+    }
+
+    // Emit workflow events (each produces both event + message via event-adapter)
+    for (const event of step.events ?? []) {
+        emitEventAndMessage(
+            sessionId,
+            taskId,
+            event.type,
+            event.agentRole,
+            taskTitle,
+            event.payload,
+        )
+    }
+
+    // Create direct chat messages (independent of events)
+    for (const msg of step.messages ?? []) {
+        addMessage({
+            sessionId,
+            senderId: msg.senderRole,
+            senderName: msg.senderRole,
+            senderRole: msg.senderRole,
+            type: 'agent_message',
+            content: msg.content,
+            metadata: { taskId, ...msg.metadata },
+        })
+    }
+}
+
+/**
  * Apply a structured RunnerResult to the store.
  * Used by runWorkflow() when a runner returns AgentRoomRunnerResult instead of void.
- * All mutations go through existing service-layer helpers to preserve state machine rules.
+ *
+ * Supports two modes:
+ * 1. **Ordered steps** (preferred): `result.steps` applied sequentially.
+ * 2. **Legacy flat** (backward compat): `result.status` + `result.events` + `result.messages`.
+ *
+ * Artifacts are always created after all steps/status transitions complete.
  */
 function applyRunnerResult(
     sessionId: string,
@@ -439,37 +485,21 @@ function applyRunnerResult(
     result: AgentRoomRunnerResult,
 ): void {
     store.runInTransaction(() => {
-        // Apply final task status via state machine (preserves transition rules)
-        if (result.status) {
-            updateTaskStatus(taskId, result.status)
-        }
-
-        // Emit workflow events (each produces both event + message via event-adapter)
-        for (const event of result.events ?? []) {
-            emitEventAndMessage(
-                sessionId,
-                taskId,
-                event.type,
-                event.agentRole,
-                taskTitle,
-                event.payload,
-            )
-        }
-
-        // Create direct chat messages (independent of events)
-        for (const msg of result.messages ?? []) {
-            addMessage({
-                sessionId,
-                senderId: msg.senderRole,
-                senderName: msg.senderRole,
-                senderRole: msg.senderRole,
-                type: 'agent_message',
-                content: msg.content,
-                metadata: { taskId, ...msg.metadata },
+        // Apply ordered steps (preferred path)
+        if (result.steps?.length) {
+            for (const step of result.steps) {
+                applyRunnerStep(sessionId, taskId, taskTitle, step)
+            }
+        } else {
+            // Legacy flat path (backward compat)
+            applyRunnerStep(sessionId, taskId, taskTitle, {
+                status: result.status,
+                events: result.events,
+                messages: result.messages,
             })
         }
 
-        // Create artifacts
+        // Create artifacts (always after all steps complete)
         for (const art of result.artifacts ?? []) {
             const artifact: AgentRoomArtifact = {
                 id: randomUUID(),

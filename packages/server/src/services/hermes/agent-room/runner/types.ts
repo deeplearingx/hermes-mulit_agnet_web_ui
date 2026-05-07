@@ -66,22 +66,56 @@ export interface AgentRoomRunnerArtifact {
 }
 
 /**
- * Structured result returned by a runner.
- * All fields are optional — the facade applies only what is present.
- * Runners that use ctx helpers directly (legacy) may return void.
+ * A single step in an ordered workflow execution.
+ * Each step transitions the task status and emits events/messages.
+ * Steps are applied sequentially — the facade validates each transition.
  */
-export interface AgentRoomRunnerResult {
-    /** Final task status to apply via the service state machine. */
+export interface AgentRoomRunnerStep {
+    /** Task status to transition to at this step. */
     status?: AgentRoomTask['status']
 
-    /** Workflow events to emit (each produces both event + message). */
+    /** Events to emit at this step (each produces both event + message). */
     events?: AgentRoomRunnerEvent[]
 
-    /** Direct chat messages to create (independent of events). */
+    /** Direct chat messages to create at this step. */
     messages?: AgentRoomRunnerMessage[]
+}
 
-    /** Artifacts to create for this task. */
+/**
+ * Structured result returned by a runner.
+ * Supports two modes:
+ *
+ * 1. **Ordered steps** (preferred): `steps` array drives multi-step workflows.
+ *    Each step transitions status then emits events. The facade validates
+ *    every transition via the state machine.
+ *
+ * 2. **Legacy flat** (backward compat): `status` + `events` + `messages`
+ *    for single-step results. Still supported but deprecated for new runners.
+ *
+ * `artifacts` are always created after all steps/status transitions complete.
+ * Runners that use ctx helpers directly (MockAgentRoomRunner) may return void.
+ */
+export interface AgentRoomRunnerResult {
+    /**
+     * Ordered workflow steps. Each step is applied sequentially:
+     * status transition → events → messages.
+     * Preferred over flat status/events for multi-step workflows.
+     */
+    steps?: AgentRoomRunnerStep[]
+
+    /** Artifacts to create for this task (applied after all steps). */
     artifacts?: AgentRoomRunnerArtifact[]
+
+    // ── Legacy flat fields (deprecated for new runners) ──────────
+
+    /** @deprecated Use steps[].status instead for multi-step workflows. */
+    status?: AgentRoomTask['status']
+
+    /** @deprecated Use steps[].events instead for multi-step workflows. */
+    events?: AgentRoomRunnerEvent[]
+
+    /** @deprecated Use steps[].messages instead for multi-step workflows. */
+    messages?: AgentRoomRunnerMessage[]
 }
 
 /**

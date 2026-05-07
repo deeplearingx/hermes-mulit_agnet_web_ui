@@ -7,6 +7,7 @@ export type {
     AgentRoomRunner,
     AgentRoomRunnerContext,
     AgentRoomRunnerResult,
+    AgentRoomRunnerStep,
     AgentRoomRunnerEvent,
     AgentRoomRunnerMessage,
     AgentRoomRunnerArtifact,
