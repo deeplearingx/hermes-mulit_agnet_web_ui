@@ -14,6 +14,7 @@ function mapAgentRoomError(ctx: Context, err: any): void {
 
     if (message.startsWith('Session not found')) ctx.status = 404
     else if (message.startsWith('Task not found')) ctx.status = 404
+    else if (message.startsWith('Artifact not found')) ctx.status = 404
     else if (message.includes('belongs to session')) ctx.status = 403
     else if (message.includes('while workflow is running')) ctx.status = 409
     else if (message.includes('Workflow is already running')) ctx.status = 409

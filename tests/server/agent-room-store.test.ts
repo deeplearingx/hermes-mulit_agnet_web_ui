@@ -214,4 +214,70 @@ describe('Agent Room Store', () => {
     store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
     expect(store.listReviewsBySession('s1')).toEqual([])
   })
+
+  // ─── Artifact CRUD ──────────────────────────────────────────
+  it('createArtifact / getArtifact / listArtifactsBySession / listArtifactsByTask', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+
+    const artifact = { id: 'a1', sessionId: 's1', taskId: 't1', name: 'Output', type: 'code_output', content: 'hello', metadata: { key: 'val' }, createdAt: now }
+    store.createArtifact(artifact)
+
+    expect(store.getArtifact('a1')).toMatchObject({ id: 'a1', name: 'Output', type: 'code_output', content: 'hello', metadata: { key: 'val' } })
+    expect(store.listArtifactsBySession('s1')).toHaveLength(1)
+    expect(store.listArtifactsByTask('t1')).toHaveLength(1)
+  })
+
+  it('getArtifact returns null for nonexistent id', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    expect(store.getArtifact('nonexistent')).toBeNull()
+  })
+
+  it('deleteArtifact removes artifact', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+    store.createArtifact({ id: 'a1', sessionId: 's1', taskId: 't1', name: 'X', type: 'log', createdAt: now })
+
+    store.deleteArtifact('a1')
+    expect(store.getArtifact('a1')).toBeNull()
+    expect(store.listArtifactsBySession('s1')).toHaveLength(0)
+  })
+
+  it('deleteArtifactsByTask removes all artifacts for a task', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+    store.createArtifact({ id: 'a1', sessionId: 's1', taskId: 't1', name: 'X', type: 'log', createdAt: now })
+    store.createArtifact({ id: 'a2', sessionId: 's1', taskId: 't1', name: 'Y', type: 'code_output', createdAt: now })
+
+    store.deleteArtifactsByTask('t1')
+    expect(store.listArtifactsByTask('t1')).toHaveLength(0)
+  })
+
+  it('deleteTaskCascade removes task artifacts', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+    store.createArtifact({ id: 'a1', sessionId: 's1', taskId: 't1', name: 'X', type: 'log', createdAt: now })
+
+    store.deleteTaskCascade('s1', 't1')
+    expect(store.getArtifact('a1')).toBeNull()
+  })
+
+  it('deleteSessionCascade removes session artifacts', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+    store.createArtifact({ id: 'a1', sessionId: 's1', taskId: 't1', name: 'X', type: 'log', createdAt: now })
+
+    store.deleteSessionCascade('s1')
+    expect(store.getArtifact('a1')).toBeNull()
+  })
 })

@@ -124,4 +124,54 @@ describe('Agent Room Client Store — Artifact Stability', () => {
         // Artifact should NOT be removed from local list on failure
         expect(store.artifacts).toHaveLength(1)
     })
+
+    // ─── Workflow Facade ───────────────────────────────────────
+    it('runWorkflow calls API and refreshes session data', async () => {
+        const store = useAgentRoomStore()
+
+        store.currentSessionId = 's1'
+        store.sessions = [{ id: 's1', name: 'Test', createdAt: '2025-01-01', updatedAt: '2025-01-01' }]
+
+        mockApi.runWorkflow.mockResolvedValue({ success: true })
+        mockApi.listMessages.mockResolvedValue([])
+        mockApi.listTasks.mockResolvedValue([])
+        mockApi.listReviews.mockResolvedValue([])
+        mockApi.listWorkflowEvents.mockResolvedValue([])
+        mockApi.listArtifacts.mockResolvedValue([])
+
+        await store.runWorkflow('t1')
+
+        expect(mockApi.runWorkflow).toHaveBeenCalledWith('s1', 't1')
+        expect(store.actionLoadingTaskId).toBeNull()
+    })
+
+    it('runMockWorkflow still works as alias for runWorkflow', async () => {
+        const store = useAgentRoomStore()
+
+        store.currentSessionId = 's1'
+        store.sessions = [{ id: 's1', name: 'Test', createdAt: '2025-01-01', updatedAt: '2025-01-01' }]
+
+        mockApi.runWorkflow.mockResolvedValue({ success: true })
+        mockApi.listMessages.mockResolvedValue([])
+        mockApi.listTasks.mockResolvedValue([])
+        mockApi.listReviews.mockResolvedValue([])
+        mockApi.listWorkflowEvents.mockResolvedValue([])
+        mockApi.listArtifacts.mockResolvedValue([])
+
+        await store.runMockWorkflow('t1')
+
+        expect(mockApi.runWorkflow).toHaveBeenCalledWith('s1', 't1')
+    })
+
+    it('runWorkflow sets error on API failure', async () => {
+        const store = useAgentRoomStore()
+
+        store.currentSessionId = 's1'
+
+        mockApi.runWorkflow.mockRejectedValue(new Error('Workflow is already running'))
+
+        await expect(store.runWorkflow('t1')).rejects.toThrow('Workflow is already running')
+        expect(store.error).toBe('Workflow is already running')
+        expect(store.actionLoadingTaskId).toBeNull()
+    })
 })

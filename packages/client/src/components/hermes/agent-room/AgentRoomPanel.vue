@@ -68,7 +68,7 @@ async function handleCreateTaskSubmit(data: { title: string; description: string
 }
 
 async function handleRunWorkflow(taskId: string) {
-    await store.runMockWorkflow(taskId)
+    await store.runWorkflow(taskId)
 }
 
 function handleOpenReview(taskId: string) {
@@ -124,6 +124,9 @@ async function handleDeleteTask(taskId: string) {
 }
 
 async function handleDeleteArtifact(artifactId: string) {
+    const artifact = store.artifacts.find(a => a.id === artifactId)
+    const name = artifact?.name ?? artifactId
+    if (!window.confirm(`确认删除产出物「${name}」？此操作不可恢复。`)) return
     try {
         await store.removeArtifact(artifactId)
     } catch {

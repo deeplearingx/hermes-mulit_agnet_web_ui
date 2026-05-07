@@ -390,8 +390,25 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         }
     }
 
-    // ─── Mock Workflow (v1) ────────────────────────────────────
-    // Calls server-side mock workflow, then reloads all data
+    // ─── Workflow Actions ──────────────────────────────────────
+    // Primary workflow entry point — delegates to server-side runner
+    async function runWorkflow(taskId: string) {
+        if (!currentSessionId.value) return
+        actionLoadingTaskId.value = taskId
+        error.value = null
+        try {
+            await apiRunWorkflow(currentSessionId.value, taskId)
+            touchSession(currentSessionId.value)
+            await refreshCurrentSession()
+        } catch (err: any) {
+            error.value = err.message
+            throw err
+        } finally {
+            actionLoadingTaskId.value = null
+        }
+    }
+
+    // Compatibility alias — delegates to runWorkflow
     async function runMockWorkflow(taskId: string) {
         if (!currentSessionId.value) return
         actionLoadingTaskId.value = taskId
@@ -471,6 +488,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         removeArtifact,
         loadReviews,
         loadWorkflowEvents,
+        runWorkflow,
         runMockWorkflow,
         setActiveTask,
         clearError,

@@ -259,7 +259,7 @@ describe('Agent Room Service', () => {
       expect(updated!.status).toBe('submitted_for_review')
     })
 
-    it('runMockWorkflow still works as alias', async () => {
+    it('runMockWorkflow still works as alias for runWorkflow', async () => {
       const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
       const session = svc.createSession('Test')
       const task = svc.createTask(session.id, 'Task', '')
@@ -976,6 +976,66 @@ describe('Agent Room Service', () => {
 
       // Session is gone, listArtifacts should throw
       expect(() => svc.listArtifacts(session.id)).toThrow('Session not found')
+    })
+
+    it('deleteArtifact throws for nonexistent artifact', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      expect(() => svc.deleteArtifact(session.id, 'nonexistent')).toThrow('Artifact not found')
+    })
+
+    it('deleteArtifact throws for cross-session access', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const s1 = svc.createSession('S1')
+      const s2 = svc.createSession('S2')
+      const task = svc.createTask(s1.id, 'Task', '')
+
+      await svc.runWorkflow(s1.id, task.id)
+      svc.submitReview(s1.id, task.id, 'reviewer', 'passed', '')
+      svc.deliverTask(s1.id, task.id)
+
+      const artifacts = svc.listArtifacts(s1.id)
+      expect(artifacts.length).toBe(1)
+
+      // Attempting to delete artifact from wrong session should throw
+      expect(() => svc.deleteArtifact(s2.id, artifacts[0].id)).toThrow('belongs to session')
+    })
+
+    it('deliverTask always creates exactly one final_delivery artifact', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+
+      // Before deliver: no artifacts
+      expect(svc.listArtifacts(session.id).length).toBe(0)
+
+      svc.deliverTask(session.id, task.id)
+
+      // After deliver: exactly one final_delivery artifact
+      const artifacts = svc.listArtifacts(session.id)
+      expect(artifacts.length).toBe(1)
+      expect(artifacts[0].type).toBe('final_delivery')
+      expect(artifacts[0].taskId).toBe(task.id)
+      expect(artifacts[0].sessionId).toBe(session.id)
+      expect(artifacts[0].name).toBeTruthy()
+    })
+
+    it('deliverTask creates final_delivery artifact with deterministic content', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Build Widget', '')
+
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      svc.deliverTask(session.id, task.id)
+
+      const artifacts = svc.listTaskArtifacts(session.id, task.id)
+      expect(artifacts.length).toBe(1)
+      expect(artifacts[0].name).toContain('Build Widget')
+      expect(artifacts[0].content).toBeTruthy()
     })
   })
 })
