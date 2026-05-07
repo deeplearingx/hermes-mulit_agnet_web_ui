@@ -121,6 +121,11 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         currentSessionId.value = sessionId
         activeTaskId.value = null
         error.value = null
+        // Immediately clear stale data from previous session
+        messages.value = []
+        tasks.value = []
+        reviews.value = []
+        workflowEvents.value = []
 
         try {
             const [nextMessages, nextTasks, nextReviews, nextWorkflowEvents] = await Promise.all([
@@ -177,11 +182,24 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         }
     }
 
+    // ─── Local Session Touch ────────────────────────────────────
+    // Bump session updatedAt locally and re-sort by most-recent first
+    function touchSession(sessionId: string) {
+        const idx = sessions.value.findIndex(s => s.id === sessionId)
+        if (idx < 0) return
+        sessions.value[idx] = { ...sessions.value[idx], updatedAt: new Date().toISOString() }
+        // Immutable sort: most recently active first
+        sessions.value = [...sessions.value].sort(
+            (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+        )
+    }
+
     async function sendUserMessage(content: string) {
         if (!currentSessionId.value) return
         try {
             const msg = await apiSendMessage(currentSessionId.value, content)
             messages.value.push(msg)
+            touchSession(currentSessionId.value)
         } catch (err: any) {
             error.value = err.message
             throw err
@@ -203,6 +221,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
             const task = await apiCreateTask(currentSessionId.value, { title, description, assignedAgentId })
             tasks.value.push(task)
             activeTaskId.value = task.id
+            touchSession(currentSessionId.value)
             // Server now emits task_created event + message; refresh to pick them up
             await refreshCurrentSession()
             return task
@@ -235,6 +254,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
                 status,
                 comment: comment ?? '',
             })
+            touchSession(currentSessionId.value)
             await refreshCurrentSession()
             return review
         } catch (err: any) {
@@ -251,6 +271,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         error.value = null
         try {
             await apiRetryTask(currentSessionId.value, taskId)
+            touchSession(currentSessionId.value)
             await refreshCurrentSession()
         } catch (err: any) {
             error.value = err.message
@@ -266,6 +287,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         error.value = null
         try {
             await apiDeliverTask(currentSessionId.value, taskId)
+            touchSession(currentSessionId.value)
             await refreshCurrentSession()
         } catch (err: any) {
             error.value = err.message
@@ -334,6 +356,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
                 const nextActive = remaining.find(t => !['completed', 'failed'].includes(t.status))
                 activeTaskId.value = nextActive?.id ?? null
             }
+            touchSession(currentSessionId.value)
             // Refresh to ensure consistency
             await refreshCurrentSession()
         } catch (err: any) {
@@ -350,6 +373,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         error.value = null
         try {
             await apiRunWorkflow(currentSessionId.value, taskId)
+            touchSession(currentSessionId.value)
             await refreshCurrentSession()
         } catch (err: any) {
             error.value = err.message
