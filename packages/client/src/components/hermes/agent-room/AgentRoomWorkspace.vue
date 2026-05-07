@@ -107,6 +107,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+    sceneReady = false
     if (game) {
         game.destroy(true)
         game = null

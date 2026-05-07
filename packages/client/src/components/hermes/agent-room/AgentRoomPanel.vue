@@ -23,6 +23,7 @@ const submittingReview = ref(false)
 
 // ─── Session Management ────────────────────────────────────────
 async function handleCreateSession() {
+    if (store.creatingSession) return
     const name = newSessionName.value.trim() || `会话 ${store.sessions.length + 1}`
     try {
         await store.createSession(name)

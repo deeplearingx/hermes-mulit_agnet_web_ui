@@ -38,9 +38,11 @@ const WORKFLOW_ICONS: Record<string, { icon: string; label: string; color: strin
 const events = computed<FeedEvent[]>(() => {
     const result: FeedEvent[] = []
 
-    // Messages
+    // Messages — filter out auto-generated non-user messages that have metadata.event
+    // (these are duplicates of workflowEvents produced by the event adapter)
     for (const msg of props.messages.slice(-30)) {
         const isAgent = msg.senderRole !== 'user'
+        if (isAgent && msg.metadata?.event) continue
         result.push({
             id: `msg-${msg.id}`,
             icon: isAgent ? '🤖' : '👤',

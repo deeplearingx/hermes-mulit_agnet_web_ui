@@ -88,13 +88,17 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     }
 
     async function createSession(name: string) {
+        // Re-entry guard: prevent duplicate creates
+        if (creatingSession.value) return null
         creatingSession.value = true
         error.value = null
+        // Invalidate any in-flight loadSessions so stale results don't overwrite
+        ++sessionsLoadSeq
         try {
             const session = await apiCreateSession(name)
-            // Dedup insert: skip if session id already present
+            // Front-insert with dedup: skip if session id already present
             if (!sessions.value.some(s => s.id === session.id)) {
-                sessions.value.push(session)
+                sessions.value.unshift(session)
             }
             currentSessionId.value = session.id
             activeTaskId.value = null

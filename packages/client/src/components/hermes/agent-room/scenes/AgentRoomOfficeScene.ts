@@ -417,6 +417,10 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
 
         switch (agent.status) {
             case 'active': {
+                // Kill existing tweens before applying new visual state
+                this.tweens.killTweensOf(sprite)
+                this.tweens.killTweensOf(glow)
+
                 // Show glow + pulse
                 if (zone) {
                     const color = AGENT_COLORS[agent.id] ?? 0x3b82f6
