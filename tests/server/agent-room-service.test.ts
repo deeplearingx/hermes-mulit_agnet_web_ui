@@ -214,39 +214,6 @@ describe('Agent Room Service', () => {
 
   // ─── Workflow ──────────────────────────────────────────────────
 
-  describe('Workflow', () => {
-    it('runMockWorkflow walks from created to submitted_for_review', async () => {
-      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
-      const session = svc.createSession('Test')
-      const task = svc.createTask(session.id, 'Task', '')
-
-      await svc.runMockWorkflow(session.id, task.id)
-
-      const updated = svc.getTask(task.id)
-      expect(updated!.status).toBe('submitted_for_review')
-    })
-
-    it('runMockWorkflow throws on duplicate run', async () => {
-      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
-      const session = svc.createSession('Test')
-      const task = svc.createTask(session.id, 'Task', '')
-
-      // Start first workflow (don't await to keep runningWorkflows populated)
-      const p1 = svc.runMockWorkflow(session.id, task.id)
-      await expect(svc.runMockWorkflow(session.id, task.id)).rejects.toThrow('Workflow is already running')
-      await p1
-    })
-
-    it('runMockWorkflow throws on invalid start status', async () => {
-      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
-      const session = svc.createSession('Test')
-      const task = svc.createTask(session.id, 'Task', '')
-      svc.updateTaskStatus(task.id, 'planned')
-
-      await expect(svc.runMockWorkflow(session.id, task.id)).rejects.toThrow('Cannot start workflow in status "planned"')
-    })
-  })
-
   describe('runWorkflow (runner facade)', () => {
     it('runWorkflow walks from created to submitted_for_review', async () => {
       const svc = await import('../../packages/server/src/services/hermes/agent-room/index')

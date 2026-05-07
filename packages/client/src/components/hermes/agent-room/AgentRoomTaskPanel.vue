@@ -194,6 +194,14 @@ function artifactTypeIcon(type: string): string {
 function toggleArtifact(id: string) {
     expandedArtifactId.value = expandedArtifactId.value === id ? null : id
 }
+
+function handleDeleteArtifact(artifactId: string) {
+    // Clear expand state if the deleted artifact was expanded
+    if (expandedArtifactId.value === artifactId) {
+        expandedArtifactId.value = null
+    }
+    emit('delete-artifact', artifactId)
+}
 </script>
 
 <template>
@@ -316,7 +324,7 @@ function toggleArtifact(id: string) {
                         <button
                             class="btn-delete-artifact"
                             title="删除产出物"
-                            @click.stop="emit('delete-artifact', artifact.id)"
+                            @click.stop="handleDeleteArtifact(artifact.id)"
                         >✕</button>
                         <span class="artifact-expand">{{ expandedArtifactId === artifact.id ? '▾' : '▸' }}</span>
                     </div>

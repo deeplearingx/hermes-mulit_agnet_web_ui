@@ -9,7 +9,7 @@ import * as agentRoomService from '../../services/hermes/agent-room'
 export const agentRoomRoutes = new Router()
 
 // ─── Unified Error Mapper ─────────────────────────────────────
-function mapAgentRoomError(ctx: Context, err: any): void {
+export function mapAgentRoomError(ctx: Context, err: any): void {
     const message: string = err?.message ?? 'Unknown error'
 
     if (message.startsWith('Session not found')) ctx.status = 404
