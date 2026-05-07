@@ -122,13 +122,14 @@ describe('Hermes schema migrations', () => {
 
     expect(() => initAllHermesTables()).not.toThrow()
 
-    // Verify all 5 agent_room tables exist
+    // Verify all 6 agent_room tables exist
     const tables = [
       'agent_room_sessions',
       'agent_room_tasks',
       'agent_room_reviews',
       'agent_room_messages',
       'agent_room_workflow_events',
+      'agent_room_artifacts',
     ]
     for (const table of tables) {
       const row = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(table) as any
@@ -145,6 +146,8 @@ describe('Hermes schema migrations', () => {
       'idx_ar_messages_session',
       'idx_ar_events_session',
       'idx_ar_events_task',
+      'idx_ar_artifacts_session',
+      'idx_ar_artifacts_task',
     ]
     for (const idx of indexes) {
       const row = db.prepare(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`).get(idx) as any

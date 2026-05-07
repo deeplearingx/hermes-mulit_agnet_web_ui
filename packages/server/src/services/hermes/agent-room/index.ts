@@ -108,6 +108,19 @@ export interface AgentRoomWorkflowEvent {
     createdAt: string
 }
 
+export type AgentRoomArtifactType = 'final_delivery' | 'code_output' | 'review_report' | 'log' | 'other'
+
+export interface AgentRoomArtifact {
+    id: string
+    sessionId: string
+    taskId: string
+    name: string
+    type: AgentRoomArtifactType
+    content?: string
+    metadata?: Record<string, unknown>
+    createdAt: string
+}
+
 // ─── Constants ─────────────────────────────────────────────────
 const MAX_REVISION_ROUNDS = 3
 
@@ -553,8 +566,43 @@ export function deliverTask(sessionId: string, taskId: string): AgentRoomTask | 
         // Complete via state machine
         updateTaskStatus(taskId, 'completed')
         emitEventAndMessage(sessionId, taskId, 'delivery_completed', 'delivery', task.title)
+
+        // Create final_delivery artifact
+        const artifact: AgentRoomArtifact = {
+            id: randomUUID(),
+            sessionId,
+            taskId,
+            name: `${task.title} — 交付结果`,
+            type: 'final_delivery',
+            content: `任务「${task.title}」已完成交付。`,
+            createdAt: new Date().toISOString(),
+        }
+        store.createArtifact(artifact as store.AgentRoomArtifact)
     })
 
     store.updateSessionTimestamp(sessionId)
     return store.getTask(taskId) as AgentRoomTask | null
+}
+
+// ─── Artifact CRUD ─────────────────────────────────────────────
+
+export function listArtifacts(sessionId: string): AgentRoomArtifact[] {
+    assertSessionExists(sessionId)
+    return store.listArtifactsBySession(sessionId) as AgentRoomArtifact[]
+}
+
+export function listTaskArtifacts(sessionId: string, taskId: string): AgentRoomArtifact[] {
+    assertSessionExists(sessionId)
+    assertTaskInSession(taskId, sessionId)
+    return store.listArtifactsByTask(taskId) as AgentRoomArtifact[]
+}
+
+export function deleteArtifact(sessionId: string, artifactId: string): void {
+    assertSessionExists(sessionId)
+    const artifact = store.getArtifact(artifactId)
+    if (!artifact) throw new Error('Artifact not found')
+    if (artifact.sessionId !== sessionId) {
+        throw new Error(`Artifact belongs to session ${artifact.sessionId}, not ${sessionId}`)
+    }
+    store.deleteArtifact(artifactId)
 }

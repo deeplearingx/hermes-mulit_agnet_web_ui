@@ -39,6 +39,7 @@ describe('Agent Room Service', () => {
     ensureTableForTest(db, schemas.AR_REVIEWS_TABLE, schemas.AR_REVIEWS_SCHEMA)
     ensureTableForTest(db, schemas.AR_MESSAGES_TABLE, schemas.AR_MESSAGES_SCHEMA)
     ensureTableForTest(db, schemas.AR_WORKFLOW_EVENTS_TABLE, schemas.AR_WORKFLOW_EVENTS_SCHEMA)
+    ensureTableForTest(db, schemas.AR_ARTIFACTS_TABLE, schemas.AR_ARTIFACTS_SCHEMA)
     for (const idx of schemas.AR_INDEXES) {
       try { db.exec(idx) } catch { /* ignore */ }
     }
@@ -873,6 +874,108 @@ describe('Agent Room Service', () => {
 
       const afterDelete = svc.getSession(session.id)!.updatedAt
       expect(new Date(afterDelete).getTime()).toBeGreaterThanOrEqual(new Date(beforeDelete).getTime())
+    })
+  })
+
+  // ─── Artifacts ─────────────────────────────────────────────────
+
+  describe('Artifacts', () => {
+    it('deliverTask creates a final_delivery artifact', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      // Walk through workflow to review_passed
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+
+      // Deliver
+      svc.deliverTask(session.id, task.id)
+
+      const artifacts = svc.listArtifacts(session.id)
+      expect(artifacts.length).toBe(1)
+      expect(artifacts[0].type).toBe('final_delivery')
+      expect(artifacts[0].taskId).toBe(task.id)
+      expect(artifacts[0].content).toContain('Task')
+    })
+
+    it('listTaskArtifacts returns only artifacts for the given task', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task1 = svc.createTask(session.id, 'Task1', '')
+      const task2 = svc.createTask(session.id, 'Task2', '')
+
+      // Deliver task1
+      await svc.runWorkflow(session.id, task1.id)
+      svc.submitReview(session.id, task1.id, 'reviewer', 'passed', '')
+      svc.deliverTask(session.id, task1.id)
+
+      // Deliver task2
+      await svc.runWorkflow(session.id, task2.id)
+      svc.submitReview(session.id, task2.id, 'reviewer', 'passed', '')
+      svc.deliverTask(session.id, task2.id)
+
+      const task1Artifacts = svc.listTaskArtifacts(session.id, task1.id)
+      expect(task1Artifacts.length).toBe(1)
+      expect(task1Artifacts[0].taskId).toBe(task1.id)
+
+      const task2Artifacts = svc.listTaskArtifacts(session.id, task2.id)
+      expect(task2Artifacts.length).toBe(1)
+      expect(task2Artifacts[0].taskId).toBe(task2.id)
+    })
+
+    it('deleteArtifact removes artifact and enforces session boundary', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session1 = svc.createSession('S1')
+      const session2 = svc.createSession('S2')
+      const task = svc.createTask(session1.id, 'Task', '')
+
+      await svc.runWorkflow(session1.id, task.id)
+      svc.submitReview(session1.id, task.id, 'reviewer', 'passed', '')
+      svc.deliverTask(session1.id, task.id)
+
+      const artifacts = svc.listArtifacts(session1.id)
+      expect(artifacts.length).toBe(1)
+
+      // Cross-session delete should throw
+      expect(() => svc.deleteArtifact(session2.id, artifacts[0].id)).toThrow('belongs to session')
+
+      // Correct session delete should work
+      svc.deleteArtifact(session1.id, artifacts[0].id)
+      expect(svc.listArtifacts(session1.id).length).toBe(0)
+    })
+
+    it('deleteTaskCascade removes task artifacts', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      svc.deliverTask(session.id, task.id)
+
+      expect(svc.listArtifacts(session.id).length).toBe(1)
+
+      svc.deleteTask(session.id, task.id)
+
+      expect(svc.listArtifacts(session.id).length).toBe(0)
+    })
+
+    it('deleteSessionCascade removes session artifacts', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      svc.deliverTask(session.id, task.id)
+
+      expect(svc.listArtifacts(session.id).length).toBe(1)
+
+      svc.deleteSession(session.id)
+
+      // Session is gone, listArtifacts should throw
+      expect(() => svc.listArtifacts(session.id)).toThrow('Session not found')
     })
   })
 })

@@ -11,6 +11,7 @@ import type {
     AgentRoomMessage,
     AgentRoomWorkflowEvent,
     AgentRoomSession,
+    AgentRoomArtifact,
 } from '@/api/hermes/agent-room'
 import {
     AGENT_ROOM_AGENTS,
@@ -26,6 +27,7 @@ import {
     deliverTask as apiDeliverTask,
     listReviews as apiListReviews,
     listWorkflowEvents as apiListWorkflowEvents,
+    listArtifacts as apiListArtifacts,
     runWorkflow as apiRunWorkflow,
     deleteSession as apiDeleteSession,
     deleteTask as apiDeleteTask,
@@ -41,6 +43,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     const tasks = ref<AgentRoomTask[]>([])
     const reviews = ref<AgentRoomReview[]>([])
     const workflowEvents = ref<AgentRoomWorkflowEvent[]>([])
+    const artifacts = ref<AgentRoomArtifact[]>([])
     const agents = ref<AgentRoomAgent[]>([...AGENT_ROOM_AGENTS])
     const loading = ref(false)
     const error = ref<string | null>(null)
@@ -126,13 +129,15 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         tasks.value = []
         reviews.value = []
         workflowEvents.value = []
+        artifacts.value = []
 
         try {
-            const [nextMessages, nextTasks, nextReviews, nextWorkflowEvents] = await Promise.all([
+            const [nextMessages, nextTasks, nextReviews, nextWorkflowEvents, nextArtifacts] = await Promise.all([
                 apiListMessages(sessionId),
                 apiListTasks(sessionId),
                 apiListReviews(sessionId),
                 apiListWorkflowEvents(sessionId),
+                apiListArtifacts(sessionId),
             ])
 
             if (seq !== sessionDataLoadSeq || currentSessionId.value !== sessionId) return
@@ -141,6 +146,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
             tasks.value = nextTasks
             reviews.value = nextReviews
             workflowEvents.value = nextWorkflowEvents
+            artifacts.value = nextArtifacts
         } catch (err: any) {
             if (seq !== sessionDataLoadSeq || currentSessionId.value !== sessionId) return
             error.value = err.message
@@ -154,11 +160,12 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         const seq = ++sessionDataLoadSeq
 
         try {
-            const [nextMessages, nextTasks, nextReviews, nextWorkflowEvents] = await Promise.all([
+            const [nextMessages, nextTasks, nextReviews, nextWorkflowEvents, nextArtifacts] = await Promise.all([
                 apiListMessages(sessionId),
                 apiListTasks(sessionId),
                 apiListReviews(sessionId),
                 apiListWorkflowEvents(sessionId),
+                apiListArtifacts(sessionId),
             ])
 
             if (seq !== sessionDataLoadSeq || currentSessionId.value !== sessionId) return
@@ -167,6 +174,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
             tasks.value = nextTasks
             reviews.value = nextReviews
             workflowEvents.value = nextWorkflowEvents
+            artifacts.value = nextArtifacts
         } catch (err: any) {
             if (seq !== sessionDataLoadSeq || currentSessionId.value !== sessionId) return
             error.value = err.message
@@ -401,6 +409,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         tasks.value = []
         reviews.value = []
         workflowEvents.value = []
+        artifacts.value = []
         loading.value = false
         error.value = null
         activeTaskId.value = null
@@ -416,6 +425,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         tasks,
         reviews,
         workflowEvents,
+        artifacts,
         agents,
         loading,
         error,

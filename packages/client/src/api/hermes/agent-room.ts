@@ -106,6 +106,19 @@ export interface AgentRoomWorkflowEvent {
     createdAt: string
 }
 
+export type AgentRoomArtifactType = 'final_delivery' | 'code_output' | 'review_report' | 'log' | 'other'
+
+export interface AgentRoomArtifact {
+    id: string
+    sessionId: string
+    taskId: string
+    name: string
+    type: AgentRoomArtifactType
+    content?: string
+    metadata?: Record<string, unknown>
+    createdAt: string
+}
+
 // ─── Session Entity ────────────────────────────────────────────
 export interface AgentRoomSession {
     id: string
@@ -244,6 +257,20 @@ export async function listWorkflowEvents(sessionId: string): Promise<AgentRoomWo
 export async function runWorkflow(sessionId: string, taskId: string): Promise<{ success: boolean }> {
     return request(`${BASE}/sessions/${sessionId}/tasks/${taskId}/workflow`, {
         method: 'POST',
+    })
+}
+
+export async function listArtifacts(sessionId: string): Promise<AgentRoomArtifact[]> {
+    return request(`${BASE}/sessions/${sessionId}/artifacts`)
+}
+
+export async function listTaskArtifacts(sessionId: string, taskId: string): Promise<AgentRoomArtifact[]> {
+    return request(`${BASE}/sessions/${sessionId}/tasks/${taskId}/artifacts`)
+}
+
+export async function deleteArtifact(sessionId: string, artifactId: string): Promise<{ success: boolean }> {
+    return request(`${BASE}/sessions/${sessionId}/artifacts/${artifactId}`, {
+        method: 'DELETE',
     })
 }
 

@@ -292,6 +292,18 @@ export const AR_WORKFLOW_EVENTS_SCHEMA: Record<string, string> = {
     created_at: 'TEXT NOT NULL',
 }
 
+export const AR_ARTIFACTS_TABLE = 'agent_room_artifacts'
+export const AR_ARTIFACTS_SCHEMA: Record<string, string> = {
+    id: 'TEXT PRIMARY KEY',
+    session_id: 'TEXT NOT NULL',
+    task_id: 'TEXT NOT NULL',
+    name: 'TEXT NOT NULL',
+    type: 'TEXT NOT NULL',
+    content: 'TEXT',
+    metadata: 'TEXT',
+    created_at: 'TEXT NOT NULL',
+}
+
 export const AR_INDEXES = [
     'CREATE INDEX IF NOT EXISTS idx_ar_tasks_session ON agent_room_tasks(session_id)',
     'CREATE INDEX IF NOT EXISTS idx_ar_tasks_status ON agent_room_tasks(session_id, status)',
@@ -300,6 +312,8 @@ export const AR_INDEXES = [
     'CREATE INDEX IF NOT EXISTS idx_ar_messages_session ON agent_room_messages(session_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_ar_events_session ON agent_room_workflow_events(session_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_ar_events_task ON agent_room_workflow_events(task_id)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_artifacts_session ON agent_room_artifacts(session_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_artifacts_task ON agent_room_artifacts(task_id, created_at)',
 ]
 
 // ============================================================================
@@ -494,6 +508,7 @@ export function initAllHermesTables(): void {
   ensureTable(AR_REVIEWS_TABLE, AR_REVIEWS_SCHEMA)
   ensureTable(AR_MESSAGES_TABLE, AR_MESSAGES_SCHEMA)
   ensureTable(AR_WORKFLOW_EVENTS_TABLE, AR_WORKFLOW_EVENTS_SCHEMA)
+  ensureTable(AR_ARTIFACTS_TABLE, AR_ARTIFACTS_SCHEMA)
   for (const idx of AR_INDEXES) {
     try { db.exec(idx) } catch { /* ignore */ }
   }

@@ -197,6 +197,7 @@ async function handleDeleteTask(taskId: string) {
                         :reviews="store.reviews"
                         :workflow-events="store.workflowEvents"
                         :agents="store.agents"
+                        :artifacts="store.artifacts"
                         :active-task-id="store.activeTaskId"
                         :action-loading-task-id="store.actionLoadingTaskId"
                         @create-task="showCreateTask = true"

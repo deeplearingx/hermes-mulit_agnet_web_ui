@@ -261,3 +261,33 @@ agentRoomRoutes.delete('/api/agent-room/sessions/:sessionId/tasks/:taskId', asyn
         mapAgentRoomError(ctx, err)
     }
 })
+
+// ─── Artifacts ─────────────────────────────────────────────────
+
+// List artifacts for a session
+agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/artifacts', async (ctx) => {
+    try {
+        ctx.body = agentRoomService.listArtifacts(ctx.params.sessionId)
+    } catch (err: any) {
+        mapAgentRoomError(ctx, err)
+    }
+})
+
+// List artifacts for a task
+agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/tasks/:taskId/artifacts', async (ctx) => {
+    try {
+        ctx.body = agentRoomService.listTaskArtifacts(ctx.params.sessionId, ctx.params.taskId)
+    } catch (err: any) {
+        mapAgentRoomError(ctx, err)
+    }
+})
+
+// Delete artifact
+agentRoomRoutes.delete('/api/agent-room/sessions/:sessionId/artifacts/:artifactId', async (ctx) => {
+    try {
+        agentRoomService.deleteArtifact(ctx.params.sessionId, ctx.params.artifactId)
+        ctx.body = { success: true }
+    } catch (err: any) {
+        mapAgentRoomError(ctx, err)
+    }
+})

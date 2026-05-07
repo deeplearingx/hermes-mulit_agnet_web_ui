@@ -18,6 +18,7 @@ import {
     AR_REVIEWS_TABLE,
     AR_MESSAGES_TABLE,
     AR_WORKFLOW_EVENTS_TABLE,
+    AR_ARTIFACTS_TABLE,
 } from './schemas'
 
 // ─── Domain Types (mirrored from services/hermes/agent-room/index.ts) ───
@@ -73,6 +74,17 @@ export interface AgentRoomWorkflowEvent {
     agentId: string
     agentRole: string
     payload?: Record<string, unknown>
+    createdAt: string
+}
+
+export interface AgentRoomArtifact {
+    id: string
+    sessionId: string
+    taskId: string
+    name: string
+    type: string
+    content?: string
+    metadata?: Record<string, unknown>
     createdAt: string
 }
 
@@ -158,6 +170,19 @@ function mapEventRow(row: Record<string, unknown>): AgentRoomWorkflowEvent {
         agentId: String(row.agent_id),
         agentRole: String(row.agent_role),
         payload: decodeJson<Record<string, unknown>>(row.payload),
+        createdAt: String(row.created_at),
+    }
+}
+
+function mapArtifactRow(row: Record<string, unknown>): AgentRoomArtifact {
+    return {
+        id: String(row.id),
+        sessionId: String(row.session_id),
+        taskId: String(row.task_id),
+        name: String(row.name),
+        type: String(row.type),
+        content: row.content != null ? String(row.content) : undefined,
+        metadata: decodeJson<Record<string, unknown>>(row.metadata),
         createdAt: String(row.created_at),
     }
 }
@@ -304,6 +329,53 @@ export function listWorkflowEventsBySession(sessionId: string): AgentRoomWorkflo
     return rows.map(mapEventRow)
 }
 
+// ─── Artifact CRUD ─────────────────────────────────────────────
+
+export function createArtifact(artifact: AgentRoomArtifact): void {
+    const db = requireDb()
+    db.prepare(
+        `INSERT INTO ${AR_ARTIFACTS_TABLE} (id, session_id, task_id, name, type, content, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+        artifact.id, artifact.sessionId, artifact.taskId,
+        artifact.name, artifact.type,
+        artifact.content ?? null, encodeJson(artifact.metadata),
+        artifact.createdAt,
+    )
+}
+
+export function getArtifact(id: string): AgentRoomArtifact | null {
+    const db = requireDb()
+    const row = db.prepare(`SELECT * FROM ${AR_ARTIFACTS_TABLE} WHERE id = ?`).get(id) as Record<string, unknown> | undefined
+    return row ? mapArtifactRow(row) : null
+}
+
+export function listArtifactsBySession(sessionId: string): AgentRoomArtifact[] {
+    const db = requireDb()
+    const rows = db.prepare(`SELECT * FROM ${AR_ARTIFACTS_TABLE} WHERE session_id = ? ORDER BY created_at DESC, rowid DESC`).all(sessionId) as Array<Record<string, unknown>>
+    return rows.map(mapArtifactRow)
+}
+
+export function listArtifactsByTask(taskId: string): AgentRoomArtifact[] {
+    const db = requireDb()
+    const rows = db.prepare(`SELECT * FROM ${AR_ARTIFACTS_TABLE} WHERE task_id = ? ORDER BY created_at DESC, rowid DESC`).all(taskId) as Array<Record<string, unknown>>
+    return rows.map(mapArtifactRow)
+}
+
+export function deleteArtifact(id: string): void {
+    const db = requireDb()
+    db.prepare(`DELETE FROM ${AR_ARTIFACTS_TABLE} WHERE id = ?`).run(id)
+}
+
+export function deleteArtifactsByTask(taskId: string): void {
+    const db = requireDb()
+    db.prepare(`DELETE FROM ${AR_ARTIFACTS_TABLE} WHERE task_id = ?`).run(taskId)
+}
+
+export function deleteArtifactsBySession(sessionId: string): void {
+    const db = requireDb()
+    db.prepare(`DELETE FROM ${AR_ARTIFACTS_TABLE} WHERE session_id = ?`).run(sessionId)
+}
+
 // ─── Cascade Delete ─────────────────────────────────────────────
 
 /**
@@ -312,9 +384,10 @@ export function listWorkflowEventsBySession(sessionId: string): AgentRoomWorkflo
  */
 export function deleteSessionCascade(sessionId: string): void {
     const db = requireDb()
-    // Delete in dependency order: reviews → workflow_events → messages → tasks → session
+    // Delete in dependency order: reviews → workflow_events → artifacts → messages → tasks → session
     db.prepare(`DELETE FROM ${AR_REVIEWS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_WORKFLOW_EVENTS_TABLE} WHERE session_id = ?`).run(sessionId)
+    db.prepare(`DELETE FROM ${AR_ARTIFACTS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_MESSAGES_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_TASKS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_SESSIONS_TABLE} WHERE id = ?`).run(sessionId)
@@ -331,6 +404,8 @@ export function deleteTaskCascade(sessionId: string, taskId: string): void {
     db.prepare(`DELETE FROM ${AR_REVIEWS_TABLE} WHERE task_id = ?`).run(taskId)
     // Delete task workflow events
     db.prepare(`DELETE FROM ${AR_WORKFLOW_EVENTS_TABLE} WHERE task_id = ?`).run(taskId)
+    // Delete task artifacts
+    db.prepare(`DELETE FROM ${AR_ARTIFACTS_TABLE} WHERE task_id = ?`).run(taskId)
     // Delete task-scoped messages: list all session messages, filter by metadata.taskId, delete by id
     const sessionMessages = listMessagesBySession(sessionId)
     const stmt = db.prepare(`DELETE FROM ${AR_MESSAGES_TABLE} WHERE id = ?`)

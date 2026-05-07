@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { AgentRoomTask, AgentRoomReview, AgentRoomWorkflowEvent, AgentRoomTaskStatus, AgentRoomAgent } from '@/api/hermes/agent-room'
+import { computed, ref } from 'vue'
+import type { AgentRoomTask, AgentRoomReview, AgentRoomWorkflowEvent, AgentRoomTaskStatus, AgentRoomAgent, AgentRoomArtifact } from '@/api/hermes/agent-room'
 
 const props = defineProps<{
     tasks: AgentRoomTask[]
     reviews: AgentRoomReview[]
     workflowEvents: AgentRoomWorkflowEvent[]
     agents: AgentRoomAgent[]
+    artifacts: AgentRoomArtifact[]
     activeTaskId?: string | null
     actionLoadingTaskId?: string | null
 }>()
@@ -169,18 +170,28 @@ const STATUS_DOT_LABELS: Record<string, string> = {
     failed: '失败',
 }
 
-// ─── Artifacts (delivering/completed tasks) ─────────────────────
-const artifacts = computed(() => {
-    return props.tasks.filter(t =>
-        ['delivering', 'completed', 'submitted_for_review', 'review_passed'].includes(t.status),
-    )
+// ─── Artifacts ─────────────────────────────────────────────────
+const expandedArtifactId = ref<string | null>(null)
+
+const activeTaskArtifacts = computed(() => {
+    if (!activeTask.value) return []
+    return props.artifacts.filter(a => a.taskId === activeTask.value!.id)
 })
 
-function artifactIcon(status: AgentRoomTaskStatus): string {
-    if (status === 'completed') return '🎉'
-    if (status === 'delivering') return '📦'
-    if (status === 'review_passed') return '✅'
-    return '🔍'
+const ARTIFACT_TYPE_ICONS: Record<string, string> = {
+    final_delivery: '🎉',
+    code_output: '💻',
+    review_report: '📋',
+    log: '📄',
+    other: '📎',
+}
+
+function artifactTypeIcon(type: string): string {
+    return ARTIFACT_TYPE_ICONS[type] ?? '📎'
+}
+
+function toggleArtifact(id: string) {
+    expandedArtifactId.value = expandedArtifactId.value === id ? null : id
 }
 </script>
 
@@ -288,21 +299,24 @@ function artifactIcon(status: AgentRoomTaskStatus): string {
             <div class="section-header">
                 <span class="header-icon">📦</span>
                 <span class="header-title">产出物</span>
+                <span v-if="activeTaskArtifacts.length" class="artifact-count">{{ activeTaskArtifacts.length }}</span>
             </div>
-            <div v-if="artifacts.length > 0" class="artifact-list">
+            <div v-if="activeTaskArtifacts.length > 0" class="artifact-list">
                 <div
-                    v-for="task in artifacts"
-                    :key="task.id"
+                    v-for="artifact in activeTaskArtifacts"
+                    :key="artifact.id"
                     class="artifact-item"
+                    @click="toggleArtifact(artifact.id)"
                 >
-                    <span class="artifact-icon">{{ artifactIcon(task.status) }}</span>
-                    <span class="artifact-name">{{ task.title }}</span>
-                    <span
-                        class="artifact-status"
-                        :style="{ color: getStatusConfig(task.status).color }"
-                    >
-                        {{ getStatusConfig(task.status).label }}
-                    </span>
+                    <div class="artifact-row">
+                        <span class="artifact-icon">{{ artifactTypeIcon(artifact.type) }}</span>
+                        <span class="artifact-name">{{ artifact.name }}</span>
+                        <span class="artifact-type">{{ artifact.type }}</span>
+                        <span class="artifact-expand">{{ expandedArtifactId === artifact.id ? '▾' : '▸' }}</span>
+                    </div>
+                    <div v-if="expandedArtifactId === artifact.id && artifact.content" class="artifact-content">
+                        <pre>{{ artifact.content }}</pre>
+                    </div>
                 </div>
             </div>
             <div v-else class="empty-artifacts">
@@ -605,11 +619,28 @@ function artifactIcon(status: AgentRoomTaskStatus): string {
     background: #0f1729;
 }
 
+.artifact-count {
+    font-size: 9px;
+    color: #64748b;
+    background: #1e293b;
+    padding: 1px 5px;
+    border-radius: 8px;
+    margin-left: auto;
+}
+
 .artifact-list {
     padding: 4px 0;
 }
 
 .artifact-item {
+    cursor: pointer;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.03);
+    }
+}
+
+.artifact-row {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -630,9 +661,37 @@ function artifactIcon(status: AgentRoomTaskStatus): string {
     white-space: nowrap;
 }
 
-.artifact-status {
+.artifact-type {
     font-size: 9px;
+    color: #475569;
     flex-shrink: 0;
+}
+
+.artifact-expand {
+    font-size: 10px;
+    color: #475569;
+    flex-shrink: 0;
+    width: 12px;
+    text-align: center;
+}
+
+.artifact-content {
+    padding: 4px 10px 6px 28px;
+
+    pre {
+        margin: 0;
+        font-size: 10px;
+        color: #94a3b8;
+        background: #0c1222;
+        border: 1px solid #1e293b;
+        border-radius: 4px;
+        padding: 6px 8px;
+        max-height: 120px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: 'Courier New', monospace;
+    }
 }
 
 .empty-artifacts {
