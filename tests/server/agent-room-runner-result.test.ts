@@ -410,7 +410,7 @@ describe('Agent Room RunnerResult Protocol', () => {
         resetActiveRunnerForTest()
     })
 
-    it('RealAgentRunner message senderId/senderName default to senderRole', async () => {
+    it('RealAgentRunner messages have explicit senderId/senderName', async () => {
         const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
         const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
             '../../packages/server/src/services/hermes/agent-room/runner'
@@ -423,17 +423,23 @@ describe('Agent Room RunnerResult Protocol', () => {
 
         await svc.runWorkflow(session.id, task.id)
 
-        // Verify that direct messages (not event-produced) have senderId/senderName defaulting to senderRole
-        // Event-produced messages use AGENT_META mapping (e.g. '规划 Agent'), direct messages default to senderRole
+        // Direct messages from RealAgentRunner have explicit senderId/senderName
         const messages = svc.listMessages(session.id)
         const directPlannerMsg = messages.find(
             m => m.senderRole === 'planner' && m.type === 'agent_message' && m.content.includes('已完成任务'),
         )
         expect(directPlannerMsg).toBeDefined()
         expect(directPlannerMsg!.senderId).toBe('planner')
-        expect(directPlannerMsg!.senderName).toBe('planner')
+        expect(directPlannerMsg!.senderName).toBe('规划 Agent')
 
-        // Event-produced message uses AGENT_META mapping
+        const directDevMsg = messages.find(
+            m => m.senderRole === 'developer' && m.type === 'agent_message' && m.content.includes('开始执行任务'),
+        )
+        expect(directDevMsg).toBeDefined()
+        expect(directDevMsg!.senderId).toBe('developer')
+        expect(directDevMsg!.senderName).toBe('开发 Agent')
+
+        // Event-produced message also uses AGENT_META mapping
         const eventPlannerMsg = messages.find(
             m => m.senderRole === 'planner' && m.type === 'agent_message' && m.content.includes('制定执行计划'),
         )

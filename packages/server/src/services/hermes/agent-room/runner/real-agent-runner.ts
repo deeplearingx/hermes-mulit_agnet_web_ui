@@ -26,7 +26,7 @@ export class RealAgentRunner implements AgentRoomRunner {
                     {
                         status: 'planned',
                         events: [{ type: 'task_planned', agentRole: 'planner' }],
-                        messages: [{ senderRole: 'planner', content: `已完成任务「${title}」的规划` }],
+                        messages: [{ senderRole: 'planner', senderId: 'planner', senderName: '规划 Agent', content: `已完成任务「${title}」的规划` }],
                     },
                     {
                         status: 'assigned',
@@ -35,12 +35,12 @@ export class RealAgentRunner implements AgentRoomRunner {
                     {
                         status: 'in_progress',
                         events: [{ type: 'task_started', agentRole: 'developer' }],
-                        messages: [{ senderRole: 'developer', content: `开始执行任务「${title}」` }],
+                        messages: [{ senderRole: 'developer', senderId: 'developer', senderName: '开发 Agent', content: `开始执行任务「${title}」` }],
                     },
                     {
                         status: 'submitted_for_review',
                         events: [{ type: 'task_submitted', agentRole: 'developer' }],
-                        messages: [{ senderRole: 'developer', content: `任务「${title}」已提交审核` }],
+                        messages: [{ senderRole: 'developer', senderId: 'developer', senderName: '开发 Agent', content: `任务「${title}」已提交审核` }],
                     },
                 ],
             }
@@ -52,12 +52,12 @@ export class RealAgentRunner implements AgentRoomRunner {
                     {
                         status: 'in_progress',
                         events: [{ type: 'revision_started', agentRole: 'developer' }],
-                        messages: [{ senderRole: 'developer', content: `开始根据反馈修改任务「${title}」` }],
+                        messages: [{ senderRole: 'developer', senderId: 'developer', senderName: '开发 Agent', content: `开始根据反馈修改任务「${title}」` }],
                     },
                     {
                         status: 'submitted_for_review',
                         events: [{ type: 'task_submitted', agentRole: 'developer' }],
-                        messages: [{ senderRole: 'developer', content: `任务「${title}」已重新提交审核` }],
+                        messages: [{ senderRole: 'developer', senderId: 'developer', senderName: '开发 Agent', content: `任务「${title}」已重新提交审核` }],
                     },
                 ],
             }
@@ -69,7 +69,7 @@ export class RealAgentRunner implements AgentRoomRunner {
                     {
                         status: 'in_progress',
                         events: [{ type: 'task_started', agentRole: 'developer' }],
-                        messages: [{ senderRole: 'developer', content: `重新执行失败任务「${title}」` }],
+                        messages: [{ senderRole: 'developer', senderId: 'developer', senderName: '开发 Agent', content: `重新执行失败任务「${title}」` }],
                     },
                     {
                         status: 'submitted_for_review',

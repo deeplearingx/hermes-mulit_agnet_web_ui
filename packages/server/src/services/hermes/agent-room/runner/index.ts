@@ -1,6 +1,6 @@
 // ─── Agent Room Runner Facade ──────────────────────────────────
 // Selects and exports the active runner implementation.
-// Set AGENT_ROOM_RUNNER=real to use RealAgentRunner (not yet implemented).
+// Set AGENT_ROOM_RUNNER=real to use the deterministic RealAgentRunner adapter skeleton.
 // Defaults to MockAgentRoomRunner.
 
 export type {
