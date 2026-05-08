@@ -54,7 +54,8 @@
     "preview": "NODE_ENV=production vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "smoke:agent-room-gateway": "TS_NODE_PROJECT=packages/server/tsconfig.json node -r ts-node/register scripts/smoke-agent-room-gateway.ts"
   },
   "files": [
     "bin/",
