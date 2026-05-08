@@ -5,7 +5,12 @@ import {
     setActiveRunnerForTest,
     resetActiveRunnerForTest,
 } from '../../packages/server/src/services/hermes/agent-room/runner'
-import { createHermesAgentRuntime, DeterministicHermesRuntime, RealHermesRuntime } from '../../packages/server/src/services/hermes/agent-room/runner/runtime'
+import {
+    createHermesAgentRuntime,
+    DeterministicHermesRuntime,
+    RealHermesRuntime,
+    GatewayHermesRuntime,
+} from '../../packages/server/src/services/hermes/agent-room/runner/runtime'
 
 describe('AgentRoomRunner factory', () => {
     const savedRunnerEnv = process.env.AGENT_ROOM_RUNNER
@@ -74,8 +79,20 @@ describe('AgentRoomRunner factory', () => {
         expect(createHermesAgentRuntime('')).toBeInstanceOf(DeterministicHermesRuntime)
     })
 
-    it('createHermesAgentRuntime("real") returns RealHermesRuntime', () => {
-        expect(createHermesAgentRuntime('real')).toBeInstanceOf(RealHermesRuntime)
+    it('createHermesAgentRuntime("real") returns GatewayHermesRuntime (primary)', () => {
+        expect(createHermesAgentRuntime('real')).toBeInstanceOf(GatewayHermesRuntime)
+    })
+
+    it('createHermesAgentRuntime("gateway") returns GatewayHermesRuntime', () => {
+        expect(createHermesAgentRuntime('gateway')).toBeInstanceOf(GatewayHermesRuntime)
+    })
+
+    it('createHermesAgentRuntime("http") returns RealHermesRuntime (custom bridge)', () => {
+        expect(createHermesAgentRuntime('http')).toBeInstanceOf(RealHermesRuntime)
+    })
+
+    it('createHermesAgentRuntime("bridge") returns RealHermesRuntime (custom bridge)', () => {
+        expect(createHermesAgentRuntime('bridge')).toBeInstanceOf(RealHermesRuntime)
     })
 
     it('createHermesAgentRuntime falls back to deterministic for unknown mode', () => {

@@ -270,8 +270,13 @@ describe('RealHermesRuntime', () => {
         expect(() => new RealHermesRuntime('https://agent.example.com')).toThrow(/Invalid HERMES_AGENT_TIMEOUT_MS/)
     })
 
-    it('createHermesAgentRuntime("real") returns RealHermesRuntime', () => {
-        const runtime = createHermesAgentRuntime('real')
+    it('createHermesAgentRuntime("http") returns RealHermesRuntime (custom bridge)', () => {
+        const runtime = createHermesAgentRuntime('http')
+        expect(runtime).toBeInstanceOf(RealHermesRuntime)
+    })
+
+    it('createHermesAgentRuntime("bridge") returns RealHermesRuntime (custom bridge)', () => {
+        const runtime = createHermesAgentRuntime('bridge')
         expect(runtime).toBeInstanceOf(RealHermesRuntime)
     })
 })

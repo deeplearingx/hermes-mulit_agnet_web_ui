@@ -1,5 +1,8 @@
-// ─── Real Hermes Agent Runtime ─────────────────────────────────
-// HTTP bridge to an external Hermes agent service.
+// ─── Real Hermes Agent Runtime (Custom HTTP Bridge) ────────────
+// Custom HTTP bridge to an external Hermes agent service.
+// This is a SECONDARY runtime for HERMES_AGENT_RUNTIME=http|bridge.
+// The PRIMARY runtime is GatewayHermesRuntime (HERMES_AGENT_RUNTIME=gateway|real).
+//
 // Does NOT touch DB, service state machine, or frontend.
 //
 // Responsibilities:
