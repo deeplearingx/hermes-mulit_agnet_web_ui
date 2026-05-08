@@ -108,7 +108,7 @@ describe('GatewayHermesRuntime', () => {
             expect(result.steps[3].status).toBe('submitted_for_review')
         })
 
-        it('submitted_for_review step carries runId and source metadata', async () => {
+        it('submitted_for_review step carries runId, source, and profileName metadata', async () => {
             vi.mocked(runHermesGatewayTask).mockResolvedValue({
                 output: 'Login page implemented',
                 runId: 'run-100',
@@ -119,11 +119,11 @@ describe('GatewayHermesRuntime', () => {
             const result = await runtime.runTask(makeInput())
 
             const finalStep = result.steps[3]
-            expect(finalStep.events[0].payload).toEqual({ runId: 'run-100', source: 'hermes-gateway' })
-            expect(finalStep.messages![0].metadata).toEqual({ runId: 'run-100', source: 'hermes-gateway' })
+            expect(finalStep.events[0].payload).toEqual({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent' })
+            expect(finalStep.messages![0].metadata).toEqual({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent' })
         })
 
-        it('artifact type is code_output with runId metadata', async () => {
+        it('artifact type is code_output with runId and profileName metadata', async () => {
             vi.mocked(runHermesGatewayTask).mockResolvedValue({
                 output: 'Login page implemented',
                 runId: 'run-100',
@@ -136,7 +136,7 @@ describe('GatewayHermesRuntime', () => {
             expect(result.artifacts).toHaveLength(1)
             expect(result.artifacts![0].type).toBe('code_output')
             expect(result.artifacts![0].content).toBe('Login page implemented')
-            expect(result.artifacts![0].metadata).toEqual({ runId: 'run-100', source: 'hermes-gateway' })
+            expect(result.artifacts![0].metadata).toEqual({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent' })
         })
 
         it('planned step has planner agentRole', async () => {
@@ -390,6 +390,106 @@ describe('GatewayHermesRuntime', () => {
             expect(extractGatewayOutput({})).toBeNull()
             expect(extractGatewayOutput({ output: '' })).toBeNull()
             expect(extractGatewayOutput({ output: '   ' })).toBeNull()
+        })
+    })
+
+    describe('profile resolver', () => {
+        it('uses resolver-returned upstream/apiKey/model/provider', async () => {
+            vi.mocked(runHermesGatewayTask).mockResolvedValue({
+                output: 'done',
+                runId: 'run-resolved',
+                sessionId: 'agent-room-sess-1-task-1',
+            })
+
+            const resolver = vi.fn(() => ({
+                upstream: 'http://profile-gateway:9999',
+                apiKey: 'sk-profile-key',
+                model: 'claude-sonnet-4-20250514',
+                provider: 'anthropic',
+                profileName: 'custom-profile',
+            }))
+
+            const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
+            await runtime.runTask(makeInput())
+
+            expect(resolver).toHaveBeenCalledWith('dev-agent', 'http://127.0.0.1:8642', null)
+
+            const call = vi.mocked(runHermesGatewayTask).mock.calls[0][0]
+            expect(call.upstream).toBe('http://profile-gateway:9999')
+            expect(call.apiKey).toBe('sk-profile-key')
+            expect(call.model).toBe('claude-sonnet-4-20250514')
+            expect(call.provider).toBe('anthropic')
+        })
+
+        it('passes assignedAgentId to resolver', async () => {
+            vi.mocked(runHermesGatewayTask).mockResolvedValue({
+                output: 'done',
+                runId: 'run-1',
+                sessionId: 'agent-room-sess-1-task-1',
+            })
+
+            const resolver = vi.fn(() => ({
+                upstream: 'http://127.0.0.1:8642',
+                apiKey: null,
+            }))
+
+            const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
+            await runtime.runTask(makeInput({ assignedAgentId: 'my-agent' }))
+
+            expect(resolver).toHaveBeenCalledWith('my-agent', 'http://127.0.0.1:8642', null)
+        })
+
+        it('includes profileName/model/provider in artifact metadata', async () => {
+            vi.mocked(runHermesGatewayTask).mockResolvedValue({
+                output: 'done',
+                runId: 'run-meta',
+                sessionId: 'agent-room-sess-1-task-1',
+            })
+
+            const resolver = () => ({
+                upstream: 'http://127.0.0.1:8642',
+                apiKey: null,
+                model: 'gpt-4o',
+                provider: 'openai',
+                profileName: 'openai-profile',
+            })
+
+            const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
+            const result = await runtime.runTask(makeInput())
+
+            expect(result.artifacts![0].metadata).toEqual({
+                runId: 'run-meta',
+                source: 'hermes-gateway',
+                profileName: 'openai-profile',
+                model: 'gpt-4o',
+                provider: 'openai',
+            })
+        })
+
+        it('resolver error propagates and produces no steps', async () => {
+            const resolver = () => {
+                throw new Error('profile not found')
+            }
+
+            const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
+            await expect(runtime.runTask(makeInput())).rejects.toThrow('profile not found')
+            expect(runHermesGatewayTask).not.toHaveBeenCalled()
+        })
+
+        it('no resolver uses default fallback (constructor upstream/apiKey)', async () => {
+            vi.mocked(runHermesGatewayTask).mockResolvedValue({
+                output: 'done',
+                runId: 'run-fallback',
+                sessionId: 'agent-room-sess-1-task-1',
+            })
+
+            // No resolver passed — uses createDefaultGatewayProfileResolver()
+            const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', 'sk-fallback', 30000)
+            await runtime.runTask(makeInput({ assignedAgentId: undefined }))
+
+            const call = vi.mocked(runHermesGatewayTask).mock.calls[0][0]
+            expect(call.upstream).toBe('http://127.0.0.1:8642')
+            expect(call.apiKey).toBe('sk-fallback')
         })
     })
 })

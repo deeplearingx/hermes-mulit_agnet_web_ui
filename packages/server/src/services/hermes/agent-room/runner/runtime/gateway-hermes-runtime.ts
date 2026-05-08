@@ -14,6 +14,8 @@
 // and state machine validation.
 
 import type { HermesAgentRuntime, HermesAgentRuntimeInput, HermesAgentRuntimeOutput } from './types'
+import type { GatewayProfileResolver, GatewayRuntimeTarget } from './gateway-profile-resolver'
+import { createDefaultGatewayProfileResolver } from './gateway-profile-resolver'
 import { runHermesGatewayTask } from '../../../gateway-run-client'
 import { config } from '../../../../../config'
 
@@ -89,43 +91,57 @@ function safeTitle(title: string): string {
 }
 
 export class GatewayHermesRuntime implements HermesAgentRuntime {
+    private readonly profileResolver: GatewayProfileResolver
+
     constructor(
         private readonly upstream = UPSTREAM,
         private readonly apiKey?: string | null,
         private readonly timeoutMs = parseEnvTimeoutMs(),
+        profileResolver?: GatewayProfileResolver,
     ) {
         assertValidTimeoutMs(this.timeoutMs)
+        this.profileResolver = profileResolver ?? createDefaultGatewayProfileResolver()
     }
 
     async runTask(input: HermesAgentRuntimeInput): Promise<HermesAgentRuntimeOutput> {
         // Fail fast on unsupported statuses BEFORE calling the Gateway.
         assertSupportedStartStatus(input.currentStatus)
 
+        // Resolve target from assignedAgentId → profileName → upstream/apiKey/model/provider.
+        const target = this.profileResolver(input.assignedAgentId, this.upstream, this.apiKey)
+
         const gatewaySessionId = `agent-room-${input.sessionId}-${input.taskId}`
 
         const result = await runHermesGatewayTask({
-            upstream: this.upstream,
-            apiKey: this.apiKey,
+            upstream: target.upstream,
+            apiKey: target.apiKey,
             input: buildTaskInput(input),
             instructions: buildAgentRoomInstructions(input),
             sessionId: gatewaySessionId,
             timeoutMs: this.timeoutMs,
+            model: target.model,
+            provider: target.provider,
         })
 
-        return this.buildOutput(input, result.output, result.runId)
+        return this.buildOutput(input, result.output, result.runId, target)
     }
 
     /**
      * Map Gateway output into AgentRoom ordered steps.
      * Generates the correct step chain based on currentStatus.
+     * Includes profileName/model/provider in metadata (never apiKey).
      */
     private buildOutput(
         input: HermesAgentRuntimeInput,
         finalOutput: string,
         runId: string,
+        target: GatewayRuntimeTarget,
     ): HermesAgentRuntimeOutput {
         const title = input.taskTitle
-        const metadata = { runId, source: 'hermes-gateway' as const }
+        const metadata: Record<string, unknown> = { runId, source: 'hermes-gateway' }
+        if (target.profileName) metadata.profileName = target.profileName
+        if (target.model) metadata.model = target.model
+        if (target.provider) metadata.provider = target.provider
         const safeName = safeTitle(title)
 
         // Revision/retry path: revision_required | need_user_decision | failed → in_progress → submitted_for_review

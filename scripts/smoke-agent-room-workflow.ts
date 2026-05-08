@@ -7,7 +7,7 @@
 //
 // Optional env vars:
 //   HERMES_GATEWAY_API_KEY   — API key for Authorization header
-//   HERMES_AGENT_TIMEOUT_MS  — timeout per phase (default 120000)
+//   HERMES_AGENT_TIMEOUT_MS  — timeout per phase (default 300000)
 
 import { GatewayHermesRuntime } from '../packages/server/src/services/hermes/agent-room/runner/runtime/gateway-hermes-runtime'
 import type { HermesAgentRuntimeInput } from '../packages/server/src/services/hermes/agent-room/runner/runtime/types'
@@ -15,12 +15,14 @@ import type { HermesAgentRuntimeInput } from '../packages/server/src/services/he
 const UPSTREAM = process.env.UPSTREAM || 'http://127.0.0.1:8642'
 const API_KEY = process.env.HERMES_GATEWAY_API_KEY || undefined
 const TIMEOUT_MS = Number(process.env.HERMES_AGENT_TIMEOUT_MS || 300_000)
+const ASSIGNED_AGENT_ID = process.env.AGENT_ROOM_ASSIGNED_AGENT_ID || undefined
 
 async function main(): Promise<void> {
     console.log('─── Agent Room Workflow Smoke Test ───')
-    console.log(`upstream:  ${UPSTREAM}`)
-    console.log(`timeout:   ${TIMEOUT_MS}ms`)
-    console.log(`apiKey:    ${API_KEY ? '(set)' : '(not set)'}`)
+    console.log(`upstream:         ${UPSTREAM}`)
+    console.log(`timeout:          ${TIMEOUT_MS}ms`)
+    console.log(`apiKey:           ${API_KEY ? '(set)' : '(not set)'}`)
+    console.log(`assignedAgentId:  ${ASSIGNED_AGENT_ID ?? '(not set)'}`)
     console.log()
 
     const runtime = new GatewayHermesRuntime(UPSTREAM, API_KEY, TIMEOUT_MS)
@@ -31,7 +33,7 @@ async function main(): Promise<void> {
         currentStatus: 'created',
         sessionId: `agent-room-workflow-smoke-${Date.now()}`,
         taskId: 'task-smoke-001',
-        assignedAgentId: undefined,
+        assignedAgentId: ASSIGNED_AGENT_ID,
         revisionRound: 0,
     }
 

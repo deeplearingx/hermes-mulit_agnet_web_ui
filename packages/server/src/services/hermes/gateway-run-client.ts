@@ -32,6 +32,10 @@ export interface GatewayRunParams {
      * Useful for diagnostics / smoke tests to inspect the raw event shape.
      */
     onRawEvent?: (event: Record<string, unknown>) => void
+    /** Optional model name to pass to the gateway */
+    model?: string
+    /** Optional provider name to pass to the gateway */
+    provider?: string
 }
 
 export interface GatewayRunResult {
@@ -111,6 +115,8 @@ export async function runHermesGatewayTask(params: GatewayRunParams): Promise<Ga
         sessionId,
         timeoutMs = 120_000,
         onRawEvent,
+        model,
+        provider,
     } = params
 
     assertValidTimeoutMs(timeoutMs)
@@ -132,6 +138,8 @@ export async function runHermesGatewayTask(params: GatewayRunParams): Promise<Ga
     }
     if (instructions) body.instructions = instructions
     if (conversationHistory?.length) body.conversation_history = conversationHistory
+    if (model) body.model = model
+    if (provider) body.provider = provider
 
     const runRes = await fetch(`${cleanUpstream}/v1/runs`, {
         method: 'POST',

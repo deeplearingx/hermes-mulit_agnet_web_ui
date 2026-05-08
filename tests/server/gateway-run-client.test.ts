@@ -136,6 +136,52 @@ describe('gateway-run-client', () => {
             expect(body.session_id).toBe('sess-1')
         })
 
+        // ── model/provider in body ───────────────────────────────
+
+        it('includes model and provider in POST body when set', async () => {
+            mockFetchPostRun()
+
+            const promise = runHermesGatewayTask({
+                upstream: 'http://gateway.test',
+                input: 'task',
+                model: 'claude-sonnet-4-20250514',
+                provider: 'anthropic',
+                timeoutMs: 30000,
+            })
+
+            await flushMicrotasks()
+            const source = getLatestSource()
+            emitToSource(source, { event: 'run.completed', output: 'done' })
+
+            await promise
+
+            const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0]
+            const body = JSON.parse(fetchCall[1]!.body as string)
+            expect(body.model).toBe('claude-sonnet-4-20250514')
+            expect(body.provider).toBe('anthropic')
+        })
+
+        it('omits model and provider from POST body when not set', async () => {
+            mockFetchPostRun()
+
+            const promise = runHermesGatewayTask({
+                upstream: 'http://gateway.test',
+                input: 'task',
+                timeoutMs: 30000,
+            })
+
+            await flushMicrotasks()
+            const source = getLatestSource()
+            emitToSource(source, { event: 'run.completed', output: 'done' })
+
+            await promise
+
+            const fetchCall = vi.mocked(globalThis.fetch).mock.calls[0]
+            const body = JSON.parse(fetchCall[1]!.body as string)
+            expect(body.model).toBeUndefined()
+            expect(body.provider).toBeUndefined()
+        })
+
         // ── Authorization header ─────────────────────────────────
 
         it('includes Authorization header when apiKey is provided', async () => {
