@@ -23,7 +23,7 @@ export type {
     HermesAgentRuntimeMessage,
     HermesAgentRuntimeArtifact,
 } from './runtime'
-export { DeterministicHermesRuntime, createHermesAgentRuntime } from './runtime'
+export { DeterministicHermesRuntime, RealHermesRuntime, createHermesAgentRuntime } from './runtime'
 
 import type { AgentRoomRunner } from './types'
 import { MockAgentRoomRunner } from './mock-runner'
