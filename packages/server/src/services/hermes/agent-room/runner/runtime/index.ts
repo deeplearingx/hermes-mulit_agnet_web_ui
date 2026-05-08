@@ -7,6 +7,9 @@ export type {
     HermesAgentRuntimeInput,
     HermesAgentRuntimeOutput,
     HermesAgentRuntimeStep,
+    HermesAgentRuntimeEvent,
+    HermesAgentRuntimeMessage,
+    HermesAgentRuntimeArtifact,
 } from './types'
 export { DeterministicHermesRuntime } from './deterministic-runtime'
 

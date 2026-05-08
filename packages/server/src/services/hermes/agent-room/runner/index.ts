@@ -19,6 +19,9 @@ export type {
     HermesAgentRuntimeInput,
     HermesAgentRuntimeOutput,
     HermesAgentRuntimeStep,
+    HermesAgentRuntimeEvent,
+    HermesAgentRuntimeMessage,
+    HermesAgentRuntimeArtifact,
 } from './runtime'
 export { DeterministicHermesRuntime, createHermesAgentRuntime } from './runtime'
 
@@ -34,7 +37,7 @@ import { createHermesAgentRuntime } from './runtime'
  */
 export function createAgentRoomRunner(mode?: string): AgentRoomRunner {
     const normalized = (mode ?? 'mock').toLowerCase()
-    if (normalized === 'real') return new RealAgentRunner(createHermesAgentRuntime())
+    if (normalized === 'real') return new RealAgentRunner(createHermesAgentRuntime(process.env.HERMES_AGENT_RUNTIME))
     return new MockAgentRoomRunner()
 }
 

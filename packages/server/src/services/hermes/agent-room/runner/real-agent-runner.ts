@@ -10,13 +10,13 @@
 // The facade layer (applyRunnerResult) handles all DB mutations.
 
 import type { AgentRoomRunner, AgentRoomRunnerContext, AgentRoomRunnerResult } from './types'
-import type { HermesAgentRuntime, HermesAgentRuntimeInput, HermesAgentRuntimeOutput } from './runtime/types'
-import type { AgentRoomWorkflowEventType, AgentRoomRole } from '../index'
+import type { HermesAgentRuntime, HermesAgentRuntimeInput } from './runtime/types'
+import { createHermesAgentRuntime } from './runtime'
 
 export class RealAgentRunner implements AgentRoomRunner {
     readonly name = 'real' as const
 
-    constructor(private readonly runtime: HermesAgentRuntime) {}
+    constructor(private readonly runtime: HermesAgentRuntime = createHermesAgentRuntime()) {}
 
     async run(ctx: AgentRoomRunnerContext): Promise<AgentRoomRunnerResult> {
         const input = this.extractInput(ctx)
@@ -42,28 +42,16 @@ export class RealAgentRunner implements AgentRoomRunner {
 
     /**
      * Translate HermesAgentRuntimeOutput → AgentRoomRunnerResult.
-     * Maps runtime steps to ordered AgentRoomRunnerSteps with proper typing.
+     * Runtime types are now structurally aligned — no cast needed.
      */
-    private translateOutput(output: HermesAgentRuntimeOutput): AgentRoomRunnerResult {
+    private translateOutput(output: import('./runtime/types').HermesAgentRuntimeOutput): AgentRoomRunnerResult {
         return {
             steps: output.steps.map(step => ({
                 status: step.status,
-                events: [{
-                    type: step.eventType as AgentRoomWorkflowEventType,
-                    agentRole: step.agentRole as AgentRoomRole,
-                }],
-                messages: step.message ? [{
-                    senderRole: step.message.senderRole as AgentRoomRole,
-                    senderId: step.message.senderId,
-                    senderName: step.message.senderName,
-                    content: step.message.content,
-                }] : undefined,
+                events: step.events,
+                messages: step.messages,
             })),
-            artifacts: output.artifacts?.map(art => ({
-                name: art.name,
-                type: art.type as any,
-                content: art.content,
-            })),
+            artifacts: output.artifacts,
         }
     }
 }

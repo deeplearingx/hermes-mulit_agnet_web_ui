@@ -3,7 +3,13 @@
 // The runner is a protocol translation layer: AgentRoom context ↔ runtime I/O ↔ ordered result.
 // The runtime is responsible for actual agent orchestration (LLM calls, tool use, etc.).
 
-import type { AgentRoomTaskStatus } from '../../index'
+import type {
+    AgentRoomTaskStatus,
+    AgentRoomWorkflowEventType,
+    AgentRoomRole,
+    AgentRoomArtifactType,
+    AgentRoomMessageType,
+} from '../../index'
 
 /**
  * Input to the Hermes agent runtime.
@@ -28,27 +34,44 @@ export interface HermesAgentRuntimeInput {
     revisionRound: number
 }
 
+/** A workflow event in runtime output. */
+export interface HermesAgentRuntimeEvent {
+    type: AgentRoomWorkflowEventType
+    agentRole: AgentRoomRole
+    payload?: Record<string, unknown>
+}
+
+/** A chat message in runtime output. */
+export interface HermesAgentRuntimeMessage {
+    senderRole: AgentRoomRole
+    senderId?: string
+    senderName?: string
+    type?: AgentRoomMessageType
+    content: string
+    metadata?: Record<string, unknown>
+}
+
 /**
  * A single step returned by the Hermes runtime.
- * The runner translates this into AgentRoomRunnerStep.
+ * Supports multiple events and messages per step (aligned with AgentRoomRunnerStep).
  */
 export interface HermesAgentRuntimeStep {
     /** Target status for this step. */
     status: AgentRoomTaskStatus
 
-    /** Event type to emit at this step. */
-    eventType: string
+    /** Events to emit at this step. */
+    events: HermesAgentRuntimeEvent[]
 
-    /** Agent role performing this step. */
-    agentRole: string
+    /** Optional messages from the agent at this step. */
+    messages?: HermesAgentRuntimeMessage[]
+}
 
-    /** Optional message from the agent at this step. */
-    message?: {
-        senderRole: string
-        senderId: string
-        senderName: string
-        content: string
-    }
+/** An artifact produced by the runtime. */
+export interface HermesAgentRuntimeArtifact {
+    name: string
+    type: AgentRoomArtifactType
+    content: string
+    metadata?: Record<string, unknown>
 }
 
 /**
@@ -60,11 +83,7 @@ export interface HermesAgentRuntimeOutput {
     steps: HermesAgentRuntimeStep[]
 
     /** Optional artifacts produced by the runtime. */
-    artifacts?: Array<{
-        name: string
-        type: string
-        content: string
-    }>
+    artifacts?: HermesAgentRuntimeArtifact[]
 }
 
 /**

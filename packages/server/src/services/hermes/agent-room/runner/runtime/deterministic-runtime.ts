@@ -18,41 +18,37 @@ export class DeterministicHermesRuntime implements HermesAgentRuntime {
                 steps: [
                     {
                         status: 'planned',
-                        eventType: 'task_planned',
-                        agentRole: 'planner',
-                        message: {
+                        events: [{ type: 'task_planned', agentRole: 'planner' }],
+                        messages: [{
                             senderRole: 'planner',
                             senderId: 'planner',
                             senderName: '规划 Agent',
                             content: `已完成任务「${taskTitle}」的规划`,
-                        },
+                        }],
                     },
                     {
                         status: 'assigned',
-                        eventType: 'task_assigned',
-                        agentRole: 'developer',
+                        events: [{ type: 'task_assigned', agentRole: 'developer' }],
                     },
                     {
                         status: 'in_progress',
-                        eventType: 'task_started',
-                        agentRole: 'developer',
-                        message: {
+                        events: [{ type: 'task_started', agentRole: 'developer' }],
+                        messages: [{
                             senderRole: 'developer',
                             senderId: 'developer',
                             senderName: '开发 Agent',
                             content: `开始执行任务「${taskTitle}」`,
-                        },
+                        }],
                     },
                     {
                         status: 'submitted_for_review',
-                        eventType: 'task_submitted',
-                        agentRole: 'developer',
-                        message: {
+                        events: [{ type: 'task_submitted', agentRole: 'developer' }],
+                        messages: [{
                             senderRole: 'developer',
                             senderId: 'developer',
                             senderName: '开发 Agent',
                             content: `任务「${taskTitle}」已提交审核`,
-                        },
+                        }],
                     },
                 ],
             }
@@ -63,25 +59,23 @@ export class DeterministicHermesRuntime implements HermesAgentRuntime {
                 steps: [
                     {
                         status: 'in_progress',
-                        eventType: 'revision_started',
-                        agentRole: 'developer',
-                        message: {
+                        events: [{ type: 'revision_started', agentRole: 'developer' }],
+                        messages: [{
                             senderRole: 'developer',
                             senderId: 'developer',
                             senderName: '开发 Agent',
                             content: `开始根据反馈修改任务「${taskTitle}」`,
-                        },
+                        }],
                     },
                     {
                         status: 'submitted_for_review',
-                        eventType: 'task_submitted',
-                        agentRole: 'developer',
-                        message: {
+                        events: [{ type: 'task_submitted', agentRole: 'developer' }],
+                        messages: [{
                             senderRole: 'developer',
                             senderId: 'developer',
                             senderName: '开发 Agent',
                             content: `任务「${taskTitle}」已重新提交审核`,
-                        },
+                        }],
                     },
                 ],
             }
@@ -92,19 +86,17 @@ export class DeterministicHermesRuntime implements HermesAgentRuntime {
                 steps: [
                     {
                         status: 'in_progress',
-                        eventType: 'task_started',
-                        agentRole: 'developer',
-                        message: {
+                        events: [{ type: 'task_started', agentRole: 'developer' }],
+                        messages: [{
                             senderRole: 'developer',
                             senderId: 'developer',
                             senderName: '开发 Agent',
                             content: `重新执行失败任务「${taskTitle}」`,
-                        },
+                        }],
                     },
                     {
                         status: 'submitted_for_review',
-                        eventType: 'task_submitted',
-                        agentRole: 'developer',
+                        events: [{ type: 'task_submitted', agentRole: 'developer' }],
                     },
                 ],
             }
