@@ -379,15 +379,15 @@ describe('Agent Room RunnerResult Protocol', () => {
 
     it('RealAgentRunner adapter returns deterministic ordered steps', async () => {
         const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
-        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+        const { RealAgentRunner, DeterministicHermesRuntime, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
             '../../packages/server/src/services/hermes/agent-room/runner'
         )
 
         const session = svc.createSession('Test')
         const task = svc.createTask(session.id, 'Build Login Page', '')
 
-        // Use the real RealAgentRunner (adapter skeleton, no LLM)
-        setActiveRunnerForTest(new RealAgentRunner())
+        // Use the real RealAgentRunner with deterministic runtime
+        setActiveRunnerForTest(new RealAgentRunner(new DeterministicHermesRuntime()))
 
         await svc.runWorkflow(session.id, task.id)
 
@@ -412,14 +412,14 @@ describe('Agent Room RunnerResult Protocol', () => {
 
     it('RealAgentRunner messages have explicit senderId/senderName', async () => {
         const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
-        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+        const { RealAgentRunner, DeterministicHermesRuntime, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
             '../../packages/server/src/services/hermes/agent-room/runner'
         )
 
         const session = svc.createSession('Test')
         const task = svc.createTask(session.id, 'Test Task', '')
 
-        setActiveRunnerForTest(new RealAgentRunner())
+        setActiveRunnerForTest(new RealAgentRunner(new DeterministicHermesRuntime()))
 
         await svc.runWorkflow(session.id, task.id)
 
@@ -451,7 +451,7 @@ describe('Agent Room RunnerResult Protocol', () => {
 
     it('RealAgentRunner from revision_required returns revision steps', async () => {
         const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
-        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+        const { RealAgentRunner, DeterministicHermesRuntime, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
             '../../packages/server/src/services/hermes/agent-room/runner'
         )
 
@@ -478,7 +478,7 @@ describe('Agent Room RunnerResult Protocol', () => {
         expect(afterReview.status).toBe('revision_required')
 
         // Now use RealAgentRunner for retry path
-        setActiveRunnerForTest(new RealAgentRunner())
+        setActiveRunnerForTest(new RealAgentRunner(new DeterministicHermesRuntime()))
         await svc.runWorkflow(session.id, task.id)
 
         const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
@@ -497,7 +497,7 @@ describe('Agent Room RunnerResult Protocol', () => {
 
     it('RealAgentRunner from failed returns retry steps', async () => {
         const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
-        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+        const { RealAgentRunner, DeterministicHermesRuntime, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
             '../../packages/server/src/services/hermes/agent-room/runner'
         )
 
@@ -522,7 +522,7 @@ describe('Agent Room RunnerResult Protocol', () => {
         expect(afterFail.status).toBe('failed')
 
         // Now use RealAgentRunner for retry path
-        setActiveRunnerForTest(new RealAgentRunner())
+        setActiveRunnerForTest(new RealAgentRunner(new DeterministicHermesRuntime()))
         await svc.runWorkflow(session.id, task.id)
 
         const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
@@ -541,7 +541,7 @@ describe('Agent Room RunnerResult Protocol', () => {
 
     it('RealAgentRunner from need_user_decision returns revision steps', async () => {
         const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
-        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+        const { RealAgentRunner, DeterministicHermesRuntime, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
             '../../packages/server/src/services/hermes/agent-room/runner'
         )
 
@@ -576,7 +576,7 @@ describe('Agent Room RunnerResult Protocol', () => {
         expect(afterReview.status).toBe('need_user_decision')
 
         // Now use RealAgentRunner for retry path
-        setActiveRunnerForTest(new RealAgentRunner())
+        setActiveRunnerForTest(new RealAgentRunner(new DeterministicHermesRuntime()))
         await svc.runWorkflow(session.id, task.id)
 
         const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!

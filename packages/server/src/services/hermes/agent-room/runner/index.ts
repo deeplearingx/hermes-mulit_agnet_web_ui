@@ -14,18 +14,27 @@ export type {
 } from './types'
 export { MockAgentRoomRunner } from './mock-runner'
 export { RealAgentRunner } from './real-agent-runner'
+export type {
+    HermesAgentRuntime,
+    HermesAgentRuntimeInput,
+    HermesAgentRuntimeOutput,
+    HermesAgentRuntimeStep,
+} from './runtime'
+export { DeterministicHermesRuntime, createHermesAgentRuntime } from './runtime'
 
 import type { AgentRoomRunner } from './types'
 import { MockAgentRoomRunner } from './mock-runner'
 import { RealAgentRunner } from './real-agent-runner'
+import { createHermesAgentRuntime } from './runtime'
 
 /**
  * Create a runner instance based on the given mode.
  * @param mode - 'mock' or 'real'. Defaults to 'mock'.
+ * For 'real' mode, injects the default HermesAgentRuntime (deterministic).
  */
 export function createAgentRoomRunner(mode?: string): AgentRoomRunner {
     const normalized = (mode ?? 'mock').toLowerCase()
-    if (normalized === 'real') return new RealAgentRunner()
+    if (normalized === 'real') return new RealAgentRunner(createHermesAgentRuntime())
     return new MockAgentRoomRunner()
 }
 
