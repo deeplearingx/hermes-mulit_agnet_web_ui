@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DeterministicHermesRuntime } from '../../packages/server/src/services/hermes/agent-room/runner/runtime/deterministic-runtime'
 import type { HermesAgentRuntimeInput } from '../../packages/server/src/services/hermes/agent-room/runner/runtime/types'
+import type { AgentRoomRunnerResult } from '../../packages/server/src/services/hermes/agent-room/runner'
 
 describe('Hermes Agent Runtime Contract', () => {
     const runtime = new DeterministicHermesRuntime()
@@ -101,8 +102,8 @@ describe('Hermes Agent Runtime Contract', () => {
     it('runtime output maps to AgentRoomRunnerResult without cast', async () => {
         const output = await runtime.runTask(makeInput())
 
-        // Verify structural compatibility: runtime types are directly assignable
-        const mapped = {
+        // Type-level proof: HermesAgentRuntimeOutput → AgentRoomRunnerResult is lossless
+        const mapped: AgentRoomRunnerResult = {
             steps: output.steps.map(step => ({
                 status: step.status,
                 events: step.events,
@@ -112,8 +113,8 @@ describe('Hermes Agent Runtime Contract', () => {
         }
 
         expect(mapped.steps).toHaveLength(4)
-        expect(mapped.steps[0].status).toBe('planned')
-        expect(mapped.steps[0].events[0].type).toBe('task_planned')
-        expect(mapped.steps[0].events[0].agentRole).toBe('planner')
+        expect(mapped.steps![0].status).toBe('planned')
+        expect(mapped.steps![0].events![0].type).toBe('task_planned')
+        expect(mapped.steps![0].events![0].agentRole).toBe('planner')
     })
 })

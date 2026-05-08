@@ -22,6 +22,14 @@ import { DeterministicHermesRuntime } from './deterministic-runtime'
  */
 export function createHermesAgentRuntime(mode?: string): HermesAgentRuntime {
     const normalized = (mode ?? 'deterministic').toLowerCase()
-    // Future: if (normalized === 'real') return new RealHermesRuntime()
-    return new DeterministicHermesRuntime()
+
+    switch (normalized) {
+        case 'deterministic':
+        case 'mock':
+        case '':
+            return new DeterministicHermesRuntime()
+        // Future: case 'real': return new RealHermesRuntime()
+        default:
+            return new DeterministicHermesRuntime()
+    }
 }

@@ -5,6 +5,7 @@ import {
     setActiveRunnerForTest,
     resetActiveRunnerForTest,
 } from '../../packages/server/src/services/hermes/agent-room/runner'
+import { createHermesAgentRuntime, DeterministicHermesRuntime } from '../../packages/server/src/services/hermes/agent-room/runner/runtime'
 
 describe('AgentRoomRunner factory', () => {
     afterEach(() => {
@@ -38,5 +39,17 @@ describe('AgentRoomRunner factory', () => {
         setActiveRunnerForTest(fake)
         resetActiveRunnerForTest()
         expect(activeRunner.name).toBe('mock')
+    })
+
+    it('createHermesAgentRuntime returns deterministic runtime by default', () => {
+        expect(createHermesAgentRuntime()).toBeInstanceOf(DeterministicHermesRuntime)
+        expect(createHermesAgentRuntime('deterministic')).toBeInstanceOf(DeterministicHermesRuntime)
+        expect(createHermesAgentRuntime('mock')).toBeInstanceOf(DeterministicHermesRuntime)
+        expect(createHermesAgentRuntime('')).toBeInstanceOf(DeterministicHermesRuntime)
+    })
+
+    it('createHermesAgentRuntime falls back to deterministic for unknown mode', () => {
+        expect(createHermesAgentRuntime('real')).toBeInstanceOf(DeterministicHermesRuntime)
+        expect(createHermesAgentRuntime('unknown')).toBeInstanceOf(DeterministicHermesRuntime)
     })
 })
