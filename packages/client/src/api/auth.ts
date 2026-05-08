@@ -51,3 +51,34 @@ export async function removePassword(): Promise<void> {
     method: 'DELETE',
   })
 }
+
+export interface GitHubOAuthStartResponse {
+  session_id: string
+  authorization_url: string
+  state: string
+}
+
+export interface GitHubOAuthStatusResponse {
+  status: 'pending' | 'approved' | 'denied' | 'expired' | 'error'
+  username?: string
+  session_token?: string
+  error?: string | null
+}
+
+export async function startGitHubOAuth(): Promise<GitHubOAuthStartResponse> {
+  const res = await fetch('/api/auth/github/start')
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error || 'Failed to start GitHub OAuth')
+  }
+  return res.json()
+}
+
+export async function getGitHubOAuthStatus(sessionId: string): Promise<GitHubOAuthStatusResponse> {
+  const res = await fetch(`/api/auth/github/status?session_id=${encodeURIComponent(sessionId)}`)
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error || 'Failed to get OAuth status')
+  }
+  return res.json()
+}

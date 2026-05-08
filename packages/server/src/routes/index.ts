@@ -19,6 +19,7 @@ import { logRoutes } from './hermes/logs'
 import { codexAuthRoutes } from './hermes/codex-auth'
 import { nousAuthRoutes } from './hermes/nous-auth'
 import { copilotAuthRoutes } from './hermes/copilot-auth'
+import { githubAuthRoutes, githubAuthPublicRoutes } from './hermes/github-auth'
 import { gatewayRoutes } from './hermes/gateways'
 import { weixinRoutes } from './hermes/weixin'
 import { fileRoutes } from './hermes/files'
@@ -39,6 +40,7 @@ export function registerRoutes(app: any, requireAuth: (ctx: Context, next: Next)
   app.use(healthRoutes.routes())
   app.use(webhookRoutes.routes())
   app.use(authPublicRoutes.routes())
+  app.use(githubAuthPublicRoutes.routes())
 
   // --- Auth middleware: all routes below require authentication ---
   app.use(requireAuth)
@@ -58,6 +60,7 @@ export function registerRoutes(app: any, requireAuth: (ctx: Context, next: Next)
   app.use(codexAuthRoutes.routes())
   app.use(nousAuthRoutes.routes())
   app.use(copilotAuthRoutes.routes())
+  app.use(githubAuthRoutes.routes())
   app.use(gatewayRoutes.routes())
   app.use(weixinRoutes.routes())
   app.use(groupChatRoutes.routes())       // Must be before proxy

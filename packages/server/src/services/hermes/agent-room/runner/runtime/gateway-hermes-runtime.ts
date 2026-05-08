@@ -19,6 +19,20 @@ import { config } from '../../../../../config'
 
 const UPSTREAM = config.upstream.replace(/\/$/, '')
 
+function parseEnvTimeoutMs(): number {
+    const parsed = Number(process.env.HERMES_AGENT_TIMEOUT_MS ?? 120000)
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error(`Invalid HERMES_AGENT_TIMEOUT_MS: "${process.env.HERMES_AGENT_TIMEOUT_MS}"`)
+    }
+    return parsed
+}
+
+function assertValidTimeoutMs(value: number): void {
+    if (!Number.isFinite(value) || value <= 0) {
+        throw new Error(`Invalid timeoutMs: ${value}`)
+    }
+}
+
 /**
  * Build the input text for the Gateway run.
  * Pure text — no AgentRoom status fields leaked to the agent.
@@ -59,8 +73,10 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
     constructor(
         private readonly upstream = UPSTREAM,
         private readonly apiKey?: string | null,
-        private readonly timeoutMs = Number(process.env.HERMES_AGENT_TIMEOUT_MS ?? 120000),
-    ) {}
+        private readonly timeoutMs = parseEnvTimeoutMs(),
+    ) {
+        assertValidTimeoutMs(this.timeoutMs)
+    }
 
     async runTask(input: HermesAgentRuntimeInput): Promise<HermesAgentRuntimeOutput> {
         const gatewaySessionId = `agent-room-${input.sessionId}-${input.taskId}`
@@ -90,7 +106,7 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
         const metadata = { runId, source: 'hermes-gateway' as const }
         const safeName = safeTitle(title)
 
-        // Revision path: revision_required | need_user_decision | failed → in_progress → submitted_for_review
+        // Revision/retry path: revision_required | need_user_decision | failed → in_progress → submitted_for_review
         if (
             input.currentStatus === 'revision_required' ||
             input.currentStatus === 'need_user_decision' ||
@@ -140,6 +156,15 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
                     metadata,
                 }],
             }
+        }
+
+        // Only 'created' is allowed as the default path.
+        // All other statuses are unsupported — reject explicitly to surface misuse early.
+        if (input.currentStatus !== 'created') {
+            throw new Error(
+                `Unsupported AgentRoom task status for GatewayHermesRuntime: ${input.currentStatus}. ` +
+                `Expected one of: created, revision_required, need_user_decision, failed`,
+            )
         }
 
         // Default path: created → planned → assigned → in_progress → submitted_for_review

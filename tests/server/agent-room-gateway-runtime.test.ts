@@ -306,6 +306,84 @@ describe('GatewayHermesRuntime', () => {
         })
     })
 
+    describe('unsupported status rejection', () => {
+        it('throws on submitted_for_review status', async () => {
+            vi.mocked(runHermesGatewayTask).mockResolvedValue({
+                output: 'Done',
+                runId: 'run-1',
+                sessionId: 'agent-room-sess-1-task-1',
+            })
+
+            const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
+            await expect(
+                runtime.runTask(makeInput({ currentStatus: 'submitted_for_review' })),
+            ).rejects.toThrow(/Unsupported AgentRoom task status/)
+        })
+
+        it('throws on completed status', async () => {
+            vi.mocked(runHermesGatewayTask).mockResolvedValue({
+                output: 'Done',
+                runId: 'run-1',
+                sessionId: 'agent-room-sess-1-task-1',
+            })
+
+            const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
+            await expect(
+                runtime.runTask(makeInput({ currentStatus: 'completed' })),
+            ).rejects.toThrow(/Unsupported AgentRoom task status/)
+        })
+
+        it('throws on delivering status', async () => {
+            vi.mocked(runHermesGatewayTask).mockResolvedValue({
+                output: 'Done',
+                runId: 'run-1',
+                sessionId: 'agent-room-sess-1-task-1',
+            })
+
+            const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
+            await expect(
+                runtime.runTask(makeInput({ currentStatus: 'delivering' })),
+            ).rejects.toThrow(/Unsupported AgentRoom task status/)
+        })
+
+        it('throws on in_progress status', async () => {
+            vi.mocked(runHermesGatewayTask).mockResolvedValue({
+                output: 'Done',
+                runId: 'run-1',
+                sessionId: 'agent-room-sess-1-task-1',
+            })
+
+            const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
+            await expect(
+                runtime.runTask(makeInput({ currentStatus: 'in_progress' })),
+            ).rejects.toThrow(/Unsupported AgentRoom task status/)
+        })
+    })
+
+    describe('timeout validation', () => {
+        it('throws on NaN timeoutMs from env', () => {
+            const original = process.env.HERMES_AGENT_TIMEOUT_MS
+            try {
+                process.env.HERMES_AGENT_TIMEOUT_MS = 'abc'
+                expect(() => new GatewayHermesRuntime('http://127.0.0.1:8642', null)).toThrow(/Invalid HERMES_AGENT_TIMEOUT_MS/)
+            } finally {
+                if (original === undefined) {
+                    delete process.env.HERMES_AGENT_TIMEOUT_MS
+                } else {
+                    process.env.HERMES_AGENT_TIMEOUT_MS = original
+                }
+            }
+        })
+
+        it('throws on zero timeoutMs', () => {
+            expect(() => new GatewayHermesRuntime('http://127.0.0.1:8642', null, 0)).toThrow(/Invalid timeoutMs/)
+        })
+
+        it('throws on negative timeoutMs', () => {
+            expect(() => new GatewayHermesRuntime('http://127.0.0.1:8642', null, -1000)).toThrow(/Invalid timeoutMs/)
+        })
+    })
+
     describe('extractGatewayOutput', () => {
         it('extracts from event.output', async () => {
             const { extractGatewayOutput } = await import('../../packages/server/src/services/hermes/gateway-run-client')

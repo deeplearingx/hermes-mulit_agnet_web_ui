@@ -34,6 +34,12 @@ export default {
     removeConfirm: 'Are you sure you want to remove password login? You will need to use the access token to log in.',
     passwordLoginNotConfigured: 'Password login is not configured',
     passwordLoginConfigured: 'Password login enabled ({username})',
+    oauthLogin: 'OAuth',
+    loginWithGithub: 'Login with GitHub',
+    oauthWaiting: 'Waiting for authorization...',
+    oauthFailed: 'OAuth authorization failed',
+    oauthDenied: 'OAuth authorization was denied',
+    popupBlocked: 'Please allow popups for this site',
   },
 
   // Common

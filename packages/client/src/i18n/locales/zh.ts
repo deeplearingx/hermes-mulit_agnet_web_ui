@@ -34,6 +34,12 @@ export default {
     removeConfirm: '确定要移除密码登录吗？移除后需要使用访问令牌登录。',
     passwordLoginNotConfigured: '密码登录未配置',
     passwordLoginConfigured: '密码登录已启用（{username}）',
+    oauthLogin: 'OAuth',
+    loginWithGithub: '使用 GitHub 登录',
+    oauthWaiting: '等待授权...',
+    oauthFailed: 'OAuth 授权失败',
+    oauthDenied: 'OAuth 授权被拒绝',
+    popupBlocked: '请允许此网站弹出窗口',
   },
 
   // 通用

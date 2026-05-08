@@ -7,7 +7,6 @@
 // responsible for mapping it into domain-specific structures.
 
 import { EventSource } from 'eventsource'
-import { logger } from '../logger'
 
 export interface GatewayRunParams {
     /** Gateway upstream URL (e.g. http://127.0.0.1:8642) */
@@ -78,6 +77,16 @@ export function extractGatewayOutput(event: Record<string, unknown>): string | n
  *   - SSE connection errors
  *   - Timeout
  */
+/**
+ * Validate that a timeout value is a positive finite number.
+ * Throws immediately on NaN / non-positive to surface env-var misconfiguration.
+ */
+function assertValidTimeoutMs(value: number): void {
+    if (!Number.isFinite(value) || value <= 0) {
+        throw new Error(`Invalid Gateway timeoutMs: ${value}`)
+    }
+}
+
 export async function runHermesGatewayTask(params: GatewayRunParams): Promise<GatewayRunResult> {
     const {
         upstream,
@@ -88,6 +97,8 @@ export async function runHermesGatewayTask(params: GatewayRunParams): Promise<Ga
         sessionId,
         timeoutMs = 120_000,
     } = params
+
+    assertValidTimeoutMs(timeoutMs)
 
     const cleanUpstream = upstream.replace(/\/$/, '')
     const effectiveSessionId = sessionId || Date.now().toString(36) + Math.random().toString(36).slice(2, 8)

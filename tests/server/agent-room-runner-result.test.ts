@@ -1,5 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Mock gateway-run-client for the GatewayHermesRuntime integration test.
+// Other tests in this file use DeterministicHermesRuntime or fake runners,
+// so this mock does not affect them.
+vi.mock('../../packages/server/src/services/hermes/gateway-run-client', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../packages/server/src/services/hermes/gateway-run-client')>()
+    return {
+        ...actual,
+        runHermesGatewayTask: vi.fn(),
+    }
+})
+
 function ensureTableForTest(db: any, tableName: string, schema: Record<string, string>): void {
     const cols = Object.entries(schema).map(([col, type]) => `${col} ${type}`).join(', ')
     db.exec(`CREATE TABLE IF NOT EXISTS ${tableName} (${cols})`)
@@ -661,6 +672,59 @@ describe('Agent Room RunnerResult Protocol', () => {
         expect(artifacts).toHaveLength(1)
         expect(artifacts[0].name).toBe('output.md')
         expect(artifacts[0].type).toBe('code_output')
+
+        resetActiveRunnerForTest()
+    })
+
+    // ── P4.7.1: GatewayHermesRuntime service-level regression ───
+
+    it('RealAgentRunner + GatewayHermesRuntime + runWorkflow: full chain → DB', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+        const { GatewayHermesRuntime } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner/runtime/gateway-hermes-runtime'
+        )
+
+        // Configure the hoisted mock for this test
+        const { runHermesGatewayTask } = await import('../../packages/server/src/services/hermes/gateway-run-client')
+        vi.mocked(runHermesGatewayTask).mockResolvedValue({
+            output: 'Login page implemented with OAuth2 support',
+            runId: 'run-gw-001',
+            sessionId: 'agent-room-sess-1-task-1',
+        })
+
+        // Wire up RealAgentRunner with GatewayHermesRuntime
+        const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
+        setActiveRunnerForTest(new RealAgentRunner(runtime))
+
+        const session = svc.createSession('Gateway Integration Test')
+        const task = svc.createTask(session.id, 'Build Login Page', 'Create a login page with OAuth2')
+
+        await svc.runWorkflow(session.id, task.id)
+
+        // 1. Final status should be submitted_for_review
+        const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(finalTask.status).toBe('submitted_for_review')
+
+        // 2. Workflow events: task_planned → task_assigned → task_started → task_submitted
+        const events = svc.listWorkflowEvents(session.id)
+        expect(events.some(e => e.type === 'task_planned')).toBe(true)
+        expect(events.some(e => e.type === 'task_assigned')).toBe(true)
+        expect(events.some(e => e.type === 'task_started')).toBe(true)
+        expect(events.some(e => e.type === 'task_submitted')).toBe(true)
+
+        // 3. Messages include Gateway final output
+        const messages = svc.listMessages(session.id)
+        const agentMessages = messages.filter(m => m.type === 'agent_message')
+        expect(agentMessages.some(m => m.content.includes('Login page implemented with OAuth2 support'))).toBe(true)
+
+        // 4. Artifacts: code_output with runId metadata
+        const artifacts = svc.listTaskArtifacts(session.id, task.id)
+        expect(artifacts).toHaveLength(1)
+        expect(artifacts[0].type).toBe('code_output')
+        expect(artifacts[0].content).toBe('Login page implemented with OAuth2 support')
 
         resetActiveRunnerForTest()
     })

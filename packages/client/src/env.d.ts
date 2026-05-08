@@ -7,3 +7,11 @@ declare module '*.vue' {
   const component: DefineComponent<{}, {}, any>
   export default component
 }
+
+interface ImportMetaEnv {
+  readonly VITE_GITHUB_OAUTH_ENABLED: string
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv
+}
