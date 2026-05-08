@@ -34,8 +34,27 @@ function assertValidTimeoutMs(value: number): void {
 }
 
 /**
+ * Validate that the task status is one of the supported start statuses.
+ * Must be called BEFORE invoking the Gateway to avoid wasting a round-trip.
+ */
+function assertSupportedStartStatus(status: HermesAgentRuntimeInput['currentStatus']): void {
+    if (
+        status !== 'created' &&
+        status !== 'revision_required' &&
+        status !== 'need_user_decision' &&
+        status !== 'failed'
+    ) {
+        throw new Error(
+            `Unsupported AgentRoom task status for GatewayHermesRuntime: ${status}. ` +
+            `Expected one of: created, revision_required, need_user_decision, failed`,
+        )
+    }
+}
+
+/**
  * Build the input text for the Gateway run.
- * Pure text — no AgentRoom status fields leaked to the agent.
+ * Includes task context and lightweight workflow context (status, revision round),
+ * but does not require the agent to output AgentRoom status fields.
  */
 function buildTaskInput(input: HermesAgentRuntimeInput): string {
     const parts = [
@@ -79,6 +98,9 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
     }
 
     async runTask(input: HermesAgentRuntimeInput): Promise<HermesAgentRuntimeOutput> {
+        // Fail fast on unsupported statuses BEFORE calling the Gateway.
+        assertSupportedStartStatus(input.currentStatus)
+
         const gatewaySessionId = `agent-room-${input.sessionId}-${input.taskId}`
 
         const result = await runHermesGatewayTask({

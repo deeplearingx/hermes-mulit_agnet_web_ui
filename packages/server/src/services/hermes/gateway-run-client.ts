@@ -69,13 +69,18 @@ export function extractGatewayOutput(event: Record<string, unknown>): string | n
  *   2. GET /v1/runs/:run_id/events (SSE) → wait for run.completed or run.failed
  *   3. Return { output, runId, sessionId }
  *
+ * Timeout semantics:
+ *   timeoutMs applies separately to run creation (POST /v1/runs via AbortSignal.timeout)
+ *   and event streaming (SSE setTimeout). Total wall-clock time may approach 2 × timeoutMs.
+ *
  * Throws on:
+ *   - Invalid timeoutMs (NaN / non-positive)
  *   - HTTP errors from /v1/runs
  *   - Missing run_id in response
  *   - run.failed event
  *   - Empty output from run.completed
  *   - SSE connection errors
- *   - Timeout
+ *   - Timeout (POST or SSE)
  */
 /**
  * Validate that a timeout value is a positive finite number.

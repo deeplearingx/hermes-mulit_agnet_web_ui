@@ -307,56 +307,36 @@ describe('GatewayHermesRuntime', () => {
     })
 
     describe('unsupported status rejection', () => {
-        it('throws on submitted_for_review status', async () => {
-            vi.mocked(runHermesGatewayTask).mockResolvedValue({
-                output: 'Done',
-                runId: 'run-1',
-                sessionId: 'agent-room-sess-1-task-1',
-            })
-
+        it('throws on submitted_for_review status before calling Gateway', async () => {
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
             await expect(
                 runtime.runTask(makeInput({ currentStatus: 'submitted_for_review' })),
             ).rejects.toThrow(/Unsupported AgentRoom task status/)
+            expect(runHermesGatewayTask).not.toHaveBeenCalled()
         })
 
-        it('throws on completed status', async () => {
-            vi.mocked(runHermesGatewayTask).mockResolvedValue({
-                output: 'Done',
-                runId: 'run-1',
-                sessionId: 'agent-room-sess-1-task-1',
-            })
-
+        it('throws on completed status before calling Gateway', async () => {
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
             await expect(
                 runtime.runTask(makeInput({ currentStatus: 'completed' })),
             ).rejects.toThrow(/Unsupported AgentRoom task status/)
+            expect(runHermesGatewayTask).not.toHaveBeenCalled()
         })
 
-        it('throws on delivering status', async () => {
-            vi.mocked(runHermesGatewayTask).mockResolvedValue({
-                output: 'Done',
-                runId: 'run-1',
-                sessionId: 'agent-room-sess-1-task-1',
-            })
-
+        it('throws on delivering status before calling Gateway', async () => {
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
             await expect(
                 runtime.runTask(makeInput({ currentStatus: 'delivering' })),
             ).rejects.toThrow(/Unsupported AgentRoom task status/)
+            expect(runHermesGatewayTask).not.toHaveBeenCalled()
         })
 
-        it('throws on in_progress status', async () => {
-            vi.mocked(runHermesGatewayTask).mockResolvedValue({
-                output: 'Done',
-                runId: 'run-1',
-                sessionId: 'agent-room-sess-1-task-1',
-            })
-
+        it('throws on in_progress status before calling Gateway', async () => {
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
             await expect(
                 runtime.runTask(makeInput({ currentStatus: 'in_progress' })),
             ).rejects.toThrow(/Unsupported AgentRoom task status/)
+            expect(runHermesGatewayTask).not.toHaveBeenCalled()
         })
     })
 
