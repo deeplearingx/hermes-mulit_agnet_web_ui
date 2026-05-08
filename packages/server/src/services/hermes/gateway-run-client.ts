@@ -21,8 +21,17 @@ export interface GatewayRunParams {
     conversationHistory?: Array<{ role: string; content: string }>
     /** Session ID for the run */
     sessionId?: string
-    /** Timeout in milliseconds for the entire operation */
+    /**
+     * Timeout in milliseconds.
+     * Applies separately to run creation (POST /v1/runs via AbortSignal.timeout)
+     * and event streaming (SSE setTimeout). Total wall-clock time may approach 2 × timeoutMs.
+     */
     timeoutMs?: number
+    /**
+     * Optional callback invoked for every parsed SSE event.
+     * Useful for diagnostics / smoke tests to inspect the raw event shape.
+     */
+    onRawEvent?: (event: Record<string, unknown>) => void
 }
 
 export interface GatewayRunResult {
@@ -101,6 +110,7 @@ export async function runHermesGatewayTask(params: GatewayRunParams): Promise<Ga
         conversationHistory,
         sessionId,
         timeoutMs = 120_000,
+        onRawEvent,
     } = params
 
     assertValidTimeoutMs(timeoutMs)
@@ -166,6 +176,10 @@ export async function runHermesGatewayTask(params: GatewayRunParams): Promise<Ga
         source.onmessage = (event: MessageEvent) => {
             try {
                 const parsed = JSON.parse(event.data) as Record<string, unknown>
+
+                if (onRawEvent) {
+                    try { onRawEvent(parsed) } catch { /* swallow diagnostic errors */ }
+                }
 
                 if (parsed.event === 'run.completed') {
                     clearTimeout(timer)

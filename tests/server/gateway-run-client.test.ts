@@ -562,5 +562,52 @@ describe('gateway-run-client', () => {
             const result = await promise
             expect(result.output).toBe('finally done')
         })
+
+        // ── onRawEvent callback ──────────────────────────────────
+
+        it('invokes onRawEvent for every parsed SSE event', async () => {
+            mockFetchPostRun('run-cb')
+
+            const rawEvents: Record<string, unknown>[] = []
+            const promise = runHermesGatewayTask({
+                upstream: 'http://gateway.test',
+                input: 'task',
+                timeoutMs: 30000,
+                onRawEvent: (event) => rawEvents.push(event),
+            })
+
+            await flushMicrotasks()
+            const source = getLatestSource()
+
+            emitToSource(source, { event: 'message.delta', delta: 'partial' })
+            emitToSource(source, { event: 'run.completed', output: 'done' })
+
+            await promise
+
+            expect(rawEvents).toHaveLength(2)
+            expect(rawEvents[0].event).toBe('message.delta')
+            expect(rawEvents[1].event).toBe('run.completed')
+        })
+
+        it('onRawEvent errors are swallowed and do not break the flow', async () => {
+            mockFetchPostRun('run-swallow')
+
+            const promise = runHermesGatewayTask({
+                upstream: 'http://gateway.test',
+                input: 'task',
+                timeoutMs: 30000,
+                onRawEvent: () => {
+                    throw new Error('diagnostic boom')
+                },
+            })
+
+            await flushMicrotasks()
+            const source = getLatestSource()
+
+            emitToSource(source, { event: 'run.completed', output: 'still works' })
+
+            const result = await promise
+            expect(result.output).toBe('still works')
+        })
     })
 })
