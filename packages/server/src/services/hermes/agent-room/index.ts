@@ -124,6 +124,23 @@ export interface AgentRoomArtifact {
 // ─── Constants ─────────────────────────────────────────────────
 const MAX_REVISION_ROUNDS = 3
 
+// ─── Step Event Expectation ────────────────────────────────────
+// Maps target status → allowed event types for that transition.
+// Used by validateRunnerStep() to enforce status/event correspondence.
+const EXPECTED_EVENTS_FOR_STATUS: Partial<Record<AgentRoomTaskStatus, AgentRoomWorkflowEventType[]>> = {
+    planned: ['task_planned'],
+    assigned: ['task_assigned'],
+    in_progress: ['task_started', 'revision_started'],
+    submitted_for_review: ['task_submitted'],
+    review_passed: ['review_passed'],
+    review_rejected: ['review_rejected'],
+    revision_required: ['revision_started'],
+    need_user_decision: ['need_user_decision'],
+    delivering: ['delivery_started'],
+    completed: ['delivery_completed'],
+    failed: ['task_failed'],
+}
+
 // ─── Status Transition Rules ───────────────────────────────────
 // review_rejected is a TRANSIENT state — submitReview always immediately
 // transitions it to either revision_required or need_user_decision.
@@ -428,8 +445,48 @@ export function addWorkflowEvent(
 // Delegates actual step execution to the active runner.
 
 /**
+ * Validate a single runner step for status/event semantic correctness.
+ * Throws if the step violates the protocol contract.
+ * Messages are NOT validated — they are free-form.
+ *
+ * Rules:
+ * 1. If step.status is present, the transition must be valid (checked here, not deferred).
+ * 2. If step has both status and events, each event type must be in the expected set for that target status.
+ * 3. If step has events but no status, events are allowed (emitting at current state).
+ */
+function validateRunnerStep(
+    taskId: string,
+    step: AgentRoomRunnerStep,
+): void {
+    if (!step.status) return // No status change → no validation needed
+
+    // Rule 1: Validate transition legality
+    const task = store.getTask(taskId) as AgentRoomTask | null
+    if (!task) throw new Error(`Task not found: ${taskId}`)
+    const allowed = VALID_TRANSITIONS[task.status]
+    if (!allowed.includes(step.status)) {
+        throw new Error(`Invalid step transition: ${task.status} → ${step.status}`)
+    }
+
+    // Rule 2: Validate event/status correspondence
+    if (step.events?.length) {
+        const expected = EXPECTED_EVENTS_FOR_STATUS[step.status]
+        if (expected) {
+            for (const event of step.events) {
+                if (!expected.includes(event.type)) {
+                    throw new Error(
+                        `Event "${event.type}" is not expected for status "${step.status}". ` +
+                        `Expected one of: ${expected.join(', ')}`,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
  * Apply a single step to the store.
- * Each step: status transition → events → messages.
+ * Each step: validate → status transition → events → messages.
  */
 function applyRunnerStep(
     sessionId: string,
@@ -437,6 +494,9 @@ function applyRunnerStep(
     taskTitle: string,
     step: AgentRoomRunnerStep,
 ): void {
+    // Validate step semantics before applying
+    validateRunnerStep(taskId, step)
+
     // Transition status via state machine (validates each transition)
     if (step.status) {
         updateTaskStatus(taskId, step.status)
@@ -454,14 +514,14 @@ function applyRunnerStep(
         )
     }
 
-    // Create direct chat messages (independent of events)
+    // Create direct chat messages (independent of events, not validated)
     for (const msg of step.messages ?? []) {
         addMessage({
             sessionId,
-            senderId: msg.senderRole,
-            senderName: msg.senderRole,
+            senderId: msg.senderId ?? msg.senderRole,
+            senderName: msg.senderName ?? msg.senderRole,
             senderRole: msg.senderRole,
-            type: 'agent_message',
+            type: msg.type ?? 'agent_message',
             content: msg.content,
             metadata: { taskId, ...msg.metadata },
         })

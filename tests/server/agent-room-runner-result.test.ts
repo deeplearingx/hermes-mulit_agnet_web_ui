@@ -249,4 +249,176 @@ describe('Agent Room RunnerResult Protocol', () => {
 
         resetActiveRunnerForTest()
     })
+
+    // ── P4.3: Protocol Hardening Tests ──────────────────────────
+
+    it('ordered steps illegal migration throws and rolls back all changes', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const session = svc.createSession('Test')
+        const task = svc.createTask(session.id, 'Task', '')
+
+        // Fake runner: step 1 valid (created→planned), step 2 invalid (planned→completed)
+        setActiveRunnerForTest({
+            name: 'real',
+            run: async () => ({
+                steps: [
+                    { status: 'planned' as const, events: [{ type: 'task_planned' as const, agentRole: 'planner' as const }] },
+                    { status: 'completed' as const, events: [{ type: 'delivery_completed' as const, agentRole: 'delivery' as const }] },
+                ],
+            }),
+        })
+
+        await expect(svc.runWorkflow(session.id, task.id)).rejects.toThrow(/Invalid step transition/)
+
+        // Verify rollback: task should remain at 'created' (no partial state)
+        const updatedTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(updatedTask.status).toBe('created')
+
+        // Verify rollback: only the initial task_created event from createTask() should exist
+        const events = svc.listWorkflowEvents(session.id)
+        const taskEvents = events.filter(e => e.taskId === task.id)
+        expect(taskEvents.length).toBe(1)
+        expect(taskEvents[0].type).toBe('task_created')
+
+        resetActiveRunnerForTest()
+    })
+
+    it('ordered steps event/status mismatch throws and rolls back', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const session = svc.createSession('Test')
+        const task = svc.createTask(session.id, 'Task', '')
+
+        // Fake runner: valid transition but wrong event type for that status
+        setActiveRunnerForTest({
+            name: 'real',
+            run: async () => ({
+                steps: [
+                    {
+                        status: 'planned' as const,
+                        events: [{ type: 'task_started' as const, agentRole: 'developer' as const }],
+                    },
+                ],
+            }),
+        })
+
+        await expect(svc.runWorkflow(session.id, task.id)).rejects.toThrow(/not expected for status/)
+
+        // Verify rollback: task should remain at 'created'
+        const updatedTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(updatedTask.status).toBe('created')
+
+        // Verify rollback: only the initial task_created event from createTask() should exist
+        const events = svc.listWorkflowEvents(session.id)
+        const taskEvents = events.filter(e => e.taskId === task.id)
+        expect(taskEvents.length).toBe(1)
+        expect(taskEvents[0].type).toBe('task_created')
+
+        resetActiveRunnerForTest()
+    })
+
+    it('ordered steps with no status but valid events does not throw', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const session = svc.createSession('Test')
+        const task = svc.createTask(session.id, 'Task', '')
+
+        // Step with events but no status change — events are allowed at current state
+        setActiveRunnerForTest({
+            name: 'real',
+            run: async () => ({
+                steps: [
+                    { events: [{ type: 'task_started' as const, agentRole: 'developer' as const }] },
+                ],
+            }),
+        })
+
+        await svc.runWorkflow(session.id, task.id)
+
+        // Task status unchanged (still 'created')
+        const updatedTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(updatedTask.status).toBe('created')
+
+        // Event was emitted
+        const events = svc.listWorkflowEvents(session.id)
+        expect(events.some(e => e.type === 'task_started')).toBe(true)
+
+        resetActiveRunnerForTest()
+    })
+
+    it('RealAgentRunner adapter returns deterministic ordered steps', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const session = svc.createSession('Test')
+        const task = svc.createTask(session.id, 'Build Login Page', '')
+
+        // Use the real RealAgentRunner (adapter skeleton, no LLM)
+        setActiveRunnerForTest(new RealAgentRunner())
+
+        await svc.runWorkflow(session.id, task.id)
+
+        // Verify final status
+        const updatedTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(updatedTask.status).toBe('submitted_for_review')
+
+        // Verify all 4 expected events were emitted
+        const events = svc.listWorkflowEvents(session.id)
+        expect(events.some(e => e.type === 'task_planned')).toBe(true)
+        expect(events.some(e => e.type === 'task_assigned')).toBe(true)
+        expect(events.some(e => e.type === 'task_started')).toBe(true)
+        expect(events.some(e => e.type === 'task_submitted')).toBe(true)
+
+        // Verify messages reference task.title
+        const messages = svc.listMessages(session.id)
+        const agentMessages = messages.filter(m => m.type === 'agent_message')
+        expect(agentMessages.some(m => m.content.includes('Build Login Page'))).toBe(true)
+
+        resetActiveRunnerForTest()
+    })
+
+    it('RealAgentRunner message senderId/senderName default to senderRole', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const session = svc.createSession('Test')
+        const task = svc.createTask(session.id, 'Test Task', '')
+
+        setActiveRunnerForTest(new RealAgentRunner())
+
+        await svc.runWorkflow(session.id, task.id)
+
+        // Verify that direct messages (not event-produced) have senderId/senderName defaulting to senderRole
+        // Event-produced messages use AGENT_META mapping (e.g. '规划 Agent'), direct messages default to senderRole
+        const messages = svc.listMessages(session.id)
+        const directPlannerMsg = messages.find(
+            m => m.senderRole === 'planner' && m.type === 'agent_message' && m.content.includes('已完成任务'),
+        )
+        expect(directPlannerMsg).toBeDefined()
+        expect(directPlannerMsg!.senderId).toBe('planner')
+        expect(directPlannerMsg!.senderName).toBe('planner')
+
+        // Event-produced message uses AGENT_META mapping
+        const eventPlannerMsg = messages.find(
+            m => m.senderRole === 'planner' && m.type === 'agent_message' && m.content.includes('制定执行计划'),
+        )
+        expect(eventPlannerMsg).toBeDefined()
+        expect(eventPlannerMsg!.senderName).toBe('规划 Agent')
+
+        resetActiveRunnerForTest()
+    })
 })

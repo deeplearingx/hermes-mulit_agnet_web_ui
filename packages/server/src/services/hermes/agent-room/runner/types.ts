@@ -7,6 +7,7 @@ import type {
     AgentRoomWorkflowEventType,
     AgentRoomRole,
     AgentRoomArtifact,
+    AgentRoomMessageType,
 } from '../index'
 
 /**
@@ -53,6 +54,12 @@ export interface AgentRoomRunnerEvent {
 /** A chat message to be created by the facade. */
 export interface AgentRoomRunnerMessage {
     senderRole: AgentRoomRole
+    /** Override senderId (defaults to senderRole if omitted). */
+    senderId?: string
+    /** Override senderName (defaults to senderRole if omitted). */
+    senderName?: string
+    /** Message type (defaults to 'agent_message' if omitted). */
+    type?: AgentRoomMessageType
     content: string
     metadata?: Record<string, unknown>
 }
