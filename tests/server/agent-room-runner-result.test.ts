@@ -262,12 +262,23 @@ describe('Agent Room RunnerResult Protocol', () => {
         const task = svc.createTask(session.id, 'Task', '')
 
         // Fake runner: step 1 valid (created→planned), step 2 invalid (planned→completed)
+        // Includes messages and artifacts to verify full rollback
         setActiveRunnerForTest({
             name: 'real',
             run: async () => ({
                 steps: [
-                    { status: 'planned' as const, events: [{ type: 'task_planned' as const, agentRole: 'planner' as const }] },
-                    { status: 'completed' as const, events: [{ type: 'delivery_completed' as const, agentRole: 'delivery' as const }] },
+                    {
+                        status: 'planned' as const,
+                        events: [{ type: 'task_planned' as const, agentRole: 'planner' as const }],
+                        messages: [{ senderRole: 'planner', content: 'should rollback message' }],
+                    },
+                    {
+                        status: 'completed' as const,
+                        events: [{ type: 'delivery_completed' as const, agentRole: 'delivery' as const }],
+                    },
+                ],
+                artifacts: [
+                    { name: 'Should Not Exist', type: 'log' as const, content: 'rollback artifact' },
                 ],
             }),
         })
@@ -283,6 +294,14 @@ describe('Agent Room RunnerResult Protocol', () => {
         const taskEvents = events.filter(e => e.taskId === task.id)
         expect(taskEvents.length).toBe(1)
         expect(taskEvents[0].type).toBe('task_created')
+
+        // Verify rollback: no step messages persisted
+        const messages = svc.listMessages(session.id)
+        expect(messages.some(m => m.content.includes('should rollback message'))).toBe(false)
+
+        // Verify rollback: no artifacts persisted
+        const artifacts = svc.listTaskArtifacts(session.id, task.id)
+        expect(artifacts).toHaveLength(0)
 
         resetActiveRunnerForTest()
     })
@@ -324,7 +343,7 @@ describe('Agent Room RunnerResult Protocol', () => {
         resetActiveRunnerForTest()
     })
 
-    it('ordered steps with no status but valid events does not throw', async () => {
+    it('ordered steps with events but no status throws and rolls back', async () => {
         const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
         const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
             '../../packages/server/src/services/hermes/agent-room/runner'
@@ -333,7 +352,7 @@ describe('Agent Room RunnerResult Protocol', () => {
         const session = svc.createSession('Test')
         const task = svc.createTask(session.id, 'Task', '')
 
-        // Step with events but no status change — events are allowed at current state
+        // Ordered steps with events but no status — must throw
         setActiveRunnerForTest({
             name: 'real',
             run: async () => ({
@@ -343,15 +362,17 @@ describe('Agent Room RunnerResult Protocol', () => {
             }),
         })
 
-        await svc.runWorkflow(session.id, task.id)
+        await expect(svc.runWorkflow(session.id, task.id)).rejects.toThrow(/events require status/)
 
-        // Task status unchanged (still 'created')
+        // Verify rollback: task should remain at 'created'
         const updatedTask = svc.listTasks(session.id).find(t => t.id === task.id)!
         expect(updatedTask.status).toBe('created')
 
-        // Event was emitted
+        // Verify rollback: no events persisted (only task_created from createTask)
         const events = svc.listWorkflowEvents(session.id)
-        expect(events.some(e => e.type === 'task_started')).toBe(true)
+        const taskEvents = events.filter(e => e.taskId === task.id)
+        expect(taskEvents.length).toBe(1)
+        expect(taskEvents[0].type).toBe('task_created')
 
         resetActiveRunnerForTest()
     })
@@ -418,6 +439,145 @@ describe('Agent Room RunnerResult Protocol', () => {
         )
         expect(eventPlannerMsg).toBeDefined()
         expect(eventPlannerMsg!.senderName).toBe('规划 Agent')
+
+        resetActiveRunnerForTest()
+    })
+
+    it('RealAgentRunner from revision_required returns revision steps', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const session = svc.createSession('Test')
+        const task = svc.createTask(session.id, 'Fix Bug', '')
+
+        // Drive task to revision_required: created → planned → assigned → in_progress → submitted_for_review → review_rejected → revision_required
+        setActiveRunnerForTest({
+            name: 'real',
+            run: async () => ({
+                steps: [
+                    { status: 'planned' as const },
+                    { status: 'assigned' as const },
+                    { status: 'in_progress' as const },
+                    { status: 'submitted_for_review' as const },
+                ],
+            }),
+        })
+        await svc.runWorkflow(session.id, task.id)
+
+        // Submit rejected review → revision_required
+        svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'needs changes')
+        const afterReview = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(afterReview.status).toBe('revision_required')
+
+        // Now use RealAgentRunner for retry path
+        setActiveRunnerForTest(new RealAgentRunner())
+        await svc.runWorkflow(session.id, task.id)
+
+        const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(finalTask.status).toBe('submitted_for_review')
+
+        const events = svc.listWorkflowEvents(session.id)
+        expect(events.some(e => e.type === 'revision_started')).toBe(true)
+        expect(events.some(e => e.type === 'task_submitted')).toBe(true)
+
+        // Verify messages reference task title
+        const messages = svc.listMessages(session.id)
+        expect(messages.some(m => m.content.includes('Fix Bug') && m.content.includes('反馈修改'))).toBe(true)
+
+        resetActiveRunnerForTest()
+    })
+
+    it('RealAgentRunner from failed returns retry steps', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const session = svc.createSession('Test')
+        const task = svc.createTask(session.id, 'Deploy App', '')
+
+        // Drive task to failed: created → planned → assigned → in_progress → failed
+        setActiveRunnerForTest({
+            name: 'real',
+            run: async () => ({
+                steps: [
+                    { status: 'planned' as const },
+                    { status: 'assigned' as const },
+                    { status: 'in_progress' as const },
+                    { status: 'failed' as const, events: [{ type: 'task_failed' as const, agentRole: 'developer' as const }] },
+                ],
+            }),
+        })
+        await svc.runWorkflow(session.id, task.id)
+
+        const afterFail = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(afterFail.status).toBe('failed')
+
+        // Now use RealAgentRunner for retry path
+        setActiveRunnerForTest(new RealAgentRunner())
+        await svc.runWorkflow(session.id, task.id)
+
+        const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(finalTask.status).toBe('submitted_for_review')
+
+        const events = svc.listWorkflowEvents(session.id)
+        expect(events.some(e => e.type === 'task_started')).toBe(true)
+        expect(events.some(e => e.type === 'task_submitted')).toBe(true)
+
+        // Verify messages reference task title
+        const messages = svc.listMessages(session.id)
+        expect(messages.some(m => m.content.includes('Deploy App') && m.content.includes('重新执行'))).toBe(true)
+
+        resetActiveRunnerForTest()
+    })
+
+    it('RealAgentRunner from need_user_decision returns revision steps', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const session = svc.createSession('Test')
+        const task = svc.createTask(session.id, 'Refactor Code', '')
+
+        // Drive task to submitted_for_review
+        setActiveRunnerForTest({
+            name: 'real',
+            run: async () => ({
+                steps: [
+                    { status: 'planned' as const },
+                    { status: 'assigned' as const },
+                    { status: 'in_progress' as const },
+                    { status: 'submitted_for_review' as const },
+                ],
+            }),
+        })
+        await svc.runWorkflow(session.id, task.id)
+
+        // Reject 3 times to reach need_user_decision (maxRevisionRounds = 3)
+        svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'round 1')
+        // retry → in_progress → submitted_for_review
+        svc.retryTask(session.id, task.id)
+        svc.updateTaskStatusInSession(session.id, task.id, 'submitted_for_review')
+        svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'round 2')
+        svc.retryTask(session.id, task.id)
+        svc.updateTaskStatusInSession(session.id, task.id, 'submitted_for_review')
+        svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'round 3')
+
+        const afterReview = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(afterReview.status).toBe('need_user_decision')
+
+        // Now use RealAgentRunner for retry path
+        setActiveRunnerForTest(new RealAgentRunner())
+        await svc.runWorkflow(session.id, task.id)
+
+        const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(finalTask.status).toBe('submitted_for_review')
+
+        const events = svc.listWorkflowEvents(session.id)
+        expect(events.some(e => e.type === 'revision_started')).toBe(true)
 
         resetActiveRunnerForTest()
     })

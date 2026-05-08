@@ -450,17 +450,24 @@ export function addWorkflowEvent(
  * Messages are NOT validated — they are free-form.
  *
  * Rules:
- * 1. If step.status is present, the transition must be valid (checked here, not deferred).
- * 2. If step has both status and events, each event type must be in the expected set for that target status.
- * 3. If step has events but no status, events are allowed (emitting at current state).
+ * 1. Ordered steps with events MUST have a status (no event-only steps). Legacy flat is exempt.
+ * 2. If step.status is present, the transition must be valid (checked here, not deferred).
+ * 3. If step has both status and events, each event type must be in the expected set for that target status.
  */
 function validateRunnerStep(
     taskId: string,
     step: AgentRoomRunnerStep,
+    isOrderedStep: boolean,
 ): void {
-    if (!step.status) return // No status change → no validation needed
+    // Rule 1: Ordered steps with events MUST have a status (no event-only steps)
+    // Legacy flat path is exempt — it may have events without status
+    if (isOrderedStep && step.events?.length && !step.status) {
+        throw new Error('Invalid RunnerResult step: events require status in ordered steps')
+    }
 
-    // Rule 1: Validate transition legality
+    if (!step.status) return // No status change → no further validation needed
+
+    // Rule 2: Validate transition legality
     const task = store.getTask(taskId) as AgentRoomTask | null
     if (!task) throw new Error(`Task not found: ${taskId}`)
     const allowed = VALID_TRANSITIONS[task.status]
@@ -468,7 +475,7 @@ function validateRunnerStep(
         throw new Error(`Invalid step transition: ${task.status} → ${step.status}`)
     }
 
-    // Rule 2: Validate event/status correspondence
+    // Rule 3: Validate event/status correspondence
     if (step.events?.length) {
         const expected = EXPECTED_EVENTS_FOR_STATUS[step.status]
         if (expected) {
@@ -493,9 +500,10 @@ function applyRunnerStep(
     taskId: string,
     taskTitle: string,
     step: AgentRoomRunnerStep,
+    isOrderedStep = false,
 ): void {
     // Validate step semantics before applying
-    validateRunnerStep(taskId, step)
+    validateRunnerStep(taskId, step, isOrderedStep)
 
     // Transition status via state machine (validates each transition)
     if (step.status) {
@@ -548,7 +556,7 @@ function applyRunnerResult(
         // Apply ordered steps (preferred path)
         if (result.steps?.length) {
             for (const step of result.steps) {
-                applyRunnerStep(sessionId, taskId, taskTitle, step)
+                applyRunnerStep(sessionId, taskId, taskTitle, step, true)
             }
         } else {
             // Legacy flat path (backward compat)

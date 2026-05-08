@@ -17,29 +17,69 @@ export class RealAgentRunner implements AgentRoomRunner {
 
     async run(ctx: AgentRoomRunnerContext): Promise<AgentRoomRunnerResult> {
         const title = ctx.task.title
+        const status = ctx.task.status
 
-        return {
-            steps: [
-                {
-                    status: 'planned',
-                    events: [{ type: 'task_planned', agentRole: 'planner' }],
-                    messages: [{ senderRole: 'planner', content: `已完成任务「${title}」的规划` }],
-                },
-                {
-                    status: 'assigned',
-                    events: [{ type: 'task_assigned', agentRole: 'developer' }],
-                },
-                {
-                    status: 'in_progress',
-                    events: [{ type: 'task_started', agentRole: 'developer' }],
-                    messages: [{ senderRole: 'developer', content: `开始执行任务「${title}」` }],
-                },
-                {
-                    status: 'submitted_for_review',
-                    events: [{ type: 'task_submitted', agentRole: 'developer' }],
-                    messages: [{ senderRole: 'developer', content: `任务「${title}」已提交审核` }],
-                },
-            ],
+        // Branch by current task status to produce valid state machine transitions
+        if (status === 'created') {
+            return {
+                steps: [
+                    {
+                        status: 'planned',
+                        events: [{ type: 'task_planned', agentRole: 'planner' }],
+                        messages: [{ senderRole: 'planner', content: `已完成任务「${title}」的规划` }],
+                    },
+                    {
+                        status: 'assigned',
+                        events: [{ type: 'task_assigned', agentRole: 'developer' }],
+                    },
+                    {
+                        status: 'in_progress',
+                        events: [{ type: 'task_started', agentRole: 'developer' }],
+                        messages: [{ senderRole: 'developer', content: `开始执行任务「${title}」` }],
+                    },
+                    {
+                        status: 'submitted_for_review',
+                        events: [{ type: 'task_submitted', agentRole: 'developer' }],
+                        messages: [{ senderRole: 'developer', content: `任务「${title}」已提交审核` }],
+                    },
+                ],
+            }
         }
+
+        if (status === 'revision_required' || status === 'need_user_decision') {
+            return {
+                steps: [
+                    {
+                        status: 'in_progress',
+                        events: [{ type: 'revision_started', agentRole: 'developer' }],
+                        messages: [{ senderRole: 'developer', content: `开始根据反馈修改任务「${title}」` }],
+                    },
+                    {
+                        status: 'submitted_for_review',
+                        events: [{ type: 'task_submitted', agentRole: 'developer' }],
+                        messages: [{ senderRole: 'developer', content: `任务「${title}」已重新提交审核` }],
+                    },
+                ],
+            }
+        }
+
+        if (status === 'failed') {
+            return {
+                steps: [
+                    {
+                        status: 'in_progress',
+                        events: [{ type: 'task_started', agentRole: 'developer' }],
+                        messages: [{ senderRole: 'developer', content: `重新执行失败任务「${title}」` }],
+                    },
+                    {
+                        status: 'submitted_for_review',
+                        events: [{ type: 'task_submitted', agentRole: 'developer' }],
+                    },
+                ],
+            }
+        }
+
+        // Fallback: should not be reached (runWorkflow guards startable statuses)
+        throw new Error(`RealAgentRunner: unsupported start status "${status}"`)
     }
 }
