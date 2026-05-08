@@ -95,7 +95,7 @@ describe('RealHermesRuntime', () => {
                         events: [{ type: 'task_assigned', agentRole: 'developer' }],
                     },
                 ],
-                artifacts: [{ name: 'plan.md', type: 'code', content: '# Plan' }],
+                artifacts: [{ name: 'plan.md', type: 'code_output', content: '# Plan' }],
             }), { status: 200 }),
         )
 
@@ -191,6 +191,83 @@ describe('RealHermesRuntime', () => {
 
         const [url] = fetchSpy.mock.calls[0]
         expect(url).toBe('https://agent.example.com/agent-room/run-task')
+    })
+
+    it('throws when status is not a valid enum', async () => {
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+            new Response(JSON.stringify({
+                steps: [{ status: 'bogus', events: [{ type: 'task_planned', agentRole: 'planner' }] }],
+            }), { status: 200 }),
+        )
+
+        const runtime = new RealHermesRuntime('https://agent.example.com')
+        await expect(runtime.runTask(makeInput())).rejects.toThrow(/status="bogus" is not one of/)
+    })
+
+    it('throws when event.type is not a valid enum', async () => {
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+            new Response(JSON.stringify({
+                steps: [{ status: 'planned', events: [{ type: 'fake_event', agentRole: 'planner' }] }],
+            }), { status: 200 }),
+        )
+
+        const runtime = new RealHermesRuntime('https://agent.example.com')
+        await expect(runtime.runTask(makeInput())).rejects.toThrow(/type="fake_event" is not one of/)
+    })
+
+    it('throws when event.agentRole is not a valid enum', async () => {
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+            new Response(JSON.stringify({
+                steps: [{ status: 'planned', events: [{ type: 'task_planned', agentRole: 'wizard' }] }],
+            }), { status: 200 }),
+        )
+
+        const runtime = new RealHermesRuntime('https://agent.example.com')
+        await expect(runtime.runTask(makeInput())).rejects.toThrow(/agentRole="wizard" is not one of/)
+    })
+
+    it('throws when message.senderRole is not a valid enum', async () => {
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+            new Response(JSON.stringify({
+                steps: [{
+                    status: 'planned',
+                    events: [{ type: 'task_planned', agentRole: 'planner' }],
+                    messages: [{ senderRole: 'ghost', content: 'boo' }],
+                }],
+            }), { status: 200 }),
+        )
+
+        const runtime = new RealHermesRuntime('https://agent.example.com')
+        await expect(runtime.runTask(makeInput())).rejects.toThrow(/senderRole="ghost" is not one of/)
+    })
+
+    it('throws when artifact.type is not a valid enum', async () => {
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+            new Response(JSON.stringify({
+                steps: [{ status: 'planned', events: [{ type: 'task_planned', agentRole: 'planner' }] }],
+                artifacts: [{ name: 'x.md', type: 'code', content: 'x' }],
+            }), { status: 200 }),
+        )
+
+        const runtime = new RealHermesRuntime('https://agent.example.com')
+        await expect(runtime.runTask(makeInput())).rejects.toThrow(/type="code" is not one of/)
+    })
+
+    it('throws when timeoutMs is NaN', () => {
+        expect(() => new RealHermesRuntime('https://agent.example.com', Number('abc'))).toThrow(/Invalid timeoutMs/)
+    })
+
+    it('throws when timeoutMs is zero', () => {
+        expect(() => new RealHermesRuntime('https://agent.example.com', 0)).toThrow(/Invalid timeoutMs/)
+    })
+
+    it('throws when timeoutMs is negative', () => {
+        expect(() => new RealHermesRuntime('https://agent.example.com', -1000)).toThrow(/Invalid timeoutMs/)
+    })
+
+    it('throws when HERMES_AGENT_TIMEOUT_MS env is invalid', () => {
+        process.env.HERMES_AGENT_TIMEOUT_MS = 'abc'
+        expect(() => new RealHermesRuntime('https://agent.example.com')).toThrow(/Invalid HERMES_AGENT_TIMEOUT_MS/)
     })
 
     it('createHermesAgentRuntime("real") returns RealHermesRuntime', () => {

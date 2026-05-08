@@ -18,11 +18,29 @@ import type { HermesAgentRuntime, HermesAgentRuntimeInput, HermesAgentRuntimeOut
 import { postJson } from './http-client'
 import { parseHermesRuntimeOutput } from './parse-output'
 
+function parseEnvTimeoutMs(): number {
+    const parsed = Number(process.env.HERMES_AGENT_TIMEOUT_MS ?? 60000)
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error(`Invalid HERMES_AGENT_TIMEOUT_MS: "${process.env.HERMES_AGENT_TIMEOUT_MS}"`)
+    }
+    return parsed
+}
+
+function assertValidTimeoutMs(value: number): void {
+    if (!Number.isFinite(value) || value <= 0) {
+        throw new Error(`Invalid timeoutMs: ${value}`)
+    }
+}
+
 export class RealHermesRuntime implements HermesAgentRuntime {
-    constructor(
-        private readonly baseUrl = process.env.HERMES_AGENT_BASE_URL ?? '',
-        private readonly timeoutMs = Number(process.env.HERMES_AGENT_TIMEOUT_MS ?? 60000),
-    ) {}
+    private readonly baseUrl: string
+    private readonly timeoutMs: number
+
+    constructor(baseUrl?: string, timeoutMs?: number) {
+        this.baseUrl = baseUrl ?? process.env.HERMES_AGENT_BASE_URL ?? ''
+        this.timeoutMs = timeoutMs ?? parseEnvTimeoutMs()
+        assertValidTimeoutMs(this.timeoutMs)
+    }
 
     async runTask(input: HermesAgentRuntimeInput): Promise<HermesAgentRuntimeOutput> {
         if (!this.baseUrl) {

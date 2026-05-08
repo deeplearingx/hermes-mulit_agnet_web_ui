@@ -587,4 +587,81 @@ describe('Agent Room RunnerResult Protocol', () => {
 
         resetActiveRunnerForTest()
     })
+
+    it('RealAgentRunner + RealHermesRuntime end-to-end: HTTP → runWorkflow → state machine → DB', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { RealAgentRunner } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+        const { RealHermesRuntime } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner/runtime'
+        )
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        // Mock fetch to return a full created → submitted_for_review workflow
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+            new Response(JSON.stringify({
+                steps: [
+                    {
+                        status: 'planned',
+                        events: [{ type: 'task_planned', agentRole: 'planner' }],
+                        messages: [{ senderRole: 'planner', senderId: 'planner', senderName: '规划 Agent', content: '已完成任务「Test Task」的规划' }],
+                    },
+                    {
+                        status: 'assigned',
+                        events: [{ type: 'task_assigned', agentRole: 'developer' }],
+                    },
+                    {
+                        status: 'in_progress',
+                        events: [{ type: 'task_started', agentRole: 'developer' }],
+                        messages: [{ senderRole: 'developer', senderId: 'developer', senderName: '开发 Agent', content: '开始执行任务「Test Task」' }],
+                    },
+                    {
+                        status: 'submitted_for_review',
+                        events: [{ type: 'task_submitted', agentRole: 'developer' }],
+                        messages: [{ senderRole: 'developer', senderId: 'developer', senderName: '开发 Agent', content: '任务「Test Task」已提交审核' }],
+                    },
+                ],
+                artifacts: [{ name: 'output.md', type: 'code_output', content: '# Output' }],
+            }), { status: 200 }),
+        )
+
+        // Wire up RealAgentRunner with RealHermesRuntime
+        const runtime = new RealHermesRuntime('https://agent.example.com')
+        setActiveRunnerForTest(new RealAgentRunner(runtime))
+
+        const session = svc.createSession('Integration Test')
+        const task = svc.createTask(session.id, 'Test Task', 'A test task')
+
+        await svc.runWorkflow(session.id, task.id)
+
+        // 1. Final status
+        const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(finalTask.status).toBe('submitted_for_review')
+
+        // 2. Events
+        const events = svc.listWorkflowEvents(session.id)
+        expect(events.some(e => e.type === 'task_planned')).toBe(true)
+        expect(events.some(e => e.type === 'task_assigned')).toBe(true)
+        expect(events.some(e => e.type === 'task_started')).toBe(true)
+        expect(events.some(e => e.type === 'task_submitted')).toBe(true)
+
+        // 3. Messages persisted
+        const messages = svc.listMessages(session.id)
+        const directMessages = messages.filter(m => m.type === 'agent_message')
+        expect(directMessages.length).toBeGreaterThanOrEqual(3)
+        expect(directMessages.some(m => m.content.includes('规划'))).toBe(true)
+        expect(directMessages.some(m => m.content.includes('开始执行'))).toBe(true)
+        expect(directMessages.some(m => m.content.includes('已提交审核'))).toBe(true)
+
+        // 4. Artifacts persisted
+        const artifacts = svc.listTaskArtifacts(session.id, task.id)
+        expect(artifacts).toHaveLength(1)
+        expect(artifacts[0].name).toBe('output.md')
+        expect(artifacts[0].type).toBe('code_output')
+
+        resetActiveRunnerForTest()
+    })
 })
