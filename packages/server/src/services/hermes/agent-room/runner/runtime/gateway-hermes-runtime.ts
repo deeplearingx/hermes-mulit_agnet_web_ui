@@ -142,6 +142,7 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
         if (target.profileName) metadata.profileName = target.profileName
         if (target.model) metadata.model = target.model
         if (target.provider) metadata.provider = target.provider
+        if (target.resolutionSource) metadata.resolutionSource = target.resolutionSource
         const safeName = safeTitle(title)
 
         // Revision/retry path: revision_required | need_user_decision | failed → in_progress → submitted_for_review

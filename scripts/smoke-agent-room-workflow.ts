@@ -8,6 +8,7 @@
 // Optional env vars:
 //   HERMES_GATEWAY_API_KEY   — API key for Authorization header
 //   HERMES_AGENT_TIMEOUT_MS  — timeout per phase (default 300000)
+//   AGENT_ROOM_INIT_GATEWAY_MANAGER=1 — initialize GatewayManager before resolving profiles
 
 import { GatewayHermesRuntime } from '../packages/server/src/services/hermes/agent-room/runner/runtime/gateway-hermes-runtime'
 import type { HermesAgentRuntimeInput } from '../packages/server/src/services/hermes/agent-room/runner/runtime/types'
@@ -16,14 +17,24 @@ const UPSTREAM = process.env.UPSTREAM || 'http://127.0.0.1:8642'
 const API_KEY = process.env.HERMES_GATEWAY_API_KEY || undefined
 const TIMEOUT_MS = Number(process.env.HERMES_AGENT_TIMEOUT_MS || 300_000)
 const ASSIGNED_AGENT_ID = process.env.AGENT_ROOM_ASSIGNED_AGENT_ID || undefined
+const INIT_GATEWAY_MANAGER = process.env.AGENT_ROOM_INIT_GATEWAY_MANAGER === '1'
 
 async function main(): Promise<void> {
     console.log('─── Agent Room Workflow Smoke Test ───')
-    console.log(`upstream:         ${UPSTREAM}`)
-    console.log(`timeout:          ${TIMEOUT_MS}ms`)
-    console.log(`apiKey:           ${API_KEY ? '(set)' : '(not set)'}`)
-    console.log(`assignedAgentId:  ${ASSIGNED_AGENT_ID ?? '(not set)'}`)
+    console.log(`upstream:              ${UPSTREAM}`)
+    console.log(`timeout:               ${TIMEOUT_MS}ms`)
+    console.log(`apiKey:                ${API_KEY ? '(set)' : '(not set)'}`)
+    console.log(`assignedAgentId:       ${ASSIGNED_AGENT_ID ?? '(not set)'}`)
+    console.log(`initGatewayManager:    ${INIT_GATEWAY_MANAGER}`)
     console.log()
+
+    if (INIT_GATEWAY_MANAGER) {
+        console.log('Initializing GatewayManager...')
+        const { initGatewayManager } = await import('../packages/server/src/services/gateway-bootstrap')
+        await initGatewayManager()
+        console.log('GatewayManager initialized.')
+        console.log()
+    }
 
     const runtime = new GatewayHermesRuntime(UPSTREAM, API_KEY, TIMEOUT_MS)
 

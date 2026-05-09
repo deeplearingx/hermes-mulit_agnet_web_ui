@@ -21,6 +21,12 @@ export interface GatewayRuntimeTarget {
     provider?: string
     /** The profile name resolved from assignedAgentId (for metadata). */
     profileName?: string
+    /**
+     * How this target was resolved.
+     * - 'gateway-manager': resolved via GatewayManager.getUpstream/getApiKey
+     * - 'constructor-fallback': fell back to constructor upstream/apiKey
+     */
+    resolutionSource?: 'gateway-manager' | 'constructor-fallback'
 }
 
 /**
@@ -44,6 +50,8 @@ export type GatewayProfileResolver = (
  */
 export function createDefaultGatewayProfileResolver(): GatewayProfileResolver {
     return (assignedAgentId, fallbackUpstream, fallbackApiKey) => {
+        // NOTE: assignedAgentId is currently interpreted directly as profileName.
+        // This is a temporary mapping until P4.8.2 introduces a proper agent binding table.
         const profileName = assignedAgentId || undefined
         const mgr = getGatewayManagerInstance()
 
@@ -52,6 +60,7 @@ export function createDefaultGatewayProfileResolver(): GatewayProfileResolver {
                 upstream: mgr.getUpstream(profileName),
                 apiKey: mgr.getApiKey(profileName) ?? fallbackApiKey ?? null,
                 profileName,
+                resolutionSource: 'gateway-manager',
             }
         }
 
@@ -59,6 +68,7 @@ export function createDefaultGatewayProfileResolver(): GatewayProfileResolver {
             return {
                 upstream: mgr.getUpstream() || fallbackUpstream,
                 apiKey: mgr.getApiKey() ?? fallbackApiKey ?? null,
+                resolutionSource: 'gateway-manager',
             }
         }
 
@@ -67,6 +77,7 @@ export function createDefaultGatewayProfileResolver(): GatewayProfileResolver {
             upstream: fallbackUpstream,
             apiKey: fallbackApiKey ?? null,
             profileName,
+            resolutionSource: 'constructor-fallback',
         }
     }
 }
