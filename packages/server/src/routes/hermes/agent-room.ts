@@ -5,6 +5,7 @@
 import Router from '@koa/router'
 import type { Context } from 'koa'
 import * as agentRoomService from '../../services/hermes/agent-room'
+import { isAgentRoomRole } from '../../services/hermes/agent-room'
 
 export const agentRoomRoutes = new Router()
 
@@ -15,6 +16,7 @@ export function mapAgentRoomError(ctx: Context, err: any): void {
     if (message.startsWith('Session not found')) ctx.status = 404
     else if (message.startsWith('Task not found')) ctx.status = 404
     else if (message.startsWith('Artifact not found')) ctx.status = 404
+    else if (message.startsWith('Run not found')) ctx.status = 404
     else if (message.includes('belongs to session')) ctx.status = 403
     else if (message.includes('while workflow is running')) ctx.status = 409
     else if (message.includes('Workflow is already running')) ctx.status = 409
@@ -212,8 +214,8 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/deliver'
 // Run workflow (delegates to active runner)
 agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/workflow', async (ctx) => {
     try {
-        await agentRoomService.runWorkflow(ctx.params.sessionId, ctx.params.taskId)
-        ctx.body = { success: true }
+        const run = await agentRoomService.runWorkflow(ctx.params.sessionId, ctx.params.taskId)
+        ctx.body = { success: true, run }
     } catch (err: any) {
         mapAgentRoomError(ctx, err)
     }
@@ -239,6 +241,49 @@ agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/events', async (ctx) =>
     } catch (err: any) {
         mapAgentRoomError(ctx, err)
     }
+})
+
+// ─── Runs ───────────────────────────────────────────────────────
+
+// List runs for a session (optional taskId query filter)
+agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/runs', async (ctx) => {
+    try {
+        const taskId = ctx.query.taskId as string | undefined
+        if (taskId) {
+            ctx.body = agentRoomService.listTaskRuns(ctx.params.sessionId, taskId)
+        } else {
+            ctx.body = agentRoomService.listRuns(ctx.params.sessionId)
+        }
+    } catch (err: any) {
+        mapAgentRoomError(ctx, err)
+    }
+})
+
+// Get a single run by id
+agentRoomRoutes.get('/api/agent-room/runs/:runId', async (ctx) => {
+    const run = agentRoomService.getRun(ctx.params.runId)
+    if (!run) {
+        ctx.status = 404
+        ctx.body = { error: 'Run not found' }
+        return
+    }
+    ctx.body = run
+})
+
+// ─── Run Events ─────────────────────────────────────────────────
+
+// List run events for a session
+agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/run-events', async (ctx) => {
+    try {
+        ctx.body = agentRoomService.listRunEventsBySession(ctx.params.sessionId)
+    } catch (err: any) {
+        mapAgentRoomError(ctx, err)
+    }
+})
+
+// List run events for a specific run
+agentRoomRoutes.get('/api/agent-room/runs/:runId/events', async (ctx) => {
+    ctx.body = agentRoomService.listRunEventsByRun(ctx.params.runId)
 })
 
 // ─── Delete ─────────────────────────────────────────────────────
@@ -287,6 +332,54 @@ agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/tasks/:taskId/artifacts
 agentRoomRoutes.delete('/api/agent-room/sessions/:sessionId/artifacts/:artifactId', async (ctx) => {
     try {
         agentRoomService.deleteArtifact(ctx.params.sessionId, ctx.params.artifactId)
+        ctx.body = { success: true }
+    } catch (err: any) {
+        mapAgentRoomError(ctx, err)
+    }
+})
+
+// ─── Role Bindings ─────────────────────────────────────────────
+
+// List role bindings for a session
+agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/role-bindings', async (ctx) => {
+    try {
+        ctx.body = agentRoomService.listRoleBindings(ctx.params.sessionId)
+    } catch (err: any) {
+        mapAgentRoomError(ctx, err)
+    }
+})
+
+// Upsert role binding (PUT by role)
+agentRoomRoutes.put('/api/agent-room/sessions/:sessionId/role-bindings/:role', async (ctx) => {
+    const { role } = ctx.params
+    if (!isAgentRoomRole(role)) {
+        ctx.status = 400
+        ctx.body = { error: `Invalid role '${role}'. Must be one of: conversation, planner, developer, reviewer, delivery` }
+        return
+    }
+    const { profileName } = ctx.request.body as { profileName?: string }
+    if (!profileName || !profileName.trim()) {
+        ctx.status = 400
+        ctx.body = { error: 'profileName is required' }
+        return
+    }
+    try {
+        ctx.body = agentRoomService.setRoleBinding(ctx.params.sessionId, role, profileName)
+    } catch (err: any) {
+        mapAgentRoomError(ctx, err)
+    }
+})
+
+// Delete role binding by role (no-op if not found)
+agentRoomRoutes.delete('/api/agent-room/sessions/:sessionId/role-bindings/:role', async (ctx) => {
+    const { role } = ctx.params
+    if (!isAgentRoomRole(role)) {
+        ctx.status = 400
+        ctx.body = { error: `Invalid role '${role}'. Must be one of: conversation, planner, developer, reviewer, delivery` }
+        return
+    }
+    try {
+        agentRoomService.deleteRoleBindingByRole(ctx.params.sessionId, role)
         ctx.body = { success: true }
     } catch (err: any) {
         mapAgentRoomError(ctx, err)

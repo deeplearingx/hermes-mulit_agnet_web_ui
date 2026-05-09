@@ -313,6 +313,35 @@ export const AR_ROLE_BINDINGS_SCHEMA: Record<string, string> = {
     created_at: 'TEXT NOT NULL',
 }
 
+export const AR_RUNS_TABLE = 'agent_room_runs'
+export const AR_RUNS_SCHEMA: Record<string, string> = {
+    id: 'TEXT PRIMARY KEY',
+    session_id: 'TEXT NOT NULL',
+    task_id: 'TEXT NOT NULL',
+    status: "TEXT NOT NULL DEFAULT 'queued'",
+    upstream_run_id: 'TEXT',
+    runner_name: "TEXT NOT NULL DEFAULT 'mock'",
+    error_message: 'TEXT',
+    started_at: 'TEXT',
+    finished_at: 'TEXT',
+    created_at: 'TEXT NOT NULL',
+    updated_at: 'TEXT NOT NULL',
+}
+
+export const AR_RUN_EVENTS_TABLE = 'agent_room_run_events'
+export const AR_RUN_EVENTS_SCHEMA: Record<string, string> = {
+    id: 'TEXT PRIMARY KEY',
+    run_id: 'TEXT NOT NULL',
+    session_id: 'TEXT NOT NULL',
+    task_id: 'TEXT NOT NULL',
+    upstream_run_id: 'TEXT',
+    source: "TEXT NOT NULL DEFAULT 'gateway_sse'",
+    sequence: 'INTEGER NOT NULL DEFAULT 0',
+    event_type: 'TEXT NOT NULL',
+    payload: 'TEXT',
+    created_at: 'TEXT NOT NULL',
+}
+
 export const AR_INDEXES = [
     'CREATE INDEX IF NOT EXISTS idx_ar_tasks_session ON agent_room_tasks(session_id)',
     'CREATE INDEX IF NOT EXISTS idx_ar_tasks_status ON agent_room_tasks(session_id, status)',
@@ -325,6 +354,13 @@ export const AR_INDEXES = [
     'CREATE INDEX IF NOT EXISTS idx_ar_artifacts_task ON agent_room_artifacts(task_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_ar_role_bindings_session ON agent_room_role_bindings(session_id)',
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_ar_role_bindings_session_role ON agent_room_role_bindings(session_id, role)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_runs_session ON agent_room_runs(session_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_runs_task ON agent_room_runs(task_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_runs_upstream ON agent_room_runs(upstream_run_id)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_run_events_run ON agent_room_run_events(run_id, sequence)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_run_events_session ON agent_room_run_events(session_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_run_events_upstream ON agent_room_run_events(upstream_run_id)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_run_events_type ON agent_room_run_events(event_type)',
 ]
 
 // ============================================================================
@@ -521,6 +557,8 @@ export function initAllHermesTables(): void {
   ensureTable(AR_WORKFLOW_EVENTS_TABLE, AR_WORKFLOW_EVENTS_SCHEMA)
   ensureTable(AR_ARTIFACTS_TABLE, AR_ARTIFACTS_SCHEMA)
   ensureTable(AR_ROLE_BINDINGS_TABLE, AR_ROLE_BINDINGS_SCHEMA)
+  ensureTable(AR_RUNS_TABLE, AR_RUNS_SCHEMA)
+  ensureTable(AR_RUN_EVENTS_TABLE, AR_RUN_EVENTS_SCHEMA)
   for (const idx of AR_INDEXES) {
     try { db.exec(idx) } catch { /* ignore */ }
   }

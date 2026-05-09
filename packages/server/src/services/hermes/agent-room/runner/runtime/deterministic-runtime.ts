@@ -2,6 +2,8 @@
 // Test/runtime implementation that returns hardcoded ordered steps.
 // Does NOT call any LLM — produces deterministic output for a given input.
 // Used as the default runtime when no real Hermes runtime is configured.
+//
+// Multi-role workflow: each step declares activeRole for observability.
 
 import type {
     HermesAgentRuntime,
@@ -18,6 +20,7 @@ export class DeterministicHermesRuntime implements HermesAgentRuntime {
                 steps: [
                     {
                         status: 'planned',
+                        activeRole: 'planner',
                         events: [{ type: 'task_planned', agentRole: 'planner' }],
                         messages: [{
                             senderRole: 'planner',
@@ -28,10 +31,12 @@ export class DeterministicHermesRuntime implements HermesAgentRuntime {
                     },
                     {
                         status: 'assigned',
+                        activeRole: 'developer',
                         events: [{ type: 'task_assigned', agentRole: 'developer' }],
                     },
                     {
                         status: 'in_progress',
+                        activeRole: 'developer',
                         events: [{ type: 'task_started', agentRole: 'developer' }],
                         messages: [{
                             senderRole: 'developer',
@@ -42,6 +47,7 @@ export class DeterministicHermesRuntime implements HermesAgentRuntime {
                     },
                     {
                         status: 'submitted_for_review',
+                        activeRole: 'developer',
                         events: [{ type: 'task_submitted', agentRole: 'developer' }],
                         messages: [{
                             senderRole: 'developer',
@@ -59,6 +65,7 @@ export class DeterministicHermesRuntime implements HermesAgentRuntime {
                 steps: [
                     {
                         status: 'in_progress',
+                        activeRole: 'developer',
                         events: [{ type: 'revision_started', agentRole: 'developer' }],
                         messages: [{
                             senderRole: 'developer',
@@ -69,6 +76,7 @@ export class DeterministicHermesRuntime implements HermesAgentRuntime {
                     },
                     {
                         status: 'submitted_for_review',
+                        activeRole: 'developer',
                         events: [{ type: 'task_submitted', agentRole: 'developer' }],
                         messages: [{
                             senderRole: 'developer',
@@ -86,6 +94,7 @@ export class DeterministicHermesRuntime implements HermesAgentRuntime {
                 steps: [
                     {
                         status: 'in_progress',
+                        activeRole: 'developer',
                         events: [{ type: 'task_started', agentRole: 'developer' }],
                         messages: [{
                             senderRole: 'developer',
@@ -96,6 +105,7 @@ export class DeterministicHermesRuntime implements HermesAgentRuntime {
                     },
                     {
                         status: 'submitted_for_review',
+                        activeRole: 'developer',
                         events: [{ type: 'task_submitted', agentRole: 'developer' }],
                     },
                 ],

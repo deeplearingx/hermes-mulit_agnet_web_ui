@@ -108,7 +108,15 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
         assertSupportedStartStatus(input.currentStatus)
 
         // Resolve target from role binding / assignedAgentId → profileName → upstream/apiKey/model/provider.
-        const target = this.profileResolver(input.assignedAgentId, this.upstream, this.apiKey, { sessionId: input.sessionId, role: 'developer' })
+        // For multi-role workflows, resolve the developer role by default (the primary execution role).
+        // Planner/reviewer/delivery roles are resolved via roleBindings when needed.
+        const developerBinding = input.roleBindings?.get('developer')
+        const target = this.profileResolver(
+            input.assignedAgentId,
+            this.upstream,
+            this.apiKey,
+            { sessionId: input.sessionId, role: 'developer' },
+        )
 
         const gatewaySessionId = `agent-room-${input.sessionId}-${input.taskId}`
 
@@ -130,6 +138,7 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
      * Map Gateway output into AgentRoom ordered steps.
      * Generates the correct step chain based on currentStatus.
      * Includes profileName/model/provider in metadata (never apiKey).
+     * Each step declares activeRole for multi-role observability.
      */
     private buildOutput(
         input: HermesAgentRuntimeInput,
@@ -144,6 +153,16 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
         if (target.provider) metadata.provider = target.provider
         if (target.bindingSource) metadata.bindingSource = target.bindingSource
         if (target.transportSource) metadata.transportSource = target.transportSource
+
+        // Include all role bindings in metadata for observability
+        if (input.roleBindings?.size) {
+            const bindingsMeta: Record<string, string> = {}
+            for (const [role, binding] of input.roleBindings) {
+                bindingsMeta[role] = binding.profileName
+            }
+            metadata.roleBindings = bindingsMeta
+        }
+
         const safeName = safeTitle(title)
 
         // Revision/retry path: revision_required | need_user_decision | failed → in_progress → submitted_for_review
@@ -164,6 +183,7 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
                 steps: [
                     {
                         status: 'in_progress',
+                        activeRole: 'developer',
                         events: [startEvent],
                         messages: [{
                             senderRole: 'developer',
@@ -174,6 +194,7 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
                     },
                     {
                         status: 'submitted_for_review',
+                        activeRole: 'developer',
                         events: [{
                             type: 'task_submitted',
                             agentRole: 'developer',
@@ -208,10 +229,12 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
         }
 
         // Default path: created → planned → assigned → in_progress → submitted_for_review
+        // Each step declares activeRole for multi-role observability.
         return {
             steps: [
                 {
                     status: 'planned',
+                    activeRole: 'planner',
                     events: [{ type: 'task_planned', agentRole: 'planner' }],
                     messages: [{
                         senderRole: 'planner',
@@ -222,10 +245,12 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
                 },
                 {
                     status: 'assigned',
+                    activeRole: 'developer',
                     events: [{ type: 'task_assigned', agentRole: 'developer' }],
                 },
                 {
                     status: 'in_progress',
+                    activeRole: 'developer',
                     events: [{ type: 'task_started', agentRole: 'developer' }],
                     messages: [{
                         senderRole: 'developer',
@@ -236,6 +261,7 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
                 },
                 {
                     status: 'submitted_for_review',
+                    activeRole: 'developer',
                     events: [{
                         type: 'task_submitted',
                         agentRole: 'developer',

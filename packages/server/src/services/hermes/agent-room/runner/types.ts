@@ -11,14 +11,31 @@ import type {
 } from '../index'
 
 /**
+ * Role binding entry passed to runners for multi-role profile resolution.
+ * Mirrors AgentRoomRoleBinding from the service layer without importing it
+ * (avoids circular dependency).
+ */
+export interface RunnerRoleBinding {
+    role: AgentRoomRole
+    profileName: string
+}
+
+/**
  * Context passed to a runner during execution.
- * Provides the task, session info, and service-layer helpers.
+ * Provides the task, session info, role bindings, and service-layer helpers.
  * Runners MUST NOT manage locking or status validation — those are facade concerns.
  */
 export interface AgentRoomRunnerContext {
     sessionId: string
     taskId: string
     task: AgentRoomTask
+
+    /**
+     * Role bindings for this session, keyed by role.
+     * Runners use this to resolve per-role profile names for multi-role workflows.
+     * Example: roleBindings.get('planner') → { role: 'planner', profileName: 'gpt-4o' }
+     */
+    roleBindings: Map<AgentRoomRole, RunnerRoleBinding>
 
     /** Transition task status via the service state machine. */
     updateTaskStatus(taskId: string, newStatus: AgentRoomTask['status']): AgentRoomTask | null
@@ -80,6 +97,13 @@ export interface AgentRoomRunnerArtifact {
 export interface AgentRoomRunnerStep {
     /** Task status to transition to at this step. */
     status?: AgentRoomTask['status']
+
+    /**
+     * The primary role executing this step (e.g. 'planner', 'developer', 'reviewer', 'delivery').
+     * Used for run_events observability and role-binding-aware execution.
+     * If omitted, defaults to the first event's agentRole or 'developer'.
+     */
+    activeRole?: AgentRoomRole
 
     /** Events to emit at this step (each produces both event + message). */
     events?: AgentRoomRunnerEvent[]

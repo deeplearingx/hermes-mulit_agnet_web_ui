@@ -12,6 +12,15 @@ import type {
 } from '../../index'
 
 /**
+ * Role binding entry for multi-role profile resolution in the runtime.
+ * Mirrors RunnerRoleBinding from runner/types.ts without circular import.
+ */
+export interface RuntimeRoleBinding {
+    role: AgentRoomRole
+    profileName: string
+}
+
+/**
  * Input to the Hermes agent runtime.
  * Derived from AgentRoom context — the runner extracts these fields.
  */
@@ -32,6 +41,13 @@ export interface HermesAgentRuntimeInput {
 
     /** Revision round number (0 for first attempt). */
     revisionRound: number
+
+    /**
+     * Role bindings for this session, keyed by role.
+     * Enables the runtime to resolve per-role profile names for multi-role workflows.
+     * Example: roleBindings.get('planner') → { role: 'planner', profileName: 'gpt-4o' }
+     */
+    roleBindings?: Map<AgentRoomRole, RuntimeRoleBinding>
 }
 
 /** A workflow event in runtime output. */
@@ -58,6 +74,13 @@ export interface HermesAgentRuntimeMessage {
 export interface HermesAgentRuntimeStep {
     /** Target status for this step. */
     status: AgentRoomTaskStatus
+
+    /**
+     * The primary role executing this step (e.g. 'planner', 'developer', 'reviewer', 'delivery').
+     * Used for run_events observability and role-binding-aware execution.
+     * If omitted, defaults to the first event's agentRole or 'developer'.
+     */
+    activeRole?: AgentRoomRole
 
     /** Events to emit at this step. */
     events: HermesAgentRuntimeEvent[]

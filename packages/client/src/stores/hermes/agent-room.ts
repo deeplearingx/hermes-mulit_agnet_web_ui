@@ -12,6 +12,10 @@ import type {
     AgentRoomWorkflowEvent,
     AgentRoomSession,
     AgentRoomArtifact,
+    AgentRoomRoleBinding,
+    AgentRoomRole,
+    AgentRoomRun,
+    AgentRoomRunEvent,
 } from '@/api/hermes/agent-room'
 import {
     AGENT_ROOM_AGENTS,
@@ -32,10 +36,17 @@ import {
     runWorkflow as apiRunWorkflow,
     deleteSession as apiDeleteSession,
     deleteTask as apiDeleteTask,
+    listRoleBindings as apiListRoleBindings,
+    setRoleBinding as apiSetRoleBinding,
+    deleteRoleBindingByRole as apiDeleteRoleBindingByRole,
+    listRuns as apiListRuns,
+    listRunEventsBySession as apiListRunEventsBySession,
 } from '@/api/hermes/agent-room'
 
 
 // ─── Store ─────────────────────────────────────────────────────
+export type AgentRoomView = 'timeline' | 'chat' | 'artifacts' | 'runs'
+
 export const useAgentRoomStore = defineStore('agentRoom', () => {
     // ─── State ─────────────────────────────────────────────────
     const sessions = ref<AgentRoomSession[]>([])
@@ -46,13 +57,18 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     const workflowEvents = ref<AgentRoomWorkflowEvent[]>([])
     const artifacts = ref<AgentRoomArtifact[]>([])
     const agents = ref<AgentRoomAgent[]>([...AGENT_ROOM_AGENTS])
+    const roleBindings = ref<AgentRoomRoleBinding[]>([])
+    const runs = ref<AgentRoomRun[]>([])
+    const runEvents = ref<AgentRoomRunEvent[]>([])
     const loading = ref(false)
     const error = ref<string | null>(null)
     const activeTaskId = ref<string | null>(null)
     const actionLoadingTaskId = ref<string | null>(null)
     const creatingSession = ref(false)
+    const activeView = ref<AgentRoomView>('timeline')
     let sessionsLoadSeq = 0
     let sessionDataLoadSeq = 0
+    let pollingTimer: ReturnType<typeof setInterval> | null = null
 
     // ─── Computed ──────────────────────────────────────────────
     const currentSession = computed(() =>
@@ -76,6 +92,84 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         for (const a of agents.value) map.set(a.id, a)
         return map
     })
+
+    /** Map from role → binding for quick lookup */
+    const roleBindingMap = computed(() => {
+        const map = new Map<AgentRoomRole, AgentRoomRoleBinding>()
+        for (const b of roleBindings.value) map.set(b.role, b)
+        return map
+    })
+
+    /** Runs that are currently queued or running (for polling) */
+    const activeRuns = computed(() =>
+        runs.value.filter(r => r.status === 'queued' || r.status === 'running'),
+    )
+
+    /** Whether any run is actively executing */
+    const hasActiveRuns = computed(() => activeRuns.value.length > 0)
+
+    /** Run events grouped by runId for quick lookup */
+    const runEventsByRunId = computed(() => {
+        const map = new Map<string, AgentRoomRunEvent[]>()
+        for (const evt of runEvents.value) {
+            const list = map.get(evt.runId) ?? []
+            list.push(evt)
+            map.set(evt.runId, list)
+        }
+        // Sort each group by sequence ascending
+        for (const list of map.values()) {
+            list.sort((a, b) => a.sequence - b.sequence)
+        }
+        return map
+    })
+
+    // ─── View Actions ──────────────────────────────────────────
+    function setActiveView(view: AgentRoomView) {
+        activeView.value = view
+    }
+
+    // ─── Polling for Active Runs ───────────────────────────────
+    const POLL_INTERVAL_MS = 3000
+
+    function startPolling() {
+        stopPolling()
+        pollingTimer = setInterval(async () => {
+            if (!currentSessionId.value) return
+            if (!hasActiveRuns.value) {
+                stopPolling()
+                return
+            }
+            await refreshRunsAndEvents()
+        }, POLL_INTERVAL_MS)
+    }
+
+    function stopPolling() {
+        if (pollingTimer) {
+            clearInterval(pollingTimer)
+            pollingTimer = null
+        }
+    }
+
+    /** Lightweight refresh: only re-fetch runs + runEvents (not full session) */
+    async function refreshRunsAndEvents() {
+        if (!currentSessionId.value) return
+        const sessionId = currentSessionId.value
+        try {
+            const [nextRuns, nextRunEvents] = await Promise.all([
+                apiListRuns(sessionId),
+                apiListRunEventsBySession(sessionId),
+            ])
+            if (currentSessionId.value !== sessionId) return
+            runs.value = nextRuns
+            runEvents.value = nextRunEvents
+            // If no more active runs, also do a full refresh to pick up artifacts/messages
+            if (nextRuns.every(r => r.status === 'completed' || r.status === 'failed')) {
+                await refreshCurrentSession()
+            }
+        } catch {
+            // Silently ignore polling errors; next tick will retry
+        }
+    }
 
     // ─── Session Actions ───────────────────────────────────────
     async function loadSessions() {
@@ -110,6 +204,8 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
             reviews.value = []
             workflowEvents.value = []
             artifacts.value = []
+            runs.value = []
+            runEvents.value = []
             // Load data for the newly created session
             await refreshCurrentSession()
             return session
@@ -132,14 +228,20 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         reviews.value = []
         workflowEvents.value = []
         artifacts.value = []
+        roleBindings.value = []
+        runs.value = []
+        runEvents.value = []
 
         try {
-            const [nextMessages, nextTasks, nextReviews, nextWorkflowEvents, nextArtifacts] = await Promise.all([
+            const [nextMessages, nextTasks, nextReviews, nextWorkflowEvents, nextArtifacts, nextRoleBindings, nextRuns, nextRunEvents] = await Promise.all([
                 apiListMessages(sessionId),
                 apiListTasks(sessionId),
                 apiListReviews(sessionId),
                 apiListWorkflowEvents(sessionId),
                 apiListArtifacts(sessionId),
+                apiListRoleBindings(sessionId),
+                apiListRuns(sessionId),
+                apiListRunEventsBySession(sessionId),
             ])
 
             if (seq !== sessionDataLoadSeq || currentSessionId.value !== sessionId) return
@@ -149,6 +251,16 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
             reviews.value = nextReviews
             workflowEvents.value = nextWorkflowEvents
             artifacts.value = nextArtifacts
+            roleBindings.value = nextRoleBindings
+            runs.value = nextRuns
+            runEvents.value = nextRunEvents
+
+            // Auto-start polling if there are active runs
+            if (nextRuns.some(r => r.status === 'queued' || r.status === 'running')) {
+                startPolling()
+            } else {
+                stopPolling()
+            }
         } catch (err: any) {
             if (seq !== sessionDataLoadSeq || currentSessionId.value !== sessionId) return
             error.value = err.message
@@ -162,12 +274,15 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         const seq = ++sessionDataLoadSeq
 
         try {
-            const [nextMessages, nextTasks, nextReviews, nextWorkflowEvents, nextArtifacts] = await Promise.all([
+            const [nextMessages, nextTasks, nextReviews, nextWorkflowEvents, nextArtifacts, nextRoleBindings, nextRuns, nextRunEvents] = await Promise.all([
                 apiListMessages(sessionId),
                 apiListTasks(sessionId),
                 apiListReviews(sessionId),
                 apiListWorkflowEvents(sessionId),
                 apiListArtifacts(sessionId),
+                apiListRoleBindings(sessionId),
+                apiListRuns(sessionId),
+                apiListRunEventsBySession(sessionId),
             ])
 
             if (seq !== sessionDataLoadSeq || currentSessionId.value !== sessionId) return
@@ -177,6 +292,9 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
             reviews.value = nextReviews
             workflowEvents.value = nextWorkflowEvents
             artifacts.value = nextArtifacts
+            roleBindings.value = nextRoleBindings
+            runs.value = nextRuns
+            runEvents.value = nextRunEvents
         } catch (err: any) {
             if (seq !== sessionDataLoadSeq || currentSessionId.value !== sessionId) return
             error.value = err.message
@@ -347,6 +465,9 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
                     reviews.value = []
                     workflowEvents.value = []
                     artifacts.value = []
+                    roleBindings.value = []
+                    runs.value = []
+                    runEvents.value = []
                     activeTaskId.value = null
                 }
             }
@@ -390,6 +511,49 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         }
     }
 
+    // ─── Role Binding Actions ──────────────────────────────────
+    async function loadRoleBindings(sessionId: string) {
+        try {
+            roleBindings.value = await apiListRoleBindings(sessionId)
+        } catch (err: any) {
+            error.value = err.message
+        }
+    }
+
+    async function saveRoleBinding(role: AgentRoomRole, profileName: string) {
+        if (!currentSessionId.value) return null
+        error.value = null
+        try {
+            const binding = await apiSetRoleBinding(currentSessionId.value, role, profileName)
+            // Upsert locally: replace existing or append
+            const idx = roleBindings.value.findIndex(b => b.role === role)
+            if (idx >= 0) {
+                roleBindings.value[idx] = binding
+            } else {
+                roleBindings.value.push(binding)
+            }
+            touchSession(currentSessionId.value)
+            return binding
+        } catch (err: any) {
+            error.value = err.message
+            throw err
+        }
+    }
+
+    async function removeRoleBinding(role: AgentRoomRole) {
+        if (!currentSessionId.value) return
+        error.value = null
+        try {
+            await apiDeleteRoleBindingByRole(currentSessionId.value, role)
+            // Local immediate update
+            roleBindings.value = roleBindings.value.filter(b => b.role !== role)
+            touchSession(currentSessionId.value)
+        } catch (err: any) {
+            error.value = err.message
+            throw err
+        }
+    }
+
     // ─── Workflow Actions ──────────────────────────────────────
     // Primary workflow entry point — delegates to server-side runner
     async function runWorkflow(taskId: string) {
@@ -400,6 +564,10 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
             await apiRunWorkflow(currentSessionId.value, taskId)
             touchSession(currentSessionId.value)
             await refreshCurrentSession()
+            // Start polling if there are active runs
+            if (hasActiveRuns.value) {
+                startPolling()
+            }
         } catch (err: any) {
             error.value = err.message
             throw err
@@ -435,6 +603,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
     }
 
     function $reset() {
+        stopPolling()
         sessionsLoadSeq++
         sessionDataLoadSeq++
         sessions.value = []
@@ -444,11 +613,15 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         reviews.value = []
         workflowEvents.value = []
         artifacts.value = []
+        roleBindings.value = []
+        runs.value = []
+        runEvents.value = []
         loading.value = false
         error.value = null
         activeTaskId.value = null
         actionLoadingTaskId.value = null
         creatingSession.value = false
+        activeView.value = 'timeline'
     }
 
     return {
@@ -460,21 +633,30 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         reviews,
         workflowEvents,
         artifacts,
+        roleBindings,
+        runs,
+        runEvents,
         agents,
         loading,
         error,
         activeTaskId,
         actionLoadingTaskId,
         creatingSession,
+        activeView,
         // Computed
         currentSession,
         activeTask,
         agentMap,
+        roleBindingMap,
+        activeRuns,
+        hasActiveRuns,
+        runEventsByRunId,
         // Actions
         loadSessions,
         createSession,
         selectSession,
         refreshCurrentSession,
+        refreshRunsAndEvents,
         loadMessages,
         sendUserMessage,
         loadTasks,
@@ -488,9 +670,15 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         removeArtifact,
         loadReviews,
         loadWorkflowEvents,
+        loadRoleBindings,
+        saveRoleBinding,
+        removeRoleBinding,
         runWorkflow,
         runMockWorkflow,
         setActiveTask,
+        setActiveView,
+        startPolling,
+        stopPolling,
         clearError,
         $reset,
     }

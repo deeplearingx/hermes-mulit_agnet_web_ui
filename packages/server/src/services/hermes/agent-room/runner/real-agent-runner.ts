@@ -27,6 +27,7 @@ export class RealAgentRunner implements AgentRoomRunner {
     /**
      * Extract HermesAgentRuntimeInput from AgentRoom context.
      * Pure mapping — no side effects.
+     * Passes role bindings for multi-role profile resolution.
      */
     private extractInput(ctx: AgentRoomRunnerContext): HermesAgentRuntimeInput {
         return {
@@ -37,17 +38,20 @@ export class RealAgentRunner implements AgentRoomRunner {
             taskId: ctx.taskId,
             assignedAgentId: ctx.task.assignedAgentId,
             revisionRound: ctx.task.revisionRound,
+            roleBindings: ctx.roleBindings,
         }
     }
 
     /**
      * Translate HermesAgentRuntimeOutput → AgentRoomRunnerResult.
      * Runtime types are now structurally aligned — no cast needed.
+     * Preserves activeRole for multi-role step observability.
      */
     private translateOutput(output: import('./runtime/types').HermesAgentRuntimeOutput): AgentRoomRunnerResult {
         return {
             steps: output.steps.map(step => ({
                 status: step.status,
+                activeRole: step.activeRole,
                 events: step.events,
                 messages: step.messages,
             })),

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { AgentRoomTask, AgentRoomReview, AgentRoomWorkflowEvent, AgentRoomTaskStatus, AgentRoomAgent, AgentRoomArtifact } from '@/api/hermes/agent-room'
+import type { AgentRoomTask, AgentRoomReview, AgentRoomWorkflowEvent, AgentRoomTaskStatus, AgentRoomAgent, AgentRoomArtifact, AgentRoomRoleBinding } from '@/api/hermes/agent-room'
 
 const props = defineProps<{
     tasks: AgentRoomTask[]
@@ -8,6 +8,7 @@ const props = defineProps<{
     workflowEvents: AgentRoomWorkflowEvent[]
     agents: AgentRoomAgent[]
     artifacts: AgentRoomArtifact[]
+    roleBindings?: AgentRoomRoleBinding[]
     activeTaskId?: string | null
     actionLoadingTaskId?: string | null
 }>()
@@ -155,6 +156,12 @@ const agentStatuses = computed<AgentStatusItem[]>(() => {
             color: AGENT_ROLE_COLORS[agent.role] ?? '#94a3b8',
         }
     })
+})
+
+/** Developer role binding profileName (if any) */
+const developerProfileName = computed(() => {
+    const binding = (props.roleBindings ?? []).find(b => b.role === 'developer')
+    return binding?.profileName ?? null
 })
 
 const STATUS_DOT_COLORS: Record<string, string> = {
@@ -306,6 +313,10 @@ defineExpose({
                     <span class="agent-role">{{ agent.role }}</span>
                     <span class="agent-status-label">{{ STATUS_DOT_LABELS[agent.status] }}</span>
                 </div>
+            </div>
+            <div v-if="developerProfileName" class="developer-binding-hint">
+                <span class="binding-icon">🔗</span>
+                <span class="binding-text">Developer: <strong>{{ developerProfileName }}</strong></span>
             </div>
         </div>
 
@@ -632,6 +643,30 @@ defineExpose({
     font-size: 10px;
     color: #64748b;
     flex-shrink: 0;
+}
+
+.developer-binding-hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    margin-top: 6px;
+    background: #0f1729;
+    border: 1px solid #1e293b;
+    border-radius: 4px;
+    font-size: 11px;
+    color: #94a3b8;
+
+    .binding-icon {
+        font-size: 12px;
+    }
+
+    .binding-text {
+        strong {
+            color: #22c55e;
+            font-weight: 600;
+        }
+    }
 }
 
 // ─── Section C: Artifacts ──────────────────────────────────────

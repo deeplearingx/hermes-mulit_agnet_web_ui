@@ -40,6 +40,9 @@ describe('Agent Room Service', () => {
     ensureTableForTest(db, schemas.AR_MESSAGES_TABLE, schemas.AR_MESSAGES_SCHEMA)
     ensureTableForTest(db, schemas.AR_WORKFLOW_EVENTS_TABLE, schemas.AR_WORKFLOW_EVENTS_SCHEMA)
     ensureTableForTest(db, schemas.AR_ARTIFACTS_TABLE, schemas.AR_ARTIFACTS_SCHEMA)
+    ensureTableForTest(db, schemas.AR_ROLE_BINDINGS_TABLE, schemas.AR_ROLE_BINDINGS_SCHEMA)
+    ensureTableForTest(db, schemas.AR_RUNS_TABLE, schemas.AR_RUNS_SCHEMA)
+    ensureTableForTest(db, schemas.AR_RUN_EVENTS_TABLE, schemas.AR_RUN_EVENTS_SCHEMA)
     for (const idx of schemas.AR_INDEXES) {
       try { db.exec(idx) } catch { /* ignore */ }
     }
@@ -1016,6 +1019,142 @@ describe('Agent Room Service', () => {
 
       const artifacts = svc.listTaskArtifacts(session.id, task.id)
       expect(artifacts.filter(a => a.type === 'final_delivery')).toHaveLength(1)
+    })
+  })
+
+  // ─── Run Lifecycle ──────────────────────────────────────────────
+
+  describe('Run Lifecycle', () => {
+    it('runWorkflow creates a run record with queued → running → completed lifecycle', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Build feature', '')
+
+      const run = await svc.runWorkflow(session.id, task.id)
+
+      expect(run).toBeDefined()
+      expect(run.id).toBeTruthy()
+      expect(run.sessionId).toBe(session.id)
+      expect(run.taskId).toBe(task.id)
+      expect(run.status).toBe('completed')
+      expect(run.runnerName).toBe('mock')
+      expect(run.startedAt).toBeTruthy()
+      expect(run.finishedAt).toBeTruthy()
+      expect(run.createdAt).toBeTruthy()
+      expect(run.updatedAt).toBeTruthy()
+    })
+
+    it('listRuns returns runs for a session', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      await svc.runWorkflow(session.id, task.id)
+
+      const runs = svc.listRuns(session.id)
+      expect(runs).toHaveLength(1)
+      expect(runs[0].status).toBe('completed')
+    })
+
+    it('listTaskRuns returns runs filtered by task', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task1 = svc.createTask(session.id, 'Task 1', '')
+      const task2 = svc.createTask(session.id, 'Task 2', '')
+
+      await svc.runWorkflow(session.id, task1.id)
+      await svc.runWorkflow(session.id, task2.id)
+
+      const runs = svc.listTaskRuns(session.id, task1.id)
+      expect(runs).toHaveLength(1)
+      expect(runs[0].taskId).toBe(task1.id)
+    })
+
+    it('getRun returns a run by id', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      const run = await svc.runWorkflow(session.id, task.id)
+      const found = svc.getRun(run.id)
+
+      expect(found).toBeDefined()
+      expect(found!.id).toBe(run.id)
+    })
+
+    it('updateRunUpstreamId sets upstreamRunId on a run', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      const run = await svc.runWorkflow(session.id, task.id)
+      const updated = svc.updateRunUpstreamId(run.id, 'gw-run-123')
+
+      expect(updated).toBeDefined()
+      expect(updated!.upstreamRunId).toBe('gw-run-123')
+    })
+
+    it('findRunByUpstreamId finds run by upstream id', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      const run = await svc.runWorkflow(session.id, task.id)
+      svc.updateRunUpstreamId(run.id, 'gw-run-456')
+
+      const found = svc.findRunByUpstreamId('gw-run-456')
+      expect(found).toBeDefined()
+      expect(found!.id).toBe(run.id)
+    })
+
+    it('deleteSession cascade deletes runs', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      await svc.runWorkflow(session.id, task.id)
+      expect(svc.listRuns(session.id)).toHaveLength(1)
+
+      svc.deleteSession(session.id)
+      // After deletion, listRuns should throw (session not found)
+      expect(() => svc.listRuns(session.id)).toThrow('Session not found')
+    })
+
+    it('deleteTask cascade deletes runs for that task', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      await svc.runWorkflow(session.id, task.id)
+      expect(svc.listRuns(session.id)).toHaveLength(1)
+
+      svc.deleteTask(session.id, task.id)
+      expect(svc.listRuns(session.id)).toHaveLength(0)
+    })
+
+    it('runWorkflow marks run as failed when runner throws', async () => {
+      // Override runner to throw — placed last to avoid mock leaking into other tests
+      vi.doMock('../../packages/server/src/services/hermes/agent-room/runner', () => ({
+        activeRunner: {
+          name: 'mock' as const,
+          run: async () => { throw new Error('Runner exploded') },
+        },
+      }))
+
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      await expect(svc.runWorkflow(session.id, task.id)).rejects.toThrow('Runner exploded')
+
+      const runs = svc.listRuns(session.id)
+      expect(runs).toHaveLength(1)
+      expect(runs[0].status).toBe('failed')
+      expect(runs[0].errorMessage).toBe('Runner exploded')
+      expect(runs[0].finishedAt).toBeTruthy()
+
+      // Cleanup mock to avoid leaking
+      vi.doUnmock('../../packages/server/src/services/hermes/agent-room/runner')
     })
   })
 })

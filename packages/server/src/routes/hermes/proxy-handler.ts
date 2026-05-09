@@ -1,7 +1,14 @@
+import { randomUUID } from 'node:crypto'
 import type { Context } from 'koa'
 import { config } from '../../config'
 import { getGatewayManagerInstance } from '../../services/gateway-bootstrap'
 import { updateUsage } from '../../db/hermes/usage-store'
+import {
+    createRunEvent,
+    findByUpstreamRunId,
+    getNextRunEventSequence,
+    type AgentRoomRunEvent,
+} from '../../db/hermes/agent-room-store'
 
 function getGatewayManager() { return getGatewayManagerInstance() }
 
@@ -95,41 +102,89 @@ function buildProxyHeaders(ctx: Context, upstream: string): Record<string, strin
 
 const SSE_EVENTS_PATH = /^\/v1\/runs\/([^/]+)\/events$/
 
+// ─── SSE Event Normalization ────────────────────────────────────
+
 /**
- * Parse SSE text chunks and extract run.completed events.
- * Returns the run_id if a run.completed was found.
+ * Normalize a raw SSE JSON payload into a structured AgentRoomRunEvent.
+ * Returns null if the event cannot be associated with a known run.
+ *
+ * Association strategy:
+ *  1. Look up run by upstream_run_id (data.run_id)
+ *  2. If not found, use the run_id from the URL path as fallback
+ *  3. If neither resolves, skip persistence (event is orphaned)
  */
-function extractRunCompletedFromChunk(chunk: string, profile: string): string | null {
-  // SSE format: each line is "data: {...}\n\n"
-  const lines = chunk.split('\n')
+function normalizeAndPersistSSEEvent(
+  data: Record<string, unknown>,
+  upstreamRunIdFromPath: string,
+  profile: string,
+): void {
+  const upstreamRunId = String(data.run_id || upstreamRunIdFromPath)
+  if (!upstreamRunId) return
+
+  // Resolve local run association
+  const localRun = findByUpstreamRunId(upstreamRunId)
+
+  // Still handle run.completed usage tracking (backward compatible)
+  if (data.event === 'run.completed' && data.usage) {
+    const sessionId = localRun?.sessionId ?? getSessionForRun(upstreamRunId)
+    if (sessionId) {
+      updateUsage(sessionId, {
+        inputTokens: (data.usage as any).input_tokens ?? 0,
+        outputTokens: (data.usage as any).output_tokens ?? 0,
+        cacheReadTokens: (data.usage as any).cache_read_tokens ?? 0,
+        cacheWriteTokens: (data.usage as any).cache_write_tokens ?? 0,
+        reasoningTokens: (data.usage as any).reasoning_tokens ?? 0,
+        model: String(data.model || ''),
+        profile,
+      })
+    }
+  }
+
+  // Persist event to agent_room_run_events (best-effort, never block SSE stream)
+  try {
+    const runId = localRun?.id ?? upstreamRunId
+    const sessionId = localRun?.sessionId ?? getSessionForRun(upstreamRunId) ?? ''
+    const taskId = localRun?.taskId ?? ''
+    const sequence = getNextRunEventSequence(runId)
+
+    const event: AgentRoomRunEvent = {
+      id: randomUUID(),
+      runId,
+      sessionId,
+      taskId,
+      upstreamRunId: upstreamRunId || undefined,
+      source: 'gateway_sse',
+      sequence,
+      eventType: String(data.event || 'unknown'),
+      payload: data as Record<string, unknown>,
+      createdAt: new Date().toISOString(),
+    }
+    createRunEvent(event)
+  } catch {
+    // Swallow: SSE persistence must never break the proxy stream
+  }
+}
+
+/**
+ * Parse a single SSE event block and extract the JSON data line.
+ * Returns the parsed object or null.
+ */
+function parseSSEEventBlock(block: string): Record<string, unknown> | null {
+  const lines = block.split('\n')
   for (const line of lines) {
     if (!line.startsWith('data: ')) continue
     try {
-      const data = JSON.parse(line.slice(6))
-      if (data.event === 'run.completed' && data.usage && data.run_id) {
-        const sessionId = getSessionForRun(data.run_id)
-        if (sessionId) {
-          updateUsage(sessionId, {
-            inputTokens: data.usage.input_tokens,
-            outputTokens: data.usage.output_tokens,
-            cacheReadTokens: data.usage.cache_read_tokens,
-            cacheWriteTokens: data.usage.cache_write_tokens,
-            reasoningTokens: data.usage.reasoning_tokens,
-            model: data.model || '',
-            profile,
-          })
-          return data.run_id
-        }
-      }
+      return JSON.parse(line.slice(6))
     } catch { /* not JSON, skip */ }
   }
   return null
 }
 
 /**
- * Stream an SSE response while intercepting run.completed events.
+ * Stream an SSE response while intercepting ALL standard events for persistence.
+ * Preserves existing run.completed usage tracking behavior.
  */
-async function streamSSE(ctx: Context, res: Response, profile: string): Promise<void> {
+async function streamSSE(ctx: Context, res: Response, profile: string, upstreamRunId: string): Promise<void> {
   if (!res.body) {
     ctx.res.end()
     return
@@ -150,18 +205,24 @@ async function streamSSE(ctx: Context, res: Response, profile: string): Promise<
       // Also decode for interception
       buffer += decoder.decode(value, { stream: true })
 
-      // Process complete SSE lines (delimited by double newline)
+      // Process complete SSE blocks (delimited by double newline)
       let newlineIdx: number
       while ((newlineIdx = buffer.indexOf('\n\n')) !== -1) {
         const eventBlock = buffer.slice(0, newlineIdx)
         buffer = buffer.slice(newlineIdx + 2)
-        extractRunCompletedFromChunk(eventBlock, profile)
+        const data = parseSSEEventBlock(eventBlock)
+        if (data) {
+          normalizeAndPersistSSEEvent(data, upstreamRunId, profile)
+        }
       }
     }
 
     // Process remaining buffer
     if (buffer.trim()) {
-      extractRunCompletedFromChunk(buffer, profile)
+      const data = parseSSEEventBlock(buffer)
+      if (data) {
+        normalizeAndPersistSSEEvent(data, upstreamRunId, profile)
+      }
     }
   } finally {
     ctx.res.end()
@@ -240,7 +301,8 @@ export async function proxy(ctx: Context) {
     // Intercept SSE streams for /v1/runs/{id}/events
     const sseMatch = upstreamPath.match(SSE_EVENTS_PATH)
     if (sseMatch) {
-      await streamSSE(ctx, res, profile)
+      const upstreamRunId = sseMatch[1]
+      await streamSSE(ctx, res, profile, upstreamRunId)
       return
     }
 

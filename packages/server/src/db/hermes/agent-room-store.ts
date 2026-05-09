@@ -20,6 +20,8 @@ import {
     AR_WORKFLOW_EVENTS_TABLE,
     AR_ARTIFACTS_TABLE,
     AR_ROLE_BINDINGS_TABLE,
+    AR_RUNS_TABLE,
+    AR_RUN_EVENTS_TABLE,
 } from './schemas'
 
 // ─── Domain Types (mirrored from services/hermes/agent-room/index.ts) ───
@@ -96,6 +98,22 @@ export interface AgentRoomRoleBinding {
     /** The Hermes profile name used for Gateway resolution. Maps to agent_id column. */
     profileName: string
     createdAt: string
+}
+
+export type AgentRoomRunStatus = 'queued' | 'running' | 'completed' | 'failed'
+
+export interface AgentRoomRun {
+    id: string
+    sessionId: string
+    taskId: string
+    status: AgentRoomRunStatus
+    upstreamRunId?: string
+    runnerName: string
+    errorMessage?: string
+    startedAt?: string
+    finishedAt?: string
+    createdAt: string
+    updatedAt: string
 }
 
 // ─── JSON Helpers ──────────────────────────────────────────────
@@ -438,6 +456,164 @@ export function deleteRoleBindingsBySession(sessionId: string): void {
     db.prepare(`DELETE FROM ${AR_ROLE_BINDINGS_TABLE} WHERE session_id = ?`).run(sessionId)
 }
 
+// ─── Run CRUD ───────────────────────────────────────────────────
+
+function mapRunRow(row: Record<string, unknown>): AgentRoomRun {
+    return {
+        id: String(row.id),
+        sessionId: String(row.session_id),
+        taskId: String(row.task_id),
+        status: String(row.status) as AgentRoomRunStatus,
+        upstreamRunId: row.upstream_run_id != null ? String(row.upstream_run_id) : undefined,
+        runnerName: String(row.runner_name),
+        errorMessage: row.error_message != null ? String(row.error_message) : undefined,
+        startedAt: row.started_at != null ? String(row.started_at) : undefined,
+        finishedAt: row.finished_at != null ? String(row.finished_at) : undefined,
+        createdAt: String(row.created_at),
+        updatedAt: String(row.updated_at),
+    }
+}
+
+export function createRun(run: AgentRoomRun): void {
+    const db = requireDb()
+    db.prepare(
+        `INSERT INTO ${AR_RUNS_TABLE} (id, session_id, task_id, status, upstream_run_id, runner_name, error_message, started_at, finished_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+        run.id, run.sessionId, run.taskId, run.status,
+        run.upstreamRunId ?? null, run.runnerName,
+        run.errorMessage ?? null, run.startedAt ?? null, run.finishedAt ?? null,
+        run.createdAt, run.updatedAt,
+    )
+}
+
+export function getRun(id: string): AgentRoomRun | null {
+    const db = requireDb()
+    const row = db.prepare(`SELECT * FROM ${AR_RUNS_TABLE} WHERE id = ?`).get(id) as Record<string, unknown> | undefined
+    return row ? mapRunRow(row) : null
+}
+
+export function updateRun(run: AgentRoomRun): void {
+    const db = requireDb()
+    db.prepare(
+        `UPDATE ${AR_RUNS_TABLE} SET status = ?, upstream_run_id = ?, runner_name = ?, error_message = ?, started_at = ?, finished_at = ?, updated_at = ? WHERE id = ?`,
+    ).run(
+        run.status, run.upstreamRunId ?? null, run.runnerName,
+        run.errorMessage ?? null, run.startedAt ?? null, run.finishedAt ?? null,
+        run.updatedAt, run.id,
+    )
+}
+
+export function listRunsBySession(sessionId: string): AgentRoomRun[] {
+    const db = requireDb()
+    const rows = db.prepare(`SELECT * FROM ${AR_RUNS_TABLE} WHERE session_id = ? ORDER BY created_at DESC, rowid DESC`).all(sessionId) as Array<Record<string, unknown>>
+    return rows.map(mapRunRow)
+}
+
+export function listRunsByTask(taskId: string): AgentRoomRun[] {
+    const db = requireDb()
+    const rows = db.prepare(`SELECT * FROM ${AR_RUNS_TABLE} WHERE task_id = ? ORDER BY created_at DESC, rowid DESC`).all(taskId) as Array<Record<string, unknown>>
+    return rows.map(mapRunRow)
+}
+
+export function findByUpstreamRunId(upstreamRunId: string): AgentRoomRun | null {
+    const db = requireDb()
+    const row = db.prepare(`SELECT * FROM ${AR_RUNS_TABLE} WHERE upstream_run_id = ?`).get(upstreamRunId) as Record<string, unknown> | undefined
+    return row ? mapRunRow(row) : null
+}
+
+export function deleteRunsBySession(sessionId: string): void {
+    const db = requireDb()
+    db.prepare(`DELETE FROM ${AR_RUNS_TABLE} WHERE session_id = ?`).run(sessionId)
+}
+
+export function deleteRunsByTask(taskId: string): void {
+    const db = requireDb()
+    db.prepare(`DELETE FROM ${AR_RUNS_TABLE} WHERE task_id = ?`).run(taskId)
+}
+
+// ─── Run Event CRUD ─────────────────────────────────────────────
+
+export interface AgentRoomRunEvent {
+    id: string
+    runId: string
+    sessionId: string
+    taskId: string
+    upstreamRunId?: string
+    source: string
+    sequence: number
+    eventType: string
+    payload?: Record<string, unknown>
+    createdAt: string
+}
+
+function mapRunEventRow(row: Record<string, unknown>): AgentRoomRunEvent {
+    return {
+        id: String(row.id),
+        runId: String(row.run_id),
+        sessionId: String(row.session_id),
+        taskId: String(row.task_id),
+        upstreamRunId: row.upstream_run_id != null ? String(row.upstream_run_id) : undefined,
+        source: String(row.source),
+        sequence: Number(row.sequence),
+        eventType: String(row.event_type),
+        payload: decodeJson<Record<string, unknown>>(row.payload),
+        createdAt: String(row.created_at),
+    }
+}
+
+export function createRunEvent(event: AgentRoomRunEvent): void {
+    const db = requireDb()
+    db.prepare(
+        `INSERT INTO ${AR_RUN_EVENTS_TABLE} (id, run_id, session_id, task_id, upstream_run_id, source, sequence, event_type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+        event.id, event.runId, event.sessionId, event.taskId,
+        event.upstreamRunId ?? null, event.source, event.sequence,
+        event.eventType, encodeJson(event.payload), event.createdAt,
+    )
+}
+
+export function listRunEventsByRun(runId: string): AgentRoomRunEvent[] {
+    const db = requireDb()
+    const rows = db.prepare(
+        `SELECT * FROM ${AR_RUN_EVENTS_TABLE} WHERE run_id = ? ORDER BY sequence ASC, rowid ASC`,
+    ).all(runId) as Array<Record<string, unknown>>
+    return rows.map(mapRunEventRow)
+}
+
+export function listRunEventsBySession(sessionId: string): AgentRoomRunEvent[] {
+    const db = requireDb()
+    const rows = db.prepare(
+        `SELECT * FROM ${AR_RUN_EVENTS_TABLE} WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`,
+    ).all(sessionId) as Array<Record<string, unknown>>
+    return rows.map(mapRunEventRow)
+}
+
+export function findRunEventByUpstreamRunId(upstreamRunId: string): AgentRoomRunEvent | null {
+    const db = requireDb()
+    const row = db.prepare(
+        `SELECT * FROM ${AR_RUN_EVENTS_TABLE} WHERE upstream_run_id = ? LIMIT 1`,
+    ).get(upstreamRunId) as Record<string, unknown> | undefined
+    return row ? mapRunEventRow(row) : null
+}
+
+export function getNextRunEventSequence(runId: string): number {
+    const db = requireDb()
+    const row = db.prepare(
+        `SELECT COALESCE(MAX(sequence), 0) + 1 AS next_seq FROM ${AR_RUN_EVENTS_TABLE} WHERE run_id = ?`,
+    ).get(runId) as { next_seq: number } | undefined
+    return row?.next_seq ?? 1
+}
+
+export function deleteRunEventsByRun(runId: string): void {
+    const db = requireDb()
+    db.prepare(`DELETE FROM ${AR_RUN_EVENTS_TABLE} WHERE run_id = ?`).run(runId)
+}
+
+export function deleteRunEventsBySession(sessionId: string): void {
+    const db = requireDb()
+    db.prepare(`DELETE FROM ${AR_RUN_EVENTS_TABLE} WHERE session_id = ?`).run(sessionId)
+}
+
 // ─── Cascade Delete ─────────────────────────────────────────────
 
 /**
@@ -446,10 +622,12 @@ export function deleteRoleBindingsBySession(sessionId: string): void {
  */
 export function deleteSessionCascade(sessionId: string): void {
     const db = requireDb()
-    // Delete in dependency order: reviews → workflow_events → artifacts → role_bindings → messages → tasks → session
+    // Delete in dependency order: reviews → workflow_events → run_events → artifacts → runs → role_bindings → messages → tasks → session
     db.prepare(`DELETE FROM ${AR_REVIEWS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_WORKFLOW_EVENTS_TABLE} WHERE session_id = ?`).run(sessionId)
+    db.prepare(`DELETE FROM ${AR_RUN_EVENTS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_ARTIFACTS_TABLE} WHERE session_id = ?`).run(sessionId)
+    db.prepare(`DELETE FROM ${AR_RUNS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_ROLE_BINDINGS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_MESSAGES_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_TASKS_TABLE} WHERE session_id = ?`).run(sessionId)
@@ -467,8 +645,12 @@ export function deleteTaskCascade(sessionId: string, taskId: string): void {
     db.prepare(`DELETE FROM ${AR_REVIEWS_TABLE} WHERE task_id = ?`).run(taskId)
     // Delete task workflow events
     db.prepare(`DELETE FROM ${AR_WORKFLOW_EVENTS_TABLE} WHERE task_id = ?`).run(taskId)
+    // Delete task run events
+    db.prepare(`DELETE FROM ${AR_RUN_EVENTS_TABLE} WHERE task_id = ?`).run(taskId)
     // Delete task artifacts
     db.prepare(`DELETE FROM ${AR_ARTIFACTS_TABLE} WHERE task_id = ?`).run(taskId)
+    // Delete task runs
+    db.prepare(`DELETE FROM ${AR_RUNS_TABLE} WHERE task_id = ?`).run(taskId)
     // Delete task-scoped messages: list all session messages, filter by metadata.taskId, delete by id
     const sessionMessages = listMessagesBySession(sessionId)
     const stmt = db.prepare(`DELETE FROM ${AR_MESSAGES_TABLE} WHERE id = ?`)

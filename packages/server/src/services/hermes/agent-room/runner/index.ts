@@ -11,6 +11,7 @@ export type {
     AgentRoomRunnerEvent,
     AgentRoomRunnerMessage,
     AgentRoomRunnerArtifact,
+    RunnerRoleBinding,
 } from './types'
 export { MockAgentRoomRunner } from './mock-runner'
 export { RealAgentRunner } from './real-agent-runner'

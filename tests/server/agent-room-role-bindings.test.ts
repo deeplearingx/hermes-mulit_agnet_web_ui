@@ -556,4 +556,127 @@ describe('Agent Room Role Bindings', () => {
             expect(afterDelete.updatedAt).not.toBe(afterCreate)
         })
     })
+
+    // ─── Role validation ────────────────────────────────────────
+
+    describe('role validation', () => {
+        it('isAgentRoomRole returns true for valid roles', async () => {
+            const { isAgentRoomRole } = await import('../../packages/server/src/services/hermes/agent-room/index')
+            expect(isAgentRoomRole('developer')).toBe(true)
+            expect(isAgentRoomRole('planner')).toBe(true)
+            expect(isAgentRoomRole('reviewer')).toBe(true)
+            expect(isAgentRoomRole('conversation')).toBe(true)
+            expect(isAgentRoomRole('delivery')).toBe(true)
+        })
+
+        it('isAgentRoomRole returns false for invalid roles', async () => {
+            const { isAgentRoomRole } = await import('../../packages/server/src/services/hermes/agent-room/index')
+            expect(isAgentRoomRole('admin')).toBe(false)
+            expect(isAgentRoomRole('')).toBe(false)
+            expect(isAgentRoomRole('DEVELOPER')).toBe(false)
+        })
+
+        it('assertAgentRoomRole throws for invalid role', async () => {
+            const { assertAgentRoomRole } = await import('../../packages/server/src/services/hermes/agent-room/index')
+            expect(() => assertAgentRoomRole('admin')).toThrow(/Invalid role/)
+            expect(() => assertAgentRoomRole('')).toThrow(/Invalid role/)
+        })
+
+        it('assertAgentRoomRole returns valid role unchanged', async () => {
+            const { assertAgentRoomRole } = await import('../../packages/server/src/services/hermes/agent-room/index')
+            expect(assertAgentRoomRole('developer')).toBe('developer')
+            expect(assertAgentRoomRole('planner')).toBe('planner')
+        })
+
+        it('AGENT_ROOM_ROLES contains all 5 roles', async () => {
+            const { AGENT_ROOM_ROLES } = await import('../../packages/server/src/services/hermes/agent-room/index')
+            expect(AGENT_ROOM_ROLES).toHaveLength(5)
+            expect(AGENT_ROOM_ROLES).toContain('conversation')
+            expect(AGENT_ROOM_ROLES).toContain('planner')
+            expect(AGENT_ROOM_ROLES).toContain('developer')
+            expect(AGENT_ROOM_ROLES).toContain('reviewer')
+            expect(AGENT_ROOM_ROLES).toContain('delivery')
+        })
+
+        it('createRoleBinding throws on invalid role', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            expect(() => svc.createRoleBinding(sessionId, 'admin' as any, 'agent-alpha'))
+                .toThrow(/Invalid role/)
+        })
+
+        it('setRoleBinding throws on invalid role', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            expect(() => svc.setRoleBinding(sessionId, 'admin' as any, 'agent-alpha'))
+                .toThrow(/Invalid role/)
+        })
+    })
+
+    // ─── deleteRoleBindingByRole ────────────────────────────────
+
+    describe('deleteRoleBindingByRole', () => {
+        it('deletes existing binding by role', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            svc.createRoleBinding(sessionId, 'developer', 'agent-alpha')
+            expect(svc.getRoleBindingForRole(sessionId, 'developer')).not.toBeNull()
+
+            svc.deleteRoleBindingByRole(sessionId, 'developer')
+            expect(svc.getRoleBindingForRole(sessionId, 'developer')).toBeNull()
+        })
+
+        it('no-op when binding does not exist', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            // Should not throw
+            svc.deleteRoleBindingByRole(sessionId, 'reviewer')
+            expect(svc.listRoleBindings(sessionId)).toHaveLength(0)
+        })
+
+        it('refreshes session updatedAt', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            svc.createRoleBinding(sessionId, 'developer', 'agent-alpha')
+            const afterCreate = svc.listSessions().find(s => s.id === sessionId)!.updatedAt
+
+            await new Promise(resolve => setTimeout(resolve, 10))
+
+            svc.deleteRoleBindingByRole(sessionId, 'developer')
+
+            const afterDelete = svc.listSessions().find(s => s.id === sessionId)!
+            expect(afterDelete.updatedAt).not.toBe(afterCreate)
+        })
+
+        it('throws on non-existent session', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            expect(() => svc.deleteRoleBindingByRole('non-existent', 'developer'))
+                .toThrow('Session not found')
+        })
+
+        it('throws on invalid role', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            expect(() => svc.deleteRoleBindingByRole(sessionId, 'admin' as any))
+                .toThrow(/Invalid role/)
+        })
+    })
 })

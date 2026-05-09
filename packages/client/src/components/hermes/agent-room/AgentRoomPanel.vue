@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useAgentRoomStore } from '@/stores/hermes/agent-room'
-import type { AgentRoomTask } from '@/api/hermes/agent-room'
+import { useAgentRoomStore, type AgentRoomView } from '@/stores/hermes/agent-room'
+import type { AgentRoomTask, AgentRoomRole } from '@/api/hermes/agent-room'
 import AgentRoomWorkspace from './AgentRoomWorkspace.vue'
 import AgentRoomTaskPanel from './AgentRoomTaskPanel.vue'
-import AgentRoomEventFeed from './AgentRoomEventFeed.vue'
+import AgentRoomTimelineView from './AgentRoomTimelineView.vue'
+import AgentRoomChatView from './AgentRoomChatView.vue'
+import AgentRoomArtifactsView from './AgentRoomArtifactsView.vue'
+import AgentRoomRunsView from './AgentRoomRunsView.vue'
 import CreateTaskModal from './CreateTaskModal.vue'
 import ReviewDecisionModal from './ReviewDecisionModal.vue'
+import AgentRoomRoleBindingModal from './AgentRoomRoleBindingModal.vue'
 
 const store = useAgentRoomStore()
 
@@ -21,6 +25,8 @@ const showReviewDecision = ref(false)
 const reviewTargetTask = ref<AgentRoomTask | null>(null)
 const creatingTask = ref(false)
 const submittingReview = ref(false)
+const showRoleBindings = ref(false)
+const savingRoleBinding = ref(false)
 
 // ─── Session Management ────────────────────────────────────────
 async function handleCreateSession() {
@@ -136,6 +142,29 @@ async function handleDeleteArtifact(artifactId: string) {
         // Error already set in store
     }
 }
+
+// ─── Role Binding Actions ──────────────────────────────────────
+async function handleSaveRoleBinding(data: { role: AgentRoomRole; profileName: string }) {
+    savingRoleBinding.value = true
+    try {
+        await store.saveRoleBinding(data.role, data.profileName)
+    } catch {
+        // Error already set in store
+    } finally {
+        savingRoleBinding.value = false
+    }
+}
+
+async function handleDeleteRoleBinding(role: AgentRoomRole) {
+    savingRoleBinding.value = true
+    try {
+        await store.removeRoleBinding(role)
+    } catch {
+        // Error already set in store
+    } finally {
+        savingRoleBinding.value = false
+    }
+}
 </script>
 
 <template>
@@ -161,6 +190,14 @@ async function handleDeleteArtifact(artifactId: string) {
             <button class="btn-new-session" :disabled="store.creatingSession" @click="showNewSession = !showNewSession">
                 + 新建会话
             </button>
+            <button
+                v-if="store.currentSessionId"
+                class="btn-role-bindings"
+                title="角色 Profile 绑定"
+                @click="showRoleBindings = true"
+            >
+                🔗 角色绑定
+            </button>
             <div v-if="showNewSession" class="new-session-form">
                 <input
                     v-model="newSessionName"
@@ -182,27 +219,67 @@ async function handleDeleteArtifact(artifactId: string) {
 
         <!-- Main Content -->
         <div v-if="store.currentSessionId" class="room-content">
-            <!-- Workspace Main: Center (canvas + stream) + Right Panel -->
+            <!-- Workspace Main: Center (canvas + views) + Right Panel -->
             <div class="workspace-main">
                 <div class="workspace-center">
                     <div class="workspace-canvas">
                         <AgentRoomWorkspace />
                     </div>
-                    <div class="workspace-stream">
-                        <AgentRoomEventFeed
+                    <!-- View Tabs -->
+                    <div class="view-tabs">
+                        <button
+                            v-for="tab in ([
+                                { key: 'timeline', label: 'Timeline', icon: '📊' },
+                                { key: 'chat', label: 'Chat', icon: '💬' },
+                                { key: 'artifacts', label: 'Artifacts', icon: '📦' },
+                                { key: 'runs', label: 'Runs', icon: '⚡' },
+                            ] as const)"
+                            :key="tab.key"
+                            class="view-tab"
+                            :class="{ active: store.activeView === tab.key }"
+                            @click="store.setActiveView(tab.key)"
+                        >
+                            <span class="tab-icon">{{ tab.icon }}</span>
+                            <span class="tab-label">{{ tab.label }}</span>
+                            <span v-if="tab.key === 'runs' && store.hasActiveRuns" class="tab-badge">●</span>
+                        </button>
+                    </div>
+                    <!-- View Content -->
+                    <div class="view-content">
+                        <AgentRoomTimelineView
+                            v-if="store.activeView === 'timeline'"
+                            :run-events="store.runEvents"
                             :workflow-events="store.workflowEvents"
                         />
-                        <div class="stream-input">
-                            <textarea
-                                v-model="inputText"
-                                placeholder="输入消息..."
-                                rows="2"
-                                @keydown="handleKeydown"
-                            />
-                            <button class="btn-send" @click="handleSend" :disabled="!inputText.trim()">
-                                发送
-                            </button>
-                        </div>
+                        <AgentRoomChatView
+                            v-else-if="store.activeView === 'chat'"
+                            :messages="store.messages"
+                        />
+                        <AgentRoomArtifactsView
+                            v-else-if="store.activeView === 'artifacts'"
+                            :artifacts="store.artifacts"
+                            :tasks="store.tasks"
+                            @delete-artifact="handleDeleteArtifact"
+                        />
+                        <AgentRoomRunsView
+                            v-else-if="store.activeView === 'runs'"
+                            :runs="store.runs"
+                            :run-events="store.runEvents"
+                            :tasks="store.tasks"
+                            :has-active-runs="store.hasActiveRuns"
+                        />
+                    </div>
+                    <!-- Chat Input (always visible for quick message sending) -->
+                    <div class="stream-input">
+                        <textarea
+                            v-model="inputText"
+                            placeholder="输入消息..."
+                            rows="2"
+                            @keydown="handleKeydown"
+                        />
+                        <button class="btn-send" @click="handleSend" :disabled="!inputText.trim()">
+                            发送
+                        </button>
                     </div>
                 </div>
                 <div class="workspace-panel">
@@ -213,6 +290,7 @@ async function handleDeleteArtifact(artifactId: string) {
                         :workflow-events="store.workflowEvents"
                         :agents="store.agents"
                         :artifacts="store.artifacts"
+                        :role-bindings="store.roleBindings"
                         :active-task-id="store.activeTaskId"
                         :action-loading-task-id="store.actionLoadingTaskId"
                         @create-task="showCreateTask = true"
@@ -252,6 +330,14 @@ async function handleDeleteArtifact(artifactId: string) {
             :max-revision-rounds="reviewTargetTask?.maxRevisionRounds ?? 3"
             @close="showReviewDecision = false; reviewTargetTask = null"
             @submit="handleReviewSubmit"
+        />
+        <AgentRoomRoleBindingModal
+            :visible="showRoleBindings"
+            :role-bindings="store.roleBindings"
+            :saving="savingRoleBinding"
+            @close="showRoleBindings = false"
+            @save="handleSaveRoleBinding"
+            @delete="handleDeleteRoleBinding"
         />
     </div>
 </template>
@@ -401,6 +487,24 @@ async function handleDeleteArtifact(artifactId: string) {
     }
 }
 
+.btn-role-bindings {
+    padding: 4px 10px;
+    border: 1px solid #334155;
+    border-radius: 3px;
+    background: transparent;
+    color: #94a3b8;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: 'Courier New', monospace;
+    white-space: nowrap;
+    margin-left: 4px;
+
+    &:hover {
+        background: #1e293b;
+        color: #e2e8f0;
+    }
+}
+
 .new-session-form {
     position: absolute;
     top: 100%;
@@ -478,13 +582,66 @@ async function handleDeleteArtifact(artifactId: string) {
     overflow: hidden;
 }
 
-.workspace-stream {
+.view-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 4px 0;
+    margin-top: 8px;
     flex-shrink: 0;
-    max-height: 220px;
+}
+
+.view-tab {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border: 1px solid #1e293b;
+    border-radius: 3px 3px 0 0;
+    background: transparent;
+    color: #64748b;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: 'Courier New', monospace;
+    white-space: nowrap;
+    transition: all 0.15s;
+    position: relative;
+
+    &:hover {
+        background: #1e293b;
+        color: #94a3b8;
+    }
+
+    &.active {
+        background: #0c1222;
+        border-color: #1e293b;
+        border-bottom-color: #0c1222;
+        color: #e2e8f0;
+    }
+}
+
+.tab-icon {
+    font-size: 11px;
+}
+
+.tab-label {
+    font-size: 11px;
+}
+
+.tab-badge {
+    color: #22c55e;
+    font-size: 8px;
+    animation: pulse-dot 2s infinite;
+}
+
+.view-content {
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    min-height: 0;
-    margin-top: 8px;
+    border: 1px solid #1e293b;
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    overflow: hidden;
 }
 
 .stream-input {
@@ -597,8 +754,8 @@ async function handleDeleteArtifact(artifactId: string) {
         max-height: 300px;
     }
 
-    .workspace-stream {
-        max-height: 280px;
+    .view-content {
+        min-height: 200px;
     }
 }
 </style>

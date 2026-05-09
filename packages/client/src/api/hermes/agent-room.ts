@@ -108,6 +108,52 @@ export interface AgentRoomWorkflowEvent {
 
 export type AgentRoomArtifactType = 'final_delivery' | 'code_output' | 'review_report' | 'log' | 'other'
 
+// ─── Run Entity ────────────────────────────────────────────────
+export type AgentRoomRunStatus = 'queued' | 'running' | 'completed' | 'failed'
+
+export interface AgentRoomRun {
+    id: string
+    sessionId: string
+    taskId: string
+    status: AgentRoomRunStatus
+    upstreamRunId?: string
+    runnerName: string
+    errorMessage?: string
+    startedAt?: string
+    finishedAt?: string
+    createdAt: string
+    updatedAt: string
+}
+
+// ─── Run Event Entity ──────────────────────────────────────────
+export interface AgentRoomRunEvent {
+    id: string
+    runId: string
+    sessionId: string
+    taskId: string
+    upstreamRunId?: string
+    source: string
+    sequence: number
+    eventType: string
+    payload?: Record<string, unknown>
+    createdAt: string
+}
+
+// ─── Role Binding Entity ──────────────────────────────────────
+export interface AgentRoomRoleBinding {
+    id: string
+    sessionId: string
+    role: AgentRoomRole
+    profileName: string
+    createdAt: string
+    updatedAt: string
+}
+
+/** Fixed roles for AgentRoom (mirrors server AGENT_ROOM_ROLES) */
+export const AGENT_ROOM_ROLES: readonly AgentRoomRole[] = [
+    'conversation', 'planner', 'developer', 'reviewer', 'delivery',
+]
+
 export interface AgentRoomArtifact {
     id: string
     sessionId: string
@@ -254,10 +300,23 @@ export async function listWorkflowEvents(sessionId: string): Promise<AgentRoomWo
     return request(`${BASE}/sessions/${sessionId}/events`)
 }
 
-export async function runWorkflow(sessionId: string, taskId: string): Promise<{ success: boolean }> {
+export async function runWorkflow(sessionId: string, taskId: string): Promise<{ success: boolean; run?: AgentRoomRun }> {
     return request(`${BASE}/sessions/${sessionId}/tasks/${taskId}/workflow`, {
         method: 'POST',
     })
+}
+
+// ─── Runs API ──────────────────────────────────────────────────
+
+export async function listRuns(sessionId: string, taskId?: string): Promise<AgentRoomRun[]> {
+    const url = taskId
+        ? `${BASE}/sessions/${sessionId}/runs?taskId=${encodeURIComponent(taskId)}`
+        : `${BASE}/sessions/${sessionId}/runs`
+    return request(url)
+}
+
+export async function getRun(runId: string): Promise<AgentRoomRun> {
+    return request(`${BASE}/runs/${runId}`)
 }
 
 export async function listArtifacts(sessionId: string): Promise<AgentRoomArtifact[]> {
@@ -284,4 +343,33 @@ export async function deleteTask(sessionId: string, taskId: string): Promise<{ s
     return request(`${BASE}/sessions/${sessionId}/tasks/${taskId}`, {
         method: 'DELETE',
     })
+}
+
+// ─── Role Binding API ─────────────────────────────────────────
+export async function listRoleBindings(sessionId: string): Promise<AgentRoomRoleBinding[]> {
+    return request(`${BASE}/sessions/${sessionId}/role-bindings`)
+}
+
+export async function setRoleBinding(sessionId: string, role: AgentRoomRole, profileName: string): Promise<AgentRoomRoleBinding> {
+    return request(`${BASE}/sessions/${sessionId}/role-bindings/${role}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileName }),
+    })
+}
+
+export async function deleteRoleBindingByRole(sessionId: string, role: AgentRoomRole): Promise<{ success: boolean }> {
+    return request(`${BASE}/sessions/${sessionId}/role-bindings/${role}`, {
+        method: 'DELETE',
+    })
+}
+
+// ─── Run Events API ─────────────────────────────────────────────
+
+export async function listRunEventsBySession(sessionId: string): Promise<AgentRoomRunEvent[]> {
+    return request(`${BASE}/sessions/${sessionId}/run-events`)
+}
+
+export async function listRunEventsByRun(runId: string): Promise<AgentRoomRunEvent[]> {
+    return request(`${BASE}/runs/${runId}/events`)
 }

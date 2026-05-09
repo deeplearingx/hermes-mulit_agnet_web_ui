@@ -7,11 +7,14 @@ import { randomUUID } from 'node:crypto'
 import { buildMessageFromEvent } from './event-adapter'
 import * as store from '../../../db/hermes/agent-room-store'
 import { activeRunner } from './runner'
-import type { AgentRoomRunnerContext, AgentRoomRunnerResult, AgentRoomRunnerStep } from './runner'
+import type { AgentRoomRunnerContext, AgentRoomRunnerResult, AgentRoomRunnerStep, RunnerRoleBinding } from './runner'
 
 // ─── Types ─────────────────────────────────────────────────────
 import type { AgentRoomRole } from './role-types'
+import { assertAgentRoomRole } from './role-types'
 export type { AgentRoomRole }
+export { isAgentRoomRole, assertAgentRoomRole, AGENT_ROOM_ROLES } from './role-types'
+export type { AgentRoomRunStatus, AgentRoomRun } from '../../../db/hermes/agent-room-store'
 export type AgentRoomTaskStatus =
     | 'created'
     | 'planned'
@@ -492,8 +495,19 @@ function validateRunnerStep(
 }
 
 /**
+ * Resolve the active role for a step.
+ * Priority: step.activeRole → first event's agentRole → 'developer'.
+ */
+function resolveStepActiveRole(step: AgentRoomRunnerStep): AgentRoomRole {
+    if (step.activeRole) return step.activeRole
+    if (step.events?.length) return step.events[0].agentRole
+    return 'developer'
+}
+
+/**
  * Apply a single step to the store.
  * Each step: validate → status transition → events → messages.
+ * Also emits a run_event for observability if a runId is provided.
  */
 function applyRunnerStep(
     sessionId: string,
@@ -501,6 +515,7 @@ function applyRunnerStep(
     taskTitle: string,
     step: AgentRoomRunnerStep,
     isOrderedStep = false,
+    runId?: string,
 ): void {
     // Validate step semantics before applying
     validateRunnerStep(taskId, step, isOrderedStep)
@@ -534,6 +549,28 @@ function applyRunnerStep(
             metadata: { taskId, ...msg.metadata },
         })
     }
+
+    // Emit run_event for multi-role step observability
+    if (runId) {
+        const activeRole = resolveStepActiveRole(step)
+        const runEvent: store.AgentRoomRunEvent = {
+            id: randomUUID(),
+            runId,
+            sessionId,
+            taskId,
+            source: 'runner',
+            sequence: store.getNextRunEventSequence(runId),
+            eventType: step.status ? `step:${step.status}` : 'step:info',
+            payload: {
+                activeRole,
+                status: step.status,
+                eventTypes: step.events?.map(e => e.type) ?? [],
+                messageCount: step.messages?.length ?? 0,
+            },
+            createdAt: new Date().toISOString(),
+        }
+        store.createRunEvent(runEvent)
+    }
 }
 
 /**
@@ -545,18 +582,20 @@ function applyRunnerStep(
  * 2. **Legacy flat** (backward compat): `result.status` + `result.events` + `result.messages`.
  *
  * Artifacts are always created after all steps/status transitions complete.
+ * When runId is provided, each step emits a run_event for multi-role observability.
  */
 function applyRunnerResult(
     sessionId: string,
     taskId: string,
     taskTitle: string,
     result: AgentRoomRunnerResult,
+    runId?: string,
 ): void {
     store.runInTransaction(() => {
         // Apply ordered steps (preferred path)
         if (result.steps?.length) {
             for (const step of result.steps) {
-                applyRunnerStep(sessionId, taskId, taskTitle, step, true)
+                applyRunnerStep(sessionId, taskId, taskTitle, step, true, runId)
             }
         } else {
             // Legacy flat path (backward compat)
@@ -564,7 +603,7 @@ function applyRunnerResult(
                 status: result.status,
                 events: result.events,
                 messages: result.messages,
-            })
+            }, false, runId)
         }
 
         // Create artifacts (always after all steps complete)
@@ -587,10 +626,48 @@ function applyRunnerResult(
 }
 
 /**
+ * Emit run_events from workflow events produced during a void-runner execution.
+ * This bridges the gap for runners (like MockAgentRoomRunner) that use ctx helpers
+ * directly and return void — their workflow events are retroactively mapped to run_events.
+ */
+function emitRunEventsFromWorkflowEvents(runId: string, sessionId: string, taskId: string): void {
+    const workflowEvents = store.listWorkflowEventsBySession(sessionId)
+    const taskEvents = workflowEvents.filter(e => e.taskId === taskId)
+
+    // Deduplicate: only emit run_events for events that don't already have a corresponding run_event
+    const existingRunEvents = store.listRunEventsByRun(runId)
+    const existingEventTypes = new Set(existingRunEvents.map(e => e.eventType))
+
+    for (const evt of taskEvents) {
+        const runEventType = `workflow:${evt.type}`
+        // Skip if already emitted by applyRunnerResult
+        if (existingEventTypes.has(runEventType)) continue
+
+        const runEvent: store.AgentRoomRunEvent = {
+            id: randomUUID(),
+            runId,
+            sessionId,
+            taskId,
+            source: 'runner',
+            sequence: store.getNextRunEventSequence(runId),
+            eventType: runEventType,
+            payload: {
+                activeRole: evt.agentRole,
+                workflowEventType: evt.type,
+                agentId: evt.agentId,
+            },
+            createdAt: new Date().toISOString(),
+        }
+        store.createRunEvent(runEvent)
+    }
+}
+
+/**
  * Run the workflow for a task using the active runner.
  * Locking and startable-status validation remain in this facade.
+ * Creates a run record to track the lifecycle: queued → running → completed/failed.
  */
-export async function runWorkflow(sessionId: string, taskId: string): Promise<void> {
+export async function runWorkflow(sessionId: string, taskId: string): Promise<store.AgentRoomRun> {
     const task = assertTaskInSession(taskId, sessionId)
 
     // Guard: prevent duplicate workflow runs on the same task
@@ -606,12 +683,39 @@ export async function runWorkflow(sessionId: string, taskId: string): Promise<vo
         )
     }
 
+    const now = new Date().toISOString()
+    const run: store.AgentRoomRun = {
+        id: randomUUID(),
+        sessionId,
+        taskId,
+        status: 'queued',
+        runnerName: activeRunner.name,
+        createdAt: now,
+        updatedAt: now,
+    }
+    store.createRun(run)
+
     runningWorkflows.add(taskId)
+
+    // Transition to running
+    run.status = 'running'
+    run.startedAt = new Date().toISOString()
+    run.updatedAt = run.startedAt
+    store.updateRun(run)
+
     try {
+        // Build role bindings map for multi-role profile resolution
+        const bindings = store.listRoleBindingsBySession(sessionId)
+        const roleBindings = new Map<AgentRoomRole, RunnerRoleBinding>()
+        for (const b of bindings) {
+            roleBindings.set(b.role as AgentRoomRole, { role: b.role as AgentRoomRole, profileName: b.profileName })
+        }
+
         const ctx: AgentRoomRunnerContext = {
             sessionId,
             taskId,
             task,
+            roleBindings,
             updateTaskStatus: (tid, newStatus) => updateTaskStatus(tid, newStatus),
             emitEventAndMessage: (sid, tid, type, role, title, payload) => {
                 emitEventAndMessage(sid, tid, type, role, title, payload)
@@ -624,20 +728,82 @@ export async function runWorkflow(sessionId: string, taskId: string): Promise<vo
 
         // If runner returned a structured result, apply it via facade
         if (result) {
-            applyRunnerResult(sessionId, taskId, task.title, result)
+            applyRunnerResult(sessionId, taskId, task.title, result, run.id)
         }
+
+        // Emit run_events for observability (covers both void and result paths).
+        // For result paths, applyRunnerResult already emitted step-level run_events.
+        // For void paths (mock runner), we synthesize run_events from workflow events.
+        if (!result) {
+            emitRunEventsFromWorkflowEvents(run.id, sessionId, taskId)
+        }
+
+        // Mark run as completed
+        run.status = 'completed'
+        run.finishedAt = new Date().toISOString()
+        run.updatedAt = run.finishedAt
+        store.updateRun(run)
+    } catch (err: any) {
+        // Mark run as failed
+        run.status = 'failed'
+        run.errorMessage = err?.message ?? 'Unknown error'
+        run.finishedAt = new Date().toISOString()
+        run.updatedAt = run.finishedAt
+        store.updateRun(run)
+        throw err
     } finally {
         store.updateSessionTimestamp(sessionId)
         runningWorkflows.delete(taskId)
     }
+
+    return run
 }
 
 /**
  * Compatibility alias — delegates to runWorkflow.
  * Preserved for backward compatibility with existing callers.
  */
-export async function runMockWorkflow(sessionId: string, taskId: string): Promise<void> {
+export async function runMockWorkflow(sessionId: string, taskId: string): Promise<store.AgentRoomRun> {
     return runWorkflow(sessionId, taskId)
+}
+
+// ─── Run Queries ────────────────────────────────────────────────
+
+export function listRuns(sessionId: string): store.AgentRoomRun[] {
+    assertSessionExists(sessionId)
+    return store.listRunsBySession(sessionId)
+}
+
+export function listTaskRuns(sessionId: string, taskId: string): store.AgentRoomRun[] {
+    assertSessionExists(sessionId)
+    assertTaskInSession(taskId, sessionId)
+    return store.listRunsByTask(taskId)
+}
+
+export function getRun(runId: string): store.AgentRoomRun | null {
+    return store.getRun(runId)
+}
+
+/**
+ * Update the upstream_run_id for a run record.
+ * Used for SSE/Gateway integration: local run id is decoupled from Gateway run_id,
+ * but upstreamRunId provides the link for event correlation.
+ */
+export function updateRunUpstreamId(runId: string, upstreamRunId: string): store.AgentRoomRun | null {
+    const run = store.getRun(runId)
+    if (!run) return null
+    run.upstreamRunId = upstreamRunId
+    run.updatedAt = new Date().toISOString()
+    store.updateRun(run)
+    return run
+}
+
+/**
+ * Find a run by its upstream (Gateway) run_id.
+ * Returns null if no match.
+ */
+export function findRunByUpstreamId(upstreamRunId: string): store.AgentRoomRun | null {
+    return store.findByUpstreamRunId(upstreamRunId)
 }
 
 // ─── Retry / Deliver ───────────────────────────────────────────
@@ -790,6 +956,7 @@ function normalizeProfileName(profileName: string): string {
 
 export function createRoleBinding(sessionId: string, role: AgentRoomRole, profileName: string): AgentRoomRoleBinding {
     assertSessionExists(sessionId)
+    assertAgentRoomRole(role)
     const normalized = normalizeProfileName(profileName)
     const existing = store.getRoleBindingBySessionAndRole(sessionId, role)
     if (existing) {
@@ -802,8 +969,10 @@ export function createRoleBinding(sessionId: string, role: AgentRoomRole, profil
         profileName: normalized,
         createdAt: new Date().toISOString(),
     }
-    store.createRoleBinding(binding)
-    store.updateSessionTimestamp(sessionId)
+    store.runInTransaction(() => {
+        store.createRoleBinding(binding)
+        store.updateSessionTimestamp(sessionId)
+    })
     return binding
 }
 
@@ -813,12 +982,15 @@ export function createRoleBinding(sessionId: string, role: AgentRoomRole, profil
  */
 export function setRoleBinding(sessionId: string, role: AgentRoomRole, profileName: string): AgentRoomRoleBinding {
     assertSessionExists(sessionId)
+    assertAgentRoomRole(role)
     const normalized = normalizeProfileName(profileName)
     const existing = store.getRoleBindingBySessionAndRole(sessionId, role)
     if (existing) {
         const updated: AgentRoomRoleBinding = { ...existing, role: existing.role as AgentRoomRole, profileName: normalized }
-        store.updateRoleBinding(updated)
-        store.updateSessionTimestamp(sessionId)
+        store.runInTransaction(() => {
+            store.updateRoleBinding(updated)
+            store.updateSessionTimestamp(sessionId)
+        })
         return updated
     }
     return createRoleBinding(sessionId, role, normalized)
@@ -850,8 +1022,10 @@ export function updateRoleBinding(sessionId: string, bindingId: string, profileN
         throw new Error(`Role binding belongs to session ${binding.sessionId}, not ${sessionId}`)
     }
     const updated: AgentRoomRoleBinding = { ...binding, role: binding.role as AgentRoomRole, profileName: normalized }
-    store.updateRoleBinding(updated as store.AgentRoomRoleBinding)
-    store.updateSessionTimestamp(sessionId)
+    store.runInTransaction(() => {
+        store.updateRoleBinding(updated as store.AgentRoomRoleBinding)
+        store.updateSessionTimestamp(sessionId)
+    })
     return updated
 }
 
@@ -862,6 +1036,42 @@ export function deleteRoleBinding(sessionId: string, bindingId: string): void {
     if (binding.sessionId !== sessionId) {
         throw new Error(`Role binding belongs to session ${binding.sessionId}, not ${sessionId}`)
     }
-    store.deleteRoleBinding(bindingId)
-    store.updateSessionTimestamp(sessionId)
+    store.runInTransaction(() => {
+        store.deleteRoleBinding(bindingId)
+        store.updateSessionTimestamp(sessionId)
+    })
+}
+
+/**
+ * Delete a role binding by session + role (no-op if not found).
+ * Preferred API for route-level DELETE by role name.
+ */
+export function deleteRoleBindingByRole(sessionId: string, role: AgentRoomRole): void {
+    assertSessionExists(sessionId)
+    assertAgentRoomRole(role)
+    const binding = store.getRoleBindingBySessionAndRole(sessionId, role)
+    if (!binding) return // no-op
+    store.runInTransaction(() => {
+        store.deleteRoleBinding(binding.id)
+        store.updateSessionTimestamp(sessionId)
+    })
+}
+
+// ─── Run Event Queries ──────────────────────────────────────────
+
+export type { AgentRoomRunEvent } from '../../../db/hermes/agent-room-store'
+
+/**
+ * List all run events for a specific run, ordered by sequence.
+ */
+export function listRunEventsByRun(runId: string): store.AgentRoomRunEvent[] {
+    return store.listRunEventsByRun(runId)
+}
+
+/**
+ * List all run events for a session, ordered by created_at.
+ */
+export function listRunEventsBySession(sessionId: string): store.AgentRoomRunEvent[] {
+    assertSessionExists(sessionId)
+    return store.listRunEventsBySession(sessionId)
 }
