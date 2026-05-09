@@ -769,3 +769,62 @@ export function deleteArtifact(sessionId: string, artifactId: string): void {
     }
     store.deleteArtifact(artifactId)
 }
+
+// ─── Role Binding CRUD ─────────────────────────────────────────
+
+export interface AgentRoomRoleBinding {
+    id: string
+    sessionId: string
+    role: AgentRoomRole
+    agentId: string
+    createdAt: string
+}
+
+export function createRoleBinding(sessionId: string, role: AgentRoomRole, agentId: string): AgentRoomRoleBinding {
+    assertSessionExists(sessionId)
+    const existing = store.getRoleBindingBySessionAndRole(sessionId, role)
+    if (existing) {
+        throw new Error(`Role binding already exists for session=${sessionId} role=${role}`)
+    }
+    const binding: AgentRoomRoleBinding = {
+        id: randomUUID(),
+        sessionId,
+        role,
+        agentId,
+        createdAt: new Date().toISOString(),
+    }
+    store.createRoleBinding(binding)
+    return binding
+}
+
+export function listRoleBindings(sessionId: string): AgentRoomRoleBinding[] {
+    assertSessionExists(sessionId)
+    return store.listRoleBindingsBySession(sessionId) as AgentRoomRoleBinding[]
+}
+
+export function getRoleBindingForAgent(sessionId: string, role: AgentRoomRole): AgentRoomRoleBinding | null {
+    assertSessionExists(sessionId)
+    return store.getRoleBindingBySessionAndRole(sessionId, role) as AgentRoomRoleBinding | null
+}
+
+export function updateRoleBinding(sessionId: string, bindingId: string, agentId: string): AgentRoomRoleBinding {
+    assertSessionExists(sessionId)
+    const binding = store.getRoleBinding(bindingId)
+    if (!binding) throw new Error('Role binding not found')
+    if (binding.sessionId !== sessionId) {
+        throw new Error(`Role binding belongs to session ${binding.sessionId}, not ${sessionId}`)
+    }
+    const updated: AgentRoomRoleBinding = { ...binding, role: binding.role as AgentRoomRole, agentId }
+    store.updateRoleBinding(updated)
+    return updated
+}
+
+export function deleteRoleBinding(sessionId: string, bindingId: string): void {
+    assertSessionExists(sessionId)
+    const binding = store.getRoleBinding(bindingId)
+    if (!binding) throw new Error('Role binding not found')
+    if (binding.sessionId !== sessionId) {
+        throw new Error(`Role binding belongs to session ${binding.sessionId}, not ${sessionId}`)
+    }
+    store.deleteRoleBinding(bindingId)
+}

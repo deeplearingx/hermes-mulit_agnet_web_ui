@@ -19,6 +19,7 @@ import {
     AR_MESSAGES_TABLE,
     AR_WORKFLOW_EVENTS_TABLE,
     AR_ARTIFACTS_TABLE,
+    AR_ROLE_BINDINGS_TABLE,
 } from './schemas'
 
 // ─── Domain Types (mirrored from services/hermes/agent-room/index.ts) ───
@@ -85,6 +86,14 @@ export interface AgentRoomArtifact {
     type: string
     content?: string
     metadata?: Record<string, unknown>
+    createdAt: string
+}
+
+export interface AgentRoomRoleBinding {
+    id: string
+    sessionId: string
+    role: string
+    agentId: string
     createdAt: string
 }
 
@@ -376,18 +385,71 @@ export function deleteArtifactsBySession(sessionId: string): void {
     db.prepare(`DELETE FROM ${AR_ARTIFACTS_TABLE} WHERE session_id = ?`).run(sessionId)
 }
 
+// ─── Role Bindings ─────────────────────────────────────────────
+
+function mapRoleBindingRow(row: Record<string, unknown>): AgentRoomRoleBinding {
+    return {
+        id: String(row.id),
+        sessionId: String(row.session_id),
+        role: String(row.role),
+        agentId: String(row.agent_id),
+        createdAt: String(row.created_at),
+    }
+}
+
+export function createRoleBinding(binding: AgentRoomRoleBinding): void {
+    const db = requireDb()
+    db.prepare(`INSERT INTO ${AR_ROLE_BINDINGS_TABLE} (id, session_id, role, agent_id, created_at) VALUES (?, ?, ?, ?, ?)`)
+        .run(binding.id, binding.sessionId, binding.role, binding.agentId, binding.createdAt)
+}
+
+export function getRoleBinding(id: string): AgentRoomRoleBinding | null {
+    const db = requireDb()
+    const row = db.prepare(`SELECT * FROM ${AR_ROLE_BINDINGS_TABLE} WHERE id = ?`).get(id) as Record<string, unknown> | undefined
+    return row ? mapRoleBindingRow(row) : null
+}
+
+export function listRoleBindingsBySession(sessionId: string): AgentRoomRoleBinding[] {
+    const db = requireDb()
+    const rows = db.prepare(`SELECT * FROM ${AR_ROLE_BINDINGS_TABLE} WHERE session_id = ? ORDER BY created_at`).all(sessionId) as Record<string, unknown>[]
+    return rows.map(mapRoleBindingRow)
+}
+
+export function getRoleBindingBySessionAndRole(sessionId: string, role: string): AgentRoomRoleBinding | null {
+    const db = requireDb()
+    const row = db.prepare(`SELECT * FROM ${AR_ROLE_BINDINGS_TABLE} WHERE session_id = ? AND role = ?`).get(sessionId, role) as Record<string, unknown> | undefined
+    return row ? mapRoleBindingRow(row) : null
+}
+
+export function updateRoleBinding(binding: AgentRoomRoleBinding): void {
+    const db = requireDb()
+    db.prepare(`UPDATE ${AR_ROLE_BINDINGS_TABLE} SET agent_id = ? WHERE id = ?`)
+        .run(binding.agentId, binding.id)
+}
+
+export function deleteRoleBinding(id: string): void {
+    const db = requireDb()
+    db.prepare(`DELETE FROM ${AR_ROLE_BINDINGS_TABLE} WHERE id = ?`).run(id)
+}
+
+export function deleteRoleBindingsBySession(sessionId: string): void {
+    const db = requireDb()
+    db.prepare(`DELETE FROM ${AR_ROLE_BINDINGS_TABLE} WHERE session_id = ?`).run(sessionId)
+}
+
 // ─── Cascade Delete ─────────────────────────────────────────────
 
 /**
- * Delete a session and all its child records (tasks, reviews, messages, workflow events).
+ * Delete a session and all its child records (tasks, reviews, messages, workflow events, role bindings).
  * Caller is responsible for transaction management.
  */
 export function deleteSessionCascade(sessionId: string): void {
     const db = requireDb()
-    // Delete in dependency order: reviews → workflow_events → artifacts → messages → tasks → session
+    // Delete in dependency order: reviews → workflow_events → artifacts → role_bindings → messages → tasks → session
     db.prepare(`DELETE FROM ${AR_REVIEWS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_WORKFLOW_EVENTS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_ARTIFACTS_TABLE} WHERE session_id = ?`).run(sessionId)
+    db.prepare(`DELETE FROM ${AR_ROLE_BINDINGS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_MESSAGES_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_TASKS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_SESSIONS_TABLE} WHERE id = ?`).run(sessionId)

@@ -99,6 +99,15 @@ async function main(): Promise<void> {
         if (codeOutput && codeOutput.metadata?.source !== 'hermes-gateway') {
             errors.push('code_output artifact missing metadata.source=hermes-gateway')
         }
+        if (ASSIGNED_AGENT_ID && codeOutput?.metadata?.profileName !== ASSIGNED_AGENT_ID) {
+            errors.push(`Expected metadata.profileName=${ASSIGNED_AGENT_ID}, got ${codeOutput?.metadata?.profileName}`)
+        }
+        if (ASSIGNED_AGENT_ID && INIT_GATEWAY_MANAGER && codeOutput?.metadata?.resolutionSource !== 'gateway-manager') {
+            errors.push(`Expected metadata.resolutionSource=gateway-manager, got ${codeOutput?.metadata?.resolutionSource}`)
+        }
+        if (ASSIGNED_AGENT_ID && !INIT_GATEWAY_MANAGER && codeOutput?.metadata?.resolutionSource !== 'constructor-fallback') {
+            errors.push(`Expected metadata.resolutionSource=constructor-fallback, got ${codeOutput?.metadata?.resolutionSource}`)
+        }
 
         if (errors.length > 0) {
             console.error('❌ Workflow smoke assertions failed')

@@ -107,8 +107,8 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
         // Fail fast on unsupported statuses BEFORE calling the Gateway.
         assertSupportedStartStatus(input.currentStatus)
 
-        // Resolve target from assignedAgentId → profileName → upstream/apiKey/model/provider.
-        const target = this.profileResolver(input.assignedAgentId, this.upstream, this.apiKey)
+        // Resolve target from role binding / assignedAgentId → profileName → upstream/apiKey/model/provider.
+        const target = this.profileResolver(input.assignedAgentId, this.upstream, this.apiKey, { sessionId: input.sessionId })
 
         const gatewaySessionId = `agent-room-${input.sessionId}-${input.taskId}`
 

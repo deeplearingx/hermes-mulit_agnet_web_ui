@@ -412,7 +412,7 @@ describe('GatewayHermesRuntime', () => {
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
             await runtime.runTask(makeInput())
 
-            expect(resolver).toHaveBeenCalledWith('dev-agent', 'http://127.0.0.1:8642', null)
+            expect(resolver).toHaveBeenCalledWith('dev-agent', 'http://127.0.0.1:8642', null, { sessionId: 'sess-1' })
 
             const call = vi.mocked(runHermesGatewayTask).mock.calls[0][0]
             expect(call.upstream).toBe('http://profile-gateway:9999')
@@ -436,7 +436,7 @@ describe('GatewayHermesRuntime', () => {
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
             await runtime.runTask(makeInput({ assignedAgentId: 'my-agent' }))
 
-            expect(resolver).toHaveBeenCalledWith('my-agent', 'http://127.0.0.1:8642', null)
+            expect(resolver).toHaveBeenCalledWith('my-agent', 'http://127.0.0.1:8642', null, { sessionId: 'sess-1' })
         })
 
         it('includes profileName/model/provider/resolutionSource in artifact metadata', async () => {
