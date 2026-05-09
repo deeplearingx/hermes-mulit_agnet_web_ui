@@ -24,7 +24,8 @@ export type {
     HermesAgentRuntimeMessage,
     HermesAgentRuntimeArtifact,
 } from './runtime'
-export { DeterministicHermesRuntime, RealHermesRuntime, GatewayHermesRuntime, createHermesAgentRuntime } from './runtime'
+export { DeterministicHermesRuntime, RealHermesRuntime, GatewayHermesRuntime, OrchestratedGatewayRuntime, createHermesAgentRuntime } from './runtime'
+export type { OrchestratedRuntimeConfig } from './runtime'
 
 import type { AgentRoomRunner } from './types'
 import { MockAgentRoomRunner } from './mock-runner'

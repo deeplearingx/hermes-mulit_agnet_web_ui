@@ -1,5 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Mock gateway-run-client at module level so it's available for all tests
+// (individual tests can configure the mock implementation as needed)
+vi.mock('../../packages/server/src/services/hermes/gateway-run-client', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../packages/server/src/services/hermes/gateway-run-client')>()
+    return {
+        ...actual,
+        runHermesGatewayTask: vi.fn(),
+    }
+})
+
+// Mock config at module level
+vi.mock('../../packages/server/src/config', () => ({
+    config: {
+        upstream: 'http://127.0.0.1:8642',
+    },
+}))
+
 function ensureTableForTest(db: any, tableName: string, schema: Record<string, string>): void {
     const cols = Object.entries(schema).map(([col, type]) => `${col} ${type}`).join(', ')
     db.exec(`CREATE TABLE IF NOT EXISTS ${tableName} (${cols})`)
@@ -392,5 +409,96 @@ describe('Agent Room — Async Start (P4.10)', () => {
         expect(ctx.body).toHaveProperty('run')
         // run-sync is synchronous, so the run should be completed
         expect(ctx.body.run.status).toBe('completed')
+    })
+
+    // ── End-to-end: startWorkflow + GatewayHermesRuntime + mock Gateway ──
+
+    it('startWorkflow + GatewayHermesRuntime: full async chain with hooks', async () => {
+        const { runHermesGatewayTask } = await import('../../packages/server/src/services/hermes/gateway-run-client')
+
+        // Configure mock to invoke hooks (onUpstreamRunCreated, onRawEvent)
+        vi.mocked(runHermesGatewayTask).mockImplementation(async (params: any) => {
+            // Simulate Gateway: call hooks then return result
+            if (params.onUpstreamRunCreated) {
+                params.onUpstreamRunCreated('upstream-run-e2e-001')
+            }
+            if (params.onRawEvent) {
+                params.onRawEvent({ event: 'run.created', data: { id: 'upstream-run-e2e-001' } })
+                params.onRawEvent({ event: 'step.started', data: { step: 'planning' } })
+                params.onRawEvent({ event: 'step.completed', data: { step: 'planning' } })
+            }
+            return {
+                output: 'E2E feature implemented with full observability',
+                runId: 'upstream-run-e2e-001',
+                sessionId: `agent-room-${params.sessionId}`,
+            }
+        })
+
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+        const { GatewayHermesRuntime } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner/runtime/gateway-hermes-runtime'
+        )
+
+        const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
+        setActiveRunnerForTest(new RealAgentRunner(runtime))
+
+        const session = svc.createSession('E2E Async Gateway Test')
+        const task = svc.createTask(session.id, 'Build Feature', 'Implement feature with observability')
+
+        // Use startWorkflow (async) instead of runWorkflow (sync)
+        const run = svc.startWorkflow(session.id, task.id)
+
+        // 1. Run should be returned immediately (queued or running)
+        expect(['queued', 'running']).toContain(run.status)
+
+        // 2. Wait for background execution to complete
+        await vi.waitFor(() => {
+            const updatedRun = svc.getRun(run.id)!
+            expect(updatedRun.status).toBe('completed')
+        }, { timeout: 5000 })
+
+        // 3. upstreamRunId should be written back
+        const completedRun = svc.getRun(run.id)!
+        expect(completedRun.upstreamRunId).toBe('upstream-run-e2e-001')
+
+        // 4. Task should reach submitted_for_review
+        const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(finalTask.status).toBe('submitted_for_review')
+
+        // 5. gateway_sse events should be persisted
+        const runEvents = svc.listRunEventsByRun(run.id)
+        const gatewayEvents = runEvents.filter(e => e.source === 'gateway_sse')
+        expect(gatewayEvents.length).toBeGreaterThanOrEqual(3)
+        expect(gatewayEvents.some(e => e.eventType === 'run.created')).toBe(true)
+        expect(gatewayEvents.some(e => e.eventType === 'step.started')).toBe(true)
+        expect(gatewayEvents.some(e => e.eventType === 'step.completed')).toBe(true)
+
+        // 6. Runner step events should be persisted
+        const runnerEvents = runEvents.filter(e => e.source === 'runner')
+        expect(runnerEvents.length).toBeGreaterThanOrEqual(4) // planned, assigned, in_progress, submitted_for_review
+        expect(runnerEvents.some(e => e.eventType === 'step:planned')).toBe(true)
+        expect(runnerEvents.some(e => e.eventType === 'step:assigned')).toBe(true)
+        expect(runnerEvents.some(e => e.eventType === 'step:in_progress')).toBe(true)
+        expect(runnerEvents.some(e => e.eventType === 'step:submitted_for_review')).toBe(true)
+
+        // 7. Artifact should exist with code_output type and metadata
+        const artifacts = svc.listTaskArtifacts(session.id, task.id)
+        expect(artifacts).toHaveLength(1)
+        expect(artifacts[0].type).toBe('code_output')
+        expect(artifacts[0].content).toBe('E2E feature implemented with full observability')
+        const meta = artifacts[0].metadata as Record<string, unknown>
+        expect(meta.runId).toBe('upstream-run-e2e-001')
+        expect(meta.source).toBe('hermes-gateway')
+        expect(meta.bindingSource).toBe('none')
+        expect(meta.transportSource).toBe('constructor-fallback')
+
+        // 8. No events with old 'gateway' source name
+        const oldGatewayEvents = runEvents.filter(e => e.source === 'gateway')
+        expect(oldGatewayEvents.length).toBe(0)
+
+        resetActiveRunnerForTest()
     })
 })

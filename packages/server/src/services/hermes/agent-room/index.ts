@@ -674,6 +674,8 @@ function buildRunHooks(run: store.AgentRoomRun): HermesAgentRuntimeHooks {
         onUpstreamRunCreated: (upstreamRunId: string) => {
             try {
                 updateRunUpstreamId(run.id, upstreamRunId)
+                // Also update in-memory object so the final store.updateRun() preserves it
+                run.upstreamRunId = upstreamRunId
             } catch { /* swallow — non-critical */ }
         },
         onRawEvent: (event: Record<string, unknown>) => {

@@ -21,6 +21,28 @@ export interface RuntimeRoleBinding {
 }
 
 /**
+ * Forward-compatible metadata contract for planner → developer orchestration.
+ * All fields are optional — populated only when multi-role orchestration is active.
+ *
+ * Design notes:
+ *   - plannerRunId / developerRunId: upstream Gateway run IDs for observability correlation
+ *   - plannerProfileName / developerProfileName: resolved profile names for each role phase
+ *   - This interface is a contract placeholder; actual population logic is deferred to P4.11-A3+
+ */
+export interface HermesAgentRuntimeMetadata {
+    /** Upstream Gateway run ID for the planner phase (if executed). */
+    plannerRunId?: string
+    /** Upstream Gateway run ID for the developer phase (if executed). */
+    developerRunId?: string
+    /** Resolved profile name used for the planner role. */
+    plannerProfileName?: string
+    /** Resolved profile name used for the developer role. */
+    developerProfileName?: string
+    /** Extensible bag for future metadata without interface changes. */
+    [key: string]: unknown
+}
+
+/**
  * Input to the Hermes agent runtime.
  * Derived from AgentRoom context — the runner extracts these fields.
  */
@@ -54,6 +76,22 @@ export interface HermesAgentRuntimeInput {
      * The runtime should call these at key lifecycle points (e.g. when upstream run_id is received).
      */
     hooks?: HermesAgentRuntimeHooks
+
+    /**
+     * Optional planner output / plan artifact from a prior planner phase.
+     * Forward-compatible placeholder for planner → developer handoff.
+     * When present, the runtime may use this to guide developer execution.
+     * Currently unused — will be consumed by orchestrated runtime in P4.11-A3+.
+     */
+    plannerPlan?: string
+
+    /**
+     * Forward-compatible metadata for planner/developer orchestration.
+     * All fields are optional and additive — populated only when multi-role orchestration is active.
+     * See {@link HermesAgentRuntimeMetadata} for the full shape.
+     * Currently unused by GatewayHermesRuntime — reserved for OrchestratedGatewayRuntime in P4.11-A3+.
+     */
+    metadata?: HermesAgentRuntimeMetadata
 }
 
 /** A workflow event in runtime output. */

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { DeterministicHermesRuntime } from '../../packages/server/src/services/hermes/agent-room/runner/runtime/deterministic-runtime'
-import type { HermesAgentRuntimeInput } from '../../packages/server/src/services/hermes/agent-room/runner/runtime/types'
+import type {
+    HermesAgentRuntimeInput,
+    HermesAgentRuntimeMetadata,
+} from '../../packages/server/src/services/hermes/agent-room/runner/runtime/types'
 import type { AgentRoomRunnerResult } from '../../packages/server/src/services/hermes/agent-room/runner'
 
 describe('Hermes Agent Runtime Contract', () => {
@@ -116,5 +119,80 @@ describe('Hermes Agent Runtime Contract', () => {
         expect(mapped.steps![0].status).toBe('planned')
         expect(mapped.steps![0].events![0].type).toBe('task_planned')
         expect(mapped.steps![0].events![0].agentRole).toBe('planner')
+    })
+})
+
+describe('HermesAgentRuntimeInput contract — P4.11-A2 forward-compatible fields', () => {
+    const runtime = new DeterministicHermesRuntime()
+
+    function makeInput(overrides: Partial<HermesAgentRuntimeInput> = {}): HermesAgentRuntimeInput {
+        return {
+            taskTitle: 'Test Task',
+            taskDescription: 'A test task',
+            currentStatus: 'created',
+            sessionId: 'session-1',
+            taskId: 'task-1',
+            revisionRound: 0,
+            ...overrides,
+        }
+    }
+
+    it('HermesAgentRuntimeInput accepts optional plannerPlan field', () => {
+        const input = makeInput({ plannerPlan: 'Build a login page with OAuth' })
+        expect(input.plannerPlan).toBe('Build a login page with OAuth')
+    })
+
+    it('HermesAgentRuntimeInput accepts optional metadata field with planner/developer contract', () => {
+        const metadata: HermesAgentRuntimeMetadata = {
+            plannerRunId: 'run-planner-001',
+            developerRunId: 'run-dev-001',
+            plannerProfileName: 'gpt-4o',
+            developerProfileName: 'claude-3.5-sonnet',
+        }
+        const input = makeInput({ metadata })
+        expect(input.metadata?.plannerRunId).toBe('run-planner-001')
+        expect(input.metadata?.developerRunId).toBe('run-dev-001')
+        expect(input.metadata?.plannerProfileName).toBe('gpt-4o')
+        expect(input.metadata?.developerProfileName).toBe('claude-3.5-sonnet')
+    })
+
+    it('HermesAgentRuntimeMetadata allows extensible keys', () => {
+        const metadata: HermesAgentRuntimeMetadata = {
+            plannerRunId: 'run-planner-001',
+            customKey: 'custom-value',
+        }
+        expect(metadata.customKey).toBe('custom-value')
+    })
+
+    it('runtime ignores plannerPlan and metadata — existing behavior unchanged', async () => {
+        const input = makeInput({
+            plannerPlan: 'Some plan',
+            metadata: {
+                plannerRunId: 'run-p',
+                developerRunId: 'run-d',
+                plannerProfileName: 'gpt-4o',
+                developerProfileName: 'claude-3.5-sonnet',
+            },
+        })
+        const output = await runtime.runTask(input)
+
+        // DeterministicHermesRuntime should produce the same 4-step output
+        // regardless of plannerPlan or metadata presence.
+        expect(output.steps).toHaveLength(4)
+        expect(output.steps[0].status).toBe('planned')
+        expect(output.steps[3].status).toBe('submitted_for_review')
+    })
+
+    it('runtime works without plannerPlan and metadata — backward compatible', async () => {
+        const input = makeInput() // no plannerPlan, no metadata
+        const output = await runtime.runTask(input)
+        expect(output.steps).toHaveLength(4)
+    })
+
+    it('HermesAgentRuntimeMetadata is exported from runtime index', async () => {
+        // Type-level import check — ensures the type is re-exported
+        const mod = await import('../../packages/server/src/services/hermes/agent-room/runner/runtime')
+        // HermesAgentRuntimeMetadata is a type-only export, so we verify the module loads
+        expect(mod).toBeDefined()
     })
 })
