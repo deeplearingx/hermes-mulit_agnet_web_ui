@@ -406,13 +406,14 @@ describe('GatewayHermesRuntime', () => {
                 apiKey: 'sk-profile-key',
                 model: 'claude-sonnet-4-20250514',
                 provider: 'anthropic',
-                profileName: 'custom-profile',
             }))
 
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
             await runtime.runTask(makeInput())
 
-            expect(resolver).toHaveBeenCalledWith('dev-agent', 'http://127.0.0.1:8642', null, { sessionId: 'sess-1', role: 'developer' })
+            // Resolver is now DB-free: called with (profileName, fallbackUpstream, fallbackApiKey)
+            // profileName is resolved from roleBindings (none in makeInput) → falls back to assignedAgentId
+            expect(resolver).toHaveBeenCalledWith('dev-agent', 'http://127.0.0.1:8642', null)
 
             const call = vi.mocked(runHermesGatewayTask).mock.calls[0][0]
             expect(call.upstream).toBe('http://profile-gateway:9999')
@@ -421,7 +422,7 @@ describe('GatewayHermesRuntime', () => {
             expect(call.provider).toBe('anthropic')
         })
 
-        it('passes assignedAgentId to resolver', async () => {
+        it('passes assignedAgentId as profileName to resolver when no roleBindings', async () => {
             vi.mocked(runHermesGatewayTask).mockResolvedValue({
                 output: 'done',
                 runId: 'run-1',
@@ -436,7 +437,43 @@ describe('GatewayHermesRuntime', () => {
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
             await runtime.runTask(makeInput({ assignedAgentId: 'my-agent' }))
 
-            expect(resolver).toHaveBeenCalledWith('my-agent', 'http://127.0.0.1:8642', null, { sessionId: 'sess-1', role: 'developer' })
+            expect(resolver).toHaveBeenCalledWith('my-agent', 'http://127.0.0.1:8642', null)
+        })
+
+        it('uses roleBindings developer profileName over assignedAgentId', async () => {
+            vi.mocked(runHermesGatewayTask).mockResolvedValue({
+                output: 'done',
+                runId: 'run-rb',
+                sessionId: 'agent-room-sess-1-task-1',
+            })
+
+            const resolver = vi.fn(() => ({
+                upstream: 'http://127.0.0.1:8642',
+                apiKey: null,
+                model: 'gpt-4o',
+                provider: 'openai',
+                transportSource: 'gateway-manager' as const,
+            }))
+
+            const roleBindings = new Map([
+                ['developer' as const, { role: 'developer' as const, profileName: 'custom-dev-profile' }],
+            ])
+
+            const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
+            const result = await runtime.runTask(makeInput({ roleBindings }))
+
+            // profileName comes from roleBindings, not resolver
+            expect(resolver).toHaveBeenCalledWith('custom-dev-profile', 'http://127.0.0.1:8642', null)
+            expect(result.artifacts![0].metadata).toEqual({
+                runId: 'run-rb',
+                source: 'hermes-gateway',
+                profileName: 'custom-dev-profile',
+                model: 'gpt-4o',
+                provider: 'openai',
+                bindingSource: 'role-binding',
+                transportSource: 'gateway-manager',
+                roleBindings: { developer: 'custom-dev-profile' },
+            })
         })
 
         it('includes profileName/model/provider/bindingSource/transportSource in artifact metadata', async () => {
@@ -451,18 +488,17 @@ describe('GatewayHermesRuntime', () => {
                 apiKey: null,
                 model: 'gpt-4o',
                 provider: 'openai',
-                profileName: 'openai-profile',
-                bindingSource: 'assigned-agent' as const,
                 transportSource: 'gateway-manager' as const,
             })
 
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
             const result = await runtime.runTask(makeInput())
 
+            // profileName comes from runtime's assignedAgentId fallback (no roleBindings in makeInput)
             expect(result.artifacts![0].metadata).toEqual({
                 runId: 'run-meta',
                 source: 'hermes-gateway',
-                profileName: 'openai-profile',
+                profileName: 'dev-agent',
                 model: 'gpt-4o',
                 provider: 'openai',
                 bindingSource: 'assigned-agent',
@@ -480,8 +516,6 @@ describe('GatewayHermesRuntime', () => {
             const resolver = () => ({
                 upstream: 'http://127.0.0.1:8642',
                 apiKey: 'sk-secret-123',
-                profileName: 'secret-profile',
-                bindingSource: 'assigned-agent' as const,
                 transportSource: 'gateway-manager' as const,
             })
 
@@ -493,7 +527,7 @@ describe('GatewayHermesRuntime', () => {
             expect(JSON.stringify(metadata)).not.toContain('sk-secret-123')
         })
 
-        it('fallback resolver returns bindingSource=none and transportSource=constructor-fallback', async () => {
+        it('fallback resolver returns bindingSource=assigned-agent and transportSource=constructor-fallback', async () => {
             vi.mocked(runHermesGatewayTask).mockResolvedValue({
                 output: 'done',
                 runId: 'run-fb',

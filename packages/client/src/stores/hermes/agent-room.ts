@@ -162,8 +162,9 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
             if (currentSessionId.value !== sessionId) return
             runs.value = nextRuns
             runEvents.value = nextRunEvents
-            // If no more active runs, also do a full refresh to pick up artifacts/messages
+            // If no more active runs, stop polling immediately and do a full refresh
             if (nextRuns.every(r => r.status === 'completed' || r.status === 'failed')) {
+                stopPolling()
                 await refreshCurrentSession()
             }
         } catch {

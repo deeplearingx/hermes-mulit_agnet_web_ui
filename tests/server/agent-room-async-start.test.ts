@@ -226,10 +226,75 @@ describe('Agent Room — Async Start (P4.10)', () => {
         }, { timeout: 5000 })
 
         const runEvents = svc.listRunEventsByRun(run.id)
-        const gatewayEvents = runEvents.filter(e => e.source === 'gateway')
+        const gatewayEvents = runEvents.filter(e => e.source === 'gateway_sse')
         expect(gatewayEvents.length).toBeGreaterThanOrEqual(2)
         expect(gatewayEvents.some(e => e.eventType === 'run.created')).toBe(true)
         expect(gatewayEvents.some(e => e.eventType === 'step.completed')).toBe(true)
+
+        resetActiveRunnerForTest()
+    })
+
+    it('runner step events have source=runner and gateway raw events have source=gateway_sse', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const session = svc.createSession('Source Test')
+        const task = svc.createTask(session.id, 'Task', '')
+
+        let capturedHooks: any = null
+        setActiveRunnerForTest({
+            name: 'real',
+            run: async (ctx: any) => {
+                capturedHooks = ctx.hooks
+                // Return structured steps — these produce runner-sourced run_events
+                return {
+                    steps: [
+                        { status: 'planned' as const, activeRole: 'planner' as const, events: [{ type: 'task_planned', agentRole: 'planner' as const }], messages: [] },
+                        { status: 'assigned' as const, activeRole: 'developer' as const, events: [{ type: 'task_assigned', agentRole: 'developer' as const }] },
+                        { status: 'in_progress' as const, activeRole: 'developer' as const, events: [{ type: 'task_started', agentRole: 'developer' as const }], messages: [] },
+                        { status: 'submitted_for_review' as const, activeRole: 'developer' as const, events: [{ type: 'task_submitted', agentRole: 'developer' as const }], messages: [] },
+                    ],
+                    artifacts: [],
+                }
+            },
+        })
+
+        const run = svc.startWorkflow(session.id, task.id)
+
+        await vi.waitFor(() => {
+            expect(capturedHooks).not.toBeNull()
+        }, { timeout: 5000 })
+
+        // Simulate raw SSE events (gateway_sse source)
+        capturedHooks.onRawEvent({ event: 'run.created', data: { id: 'upstream-1' } })
+        capturedHooks.onRawEvent({ event: 'step.completed', data: { step: 'planning' } })
+
+        await vi.waitFor(() => {
+            const updatedRun = svc.getRun(run.id)!
+            expect(updatedRun.status).toBe('completed')
+        }, { timeout: 5000 })
+
+        const runEvents = svc.listRunEventsByRun(run.id)
+
+        // Gateway raw events should have source=gateway_sse
+        const gatewayEvents = runEvents.filter(e => e.source === 'gateway_sse')
+        expect(gatewayEvents.length).toBeGreaterThanOrEqual(2)
+        expect(gatewayEvents.some(e => e.eventType === 'run.created')).toBe(true)
+        expect(gatewayEvents.some(e => e.eventType === 'step.completed')).toBe(true)
+
+        // Runner step events should have source=runner
+        const runnerEvents = runEvents.filter(e => e.source === 'runner')
+        expect(runnerEvents.length).toBeGreaterThanOrEqual(4) // planned, assigned, in_progress, submitted_for_review
+        expect(runnerEvents.some(e => e.eventType === 'step:planned')).toBe(true)
+        expect(runnerEvents.some(e => e.eventType === 'step:assigned')).toBe(true)
+        expect(runnerEvents.some(e => e.eventType === 'step:in_progress')).toBe(true)
+        expect(runnerEvents.some(e => e.eventType === 'step:submitted_for_review')).toBe(true)
+
+        // No events should have source='gateway' (old name)
+        const oldGatewayEvents = runEvents.filter(e => e.source === 'gateway')
+        expect(oldGatewayEvents.length).toBe(0)
 
         resetActiveRunnerForTest()
     })

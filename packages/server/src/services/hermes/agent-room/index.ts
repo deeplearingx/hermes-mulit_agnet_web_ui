@@ -684,7 +684,7 @@ function buildRunHooks(run: store.AgentRoomRun): HermesAgentRuntimeHooks {
                     runId: run.id,
                     sessionId: run.sessionId,
                     taskId: run.taskId,
-                    source: 'gateway',
+                    source: 'gateway_sse',
                     sequence: store.getNextRunEventSequence(run.id),
                     eventType,
                     payload: event,
@@ -697,20 +697,10 @@ function buildRunHooks(run: store.AgentRoomRun): HermesAgentRuntimeHooks {
 }
 
 /**
- * Shared execution kernel for workflow runs.
- * Creates a run record, executes the runner, and tracks lifecycle.
- * Both sync `runWorkflow()` and async `startWorkflow()` delegate here.
- *
- * @param sessionId  Session containing the task
- * @param taskId     Task to run
- * @param task       Already-validated task (avoids redundant lookup)
- * @returns          The run record (completed/failed for sync, queued for fire-and-forget)
+ * Create a run record in 'queued' status.
+ * Shared helper for both sync and async workflow entry points.
  */
-async function executeWorkflowCore(
-    sessionId: string,
-    taskId: string,
-    task: AgentRoomTask,
-): Promise<store.AgentRoomRun> {
+function createRunRecord(sessionId: string, taskId: string): store.AgentRoomRun {
     const now = new Date().toISOString()
     const run: store.AgentRoomRun = {
         id: randomUUID(),
@@ -722,7 +712,25 @@ async function executeWorkflowCore(
         updatedAt: now,
     }
     store.createRun(run)
+    return run
+}
 
+/**
+ * Core execution logic shared by sync and async paths.
+ * Operates on an already-created run record.
+ * Transitions the run through running → completed/failed lifecycle.
+ *
+ * @param run       Pre-created run record (status: queued)
+ * @param rethrow   If true (sync path), rethrow errors after marking run as failed.
+ *                  If false (async/background path), swallow errors after logging.
+ */
+async function executeRun(
+    sessionId: string,
+    taskId: string,
+    task: AgentRoomTask,
+    run: store.AgentRoomRun,
+    rethrow: boolean,
+): Promise<void> {
     runningWorkflows.add(taskId)
 
     // Transition to running
@@ -782,13 +790,17 @@ async function executeWorkflowCore(
         run.finishedAt = new Date().toISOString()
         run.updatedAt = run.finishedAt
         store.updateRun(run)
-        throw err
+
+        if (rethrow) {
+            throw err
+        } else {
+            // Background execution: log error instead of propagating
+            console.error(`[agent-room] Background workflow failed (run=${run.id}, task=${taskId}):`, err?.message ?? err)
+        }
     } finally {
         store.updateSessionTimestamp(sessionId)
         runningWorkflows.delete(taskId)
     }
-
-    return run
 }
 
 /**
@@ -821,109 +833,23 @@ function assertWorkflowStartable(sessionId: string, taskId: string): AgentRoomTa
  */
 export async function runWorkflow(sessionId: string, taskId: string): Promise<store.AgentRoomRun> {
     const task = assertWorkflowStartable(sessionId, taskId)
-    return executeWorkflowCore(sessionId, taskId, task)
+    const run = createRunRecord(sessionId, taskId)
+    await executeRun(sessionId, taskId, task, run, true)
+    return run
 }
 
 /**
  * Start the workflow asynchronously: validates, creates the run record,
  * kicks off execution in the background, and returns the run immediately.
- * The run will transition through queued → running → completed/failed asynchronously.
- * Callers should use polling to track progress.
+ * The returned run status is 'queued' (may have transitioned to 'running' by the time
+ * the caller inspects it). Callers should use polling to track progress.
  */
 export function startWorkflow(sessionId: string, taskId: string): store.AgentRoomRun {
     const task = assertWorkflowStartable(sessionId, taskId)
-
-    // Create run record synchronously so the caller gets the run id immediately
-    const now = new Date().toISOString()
-    const run: store.AgentRoomRun = {
-        id: randomUUID(),
-        sessionId,
-        taskId,
-        status: 'queued',
-        runnerName: activeRunner.name,
-        createdAt: now,
-        updatedAt: now,
-    }
-    store.createRun(run)
-
-    // Fire-and-forget: executeWorkflowCore will create its own run record,
-    // but we need to pass the pre-created run id so it reuses it.
-    // Instead, we use a lightweight wrapper that skips run creation.
-    void executeWorkflowInBackground(sessionId, taskId, task, run)
-
+    const run = createRunRecord(sessionId, taskId)
+    // Fire-and-forget: errors are caught and logged inside executeRun
+    void executeRun(sessionId, taskId, task, run, false)
     return run
-}
-
-/**
- * Background execution wrapper for `startWorkflow()`.
- * Reuses the pre-created run record instead of creating a new one.
- * Errors are caught and logged — they do NOT propagate to the caller.
- */
-async function executeWorkflowInBackground(
-    sessionId: string,
-    taskId: string,
-    task: AgentRoomTask,
-    run: store.AgentRoomRun,
-): Promise<void> {
-    runningWorkflows.add(taskId)
-
-    // Transition to running
-    run.status = 'running'
-    run.startedAt = new Date().toISOString()
-    run.updatedAt = run.startedAt
-    store.updateRun(run)
-
-    try {
-        // Build role bindings map for multi-role profile resolution
-        const bindings = store.listRoleBindingsBySession(sessionId)
-        const roleBindings = new Map<AgentRoomRole, RunnerRoleBinding>()
-        for (const b of bindings) {
-            roleBindings.set(b.role as AgentRoomRole, { role: b.role as AgentRoomRole, profileName: b.profileName })
-        }
-
-        // Build hooks for real-time observability
-        const hooks = buildRunHooks(run)
-
-        const ctx: AgentRoomRunnerContext = {
-            sessionId,
-            taskId,
-            task,
-            roleBindings,
-            hooks,
-            updateTaskStatus: (tid, newStatus) => updateTaskStatus(tid, newStatus),
-            emitEventAndMessage: (sid, tid, type, role, title, payload) => {
-                emitEventAndMessage(sid, tid, type, role, title, payload)
-            },
-            runInTransaction: (fn) => store.runInTransaction(fn),
-            updateSessionTimestamp: (sid) => store.updateSessionTimestamp(sid),
-        }
-
-        const result = await activeRunner.run(ctx)
-
-        if (result) {
-            applyRunnerResult(sessionId, taskId, task.title, result, run.id)
-        }
-
-        if (!result) {
-            emitRunEventsFromWorkflowEvents(run.id, sessionId, taskId)
-        }
-
-        // Mark run as completed
-        run.status = 'completed'
-        run.finishedAt = new Date().toISOString()
-        run.updatedAt = run.finishedAt
-        store.updateRun(run)
-    } catch (err: any) {
-        // Mark run as failed — do NOT rethrow (background execution)
-        run.status = 'failed'
-        run.errorMessage = err?.message ?? 'Unknown error'
-        run.finishedAt = new Date().toISOString()
-        run.updatedAt = run.finishedAt
-        store.updateRun(run)
-    } finally {
-        store.updateSessionTimestamp(sessionId)
-        runningWorkflows.delete(taskId)
-    }
 }
 
 /**

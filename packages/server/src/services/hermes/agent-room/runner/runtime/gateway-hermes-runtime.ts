@@ -107,14 +107,25 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
         // Fail fast on unsupported statuses BEFORE calling the Gateway.
         assertSupportedStartStatus(input.currentStatus)
 
-        // Resolve target from role binding / assignedAgentId → profileName → upstream/apiKey/model/provider.
+        // Resolve profileName from roleBindings (service-layer pre-assembled) or assignedAgentId fallback.
         // For multi-role workflows, resolve the developer role by default (the primary execution role).
-        // Planner/reviewer/delivery roles are resolved via roleBindings when needed.
+        let profileName: string | undefined
+        let bindingSource: 'role-binding' | 'assigned-agent' | 'none' = 'none'
+
+        const developerBinding = input.roleBindings?.get('developer')
+        if (developerBinding) {
+            profileName = developerBinding.profileName
+            bindingSource = 'role-binding'
+        } else if (input.assignedAgentId) {
+            profileName = input.assignedAgentId
+            bindingSource = 'assigned-agent'
+        }
+
+        // Resolve target: profileName → upstream/apiKey/model/provider via GatewayManager or constructor fallback.
         const target = this.profileResolver(
-            input.assignedAgentId,
+            profileName,
             this.upstream,
             this.apiKey,
-            { sessionId: input.sessionId, role: 'developer' },
         )
 
         const gatewaySessionId = `agent-room-${input.sessionId}-${input.taskId}`
@@ -132,7 +143,7 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
             onRawEvent: input.hooks?.onRawEvent,
         })
 
-        return this.buildOutput(input, result.output, result.runId, target)
+        return this.buildOutput(input, result.output, result.runId, target, profileName, bindingSource)
     }
 
     /**
@@ -146,13 +157,15 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
         finalOutput: string,
         runId: string,
         target: GatewayRuntimeTarget,
+        profileName?: string,
+        bindingSource?: 'role-binding' | 'assigned-agent' | 'none',
     ): HermesAgentRuntimeOutput {
         const title = input.taskTitle
         const metadata: Record<string, unknown> = { runId, source: 'hermes-gateway' }
-        if (target.profileName) metadata.profileName = target.profileName
+        if (profileName) metadata.profileName = profileName
         if (target.model) metadata.model = target.model
         if (target.provider) metadata.provider = target.provider
-        if (target.bindingSource) metadata.bindingSource = target.bindingSource
+        if (bindingSource) metadata.bindingSource = bindingSource
         if (target.transportSource) metadata.transportSource = target.transportSource
 
         // Include all role bindings in metadata for observability
