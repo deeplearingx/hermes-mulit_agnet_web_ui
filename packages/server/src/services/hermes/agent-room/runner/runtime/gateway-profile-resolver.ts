@@ -1,9 +1,9 @@
 // ─── Gateway Profile Resolver ───────────────────────────────────
 // Resolves an AgentRoom assignedAgentId to a GatewayRuntimeTarget
-// containing upstream, apiKey, model, and provider.
+// containing upstream, apiKey, model, provider, and profileName.
 //
 // Resolution priority:
-//   1. Role binding (sessionId + 'developer' role → agentId → profileName)
+//   1. Role binding (sessionId + role → profileName via agent_room_role_bindings)
 //   2. assignedAgentId direct mapping
 //   3. Constructor fallback
 //
@@ -11,9 +11,14 @@
 // profile-specific upstream/apiKey. When GatewayManager is not
 // initialized (e.g. in tests or standalone scripts), it falls back
 // to the constructor-provided upstream/apiKey.
+//
+// Note: The physical DB column is still `agent_id`, but the public
+// API uses `profileName` throughout. See role-types.ts for the
+// AgentRoomRole type shared across service/resolver/runtime.
 
 import { getGatewayManagerInstance } from '../../../../gateway-bootstrap'
 import { getRoleBindingBySessionAndRole } from '../../../../../db/hermes/agent-room-store'
+import type { AgentRoomRole } from '../../role-types'
 
 /**
  * Resolved target for a Gateway run.
@@ -48,7 +53,7 @@ export interface GatewayRuntimeTarget {
 export interface GatewayProfileResolverContext {
     sessionId?: string
     /** The AgentRoom role to look up in role bindings (default: 'developer'). */
-    role?: string
+    role?: AgentRoomRole
 }
 
 /**
@@ -66,7 +71,7 @@ export type GatewayProfileResolver = (
  *
  * Resolution priority:
  *   1. Role binding: if sessionId is provided, look up agent_room_role_bindings
- *      for role='developer'. If found, use binding.agentId as profileName.
+ *      for the given role (default: 'developer'). If found, use binding.profileName.
  *   2. assignedAgentId: if set, treat it as profileName.
  *   3. GatewayManager: if available, resolve upstream/apiKey from profileName.
  *   4. Constructor fallback: use constructor upstream/apiKey.

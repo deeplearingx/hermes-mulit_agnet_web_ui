@@ -385,4 +385,175 @@ describe('Agent Room Role Bindings', () => {
             expect(store.listRoleBindingsBySession('sess-1')).toHaveLength(3)
         })
     })
+
+    // ─── getRoleBindingForRole (renamed API) ────────────────────
+
+    describe('getRoleBindingForRole', () => {
+        it('returns binding for specific role', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            svc.createRoleBinding(sessionId, 'developer', 'agent-alpha')
+
+            const binding = svc.getRoleBindingForRole(sessionId, 'developer')
+            expect(binding).not.toBeNull()
+            expect(binding!.profileName).toBe('agent-alpha')
+            expect(binding!.role).toBe('developer')
+        })
+
+        it('returns null for role with no binding', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            const binding = svc.getRoleBindingForRole(sessionId, 'reviewer')
+            expect(binding).toBeNull()
+        })
+
+        it('deprecated getRoleBindingForAgent alias works identically', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            svc.createRoleBinding(sessionId, 'developer', 'agent-alpha')
+
+            const viaNew = svc.getRoleBindingForRole(sessionId, 'developer')
+            const viaOld = svc.getRoleBindingForAgent(sessionId, 'developer')
+            expect(viaNew).toEqual(viaOld)
+        })
+
+        it('throws on non-existent session', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            expect(() => svc.getRoleBindingForRole('non-existent', 'developer'))
+                .toThrow('Session not found')
+        })
+    })
+
+    // ─── profileName normalization ──────────────────────────────
+
+    describe('profileName normalization', () => {
+        it('trims whitespace from profileName', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            const binding = svc.createRoleBinding(sessionId, 'developer', '  agent-alpha  ')
+            expect(binding.profileName).toBe('agent-alpha')
+        })
+
+        it('throws on empty string profileName', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            expect(() => svc.createRoleBinding(sessionId, 'developer', ''))
+                .toThrow('profileName is required')
+        })
+
+        it('throws on whitespace-only profileName', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            expect(() => svc.createRoleBinding(sessionId, 'developer', '   '))
+                .toThrow('profileName is required')
+        })
+
+        it('setRoleBinding trims whitespace', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            const binding = svc.setRoleBinding(sessionId, 'developer', '  agent-beta  ')
+            expect(binding.profileName).toBe('agent-beta')
+        })
+
+        it('updateRoleBinding trims whitespace', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            const binding = svc.createRoleBinding(sessionId, 'developer', 'agent-alpha')
+            const updated = svc.updateRoleBinding(sessionId, binding.id, '  agent-zeta  ')
+            expect(updated.profileName).toBe('agent-zeta')
+        })
+    })
+
+    // ─── Session updatedAt refresh ──────────────────────────────
+
+    describe('session updatedAt refresh', () => {
+        it('createRoleBinding refreshes session updatedAt', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+            const originalUpdatedAt = sessions[0].updatedAt
+
+            // Small delay to ensure timestamp difference
+            await new Promise(resolve => setTimeout(resolve, 10))
+
+            svc.createRoleBinding(sessionId, 'developer', 'agent-alpha')
+
+            const updatedSession = svc.listSessions().find(s => s.id === sessionId)!
+            expect(updatedSession.updatedAt).not.toBe(originalUpdatedAt)
+        })
+
+        it('setRoleBinding refreshes session updatedAt', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+            const originalUpdatedAt = sessions[0].updatedAt
+
+            await new Promise(resolve => setTimeout(resolve, 10))
+
+            svc.setRoleBinding(sessionId, 'developer', 'agent-alpha')
+
+            const updatedSession = svc.listSessions().find(s => s.id === sessionId)!
+            expect(updatedSession.updatedAt).not.toBe(originalUpdatedAt)
+        })
+
+        it('updateRoleBinding refreshes session updatedAt', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            const binding = svc.createRoleBinding(sessionId, 'developer', 'agent-alpha')
+            const afterCreate = svc.listSessions().find(s => s.id === sessionId)!.updatedAt
+
+            await new Promise(resolve => setTimeout(resolve, 10))
+
+            svc.updateRoleBinding(sessionId, binding.id, 'agent-zeta')
+
+            const afterUpdate = svc.listSessions().find(s => s.id === sessionId)!
+            expect(afterUpdate.updatedAt).not.toBe(afterCreate)
+        })
+
+        it('deleteRoleBinding refreshes session updatedAt', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            const binding = svc.createRoleBinding(sessionId, 'developer', 'agent-alpha')
+            const afterCreate = svc.listSessions().find(s => s.id === sessionId)!.updatedAt
+
+            await new Promise(resolve => setTimeout(resolve, 10))
+
+            svc.deleteRoleBinding(sessionId, binding.id)
+
+            const afterDelete = svc.listSessions().find(s => s.id === sessionId)!
+            expect(afterDelete.updatedAt).not.toBe(afterCreate)
+        })
+    })
 })

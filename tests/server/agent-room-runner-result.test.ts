@@ -732,4 +732,83 @@ describe('Agent Room RunnerResult Protocol', () => {
 
         resetActiveRunnerForTest()
     })
+
+    it('GatewayHermesRuntime + role binding: artifact metadata includes profileName/bindingSource/transportSource', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+        const { GatewayHermesRuntime } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner/runtime/gateway-hermes-runtime'
+        )
+
+        const { runHermesGatewayTask } = await import('../../packages/server/src/services/hermes/gateway-run-client')
+        vi.mocked(runHermesGatewayTask).mockResolvedValue({
+            output: 'Feature implemented',
+            runId: 'run-rb-001',
+            sessionId: 'agent-room-sess-1-task-1',
+        })
+
+        const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
+        setActiveRunnerForTest(new RealAgentRunner(runtime))
+
+        const session = svc.createSession('Role Binding Metadata Test')
+        const task = svc.createTask(session.id, 'Build Feature', 'Implement feature X')
+
+        // Create a role binding so the resolver picks it up
+        svc.createRoleBinding(session.id, 'developer', 'my-custom-profile')
+
+        await svc.runWorkflow(session.id, task.id)
+
+        const artifacts = svc.listTaskArtifacts(session.id, task.id)
+        expect(artifacts).toHaveLength(1)
+
+        // Full metadata assertion
+        const meta = artifacts[0].metadata!
+        expect(meta.runId).toBe('run-rb-001')
+        expect(meta.source).toBe('hermes-gateway')
+        expect(meta.profileName).toBe('my-custom-profile')
+        expect(meta.bindingSource).toBe('role-binding')
+        expect(meta.transportSource).toBe('constructor-fallback')
+
+        resetActiveRunnerForTest()
+    })
+
+    it('GatewayHermesRuntime without role binding: metadata shows bindingSource=none', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { RealAgentRunner, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+        const { GatewayHermesRuntime } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner/runtime/gateway-hermes-runtime'
+        )
+
+        const { runHermesGatewayTask } = await import('../../packages/server/src/services/hermes/gateway-run-client')
+        vi.mocked(runHermesGatewayTask).mockResolvedValue({
+            output: 'Done',
+            runId: 'run-norb-001',
+            sessionId: 'agent-room-sess-1-task-1',
+        })
+
+        const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
+        setActiveRunnerForTest(new RealAgentRunner(runtime))
+
+        const session = svc.createSession('No Role Binding Test')
+        const task = svc.createTask(session.id, 'Simple Task', 'Do something')
+
+        // No role binding created — resolver falls through to assignedAgentId or none
+        await svc.runWorkflow(session.id, task.id)
+
+        const artifacts = svc.listTaskArtifacts(session.id, task.id)
+        expect(artifacts).toHaveLength(1)
+
+        const meta = artifacts[0].metadata!
+        expect(meta.runId).toBe('run-norb-001')
+        expect(meta.source).toBe('hermes-gateway')
+        // No role binding and no assignedAgentId → bindingSource is 'none'
+        expect(meta.bindingSource).toBe('none')
+        expect(meta.transportSource).toBe('constructor-fallback')
+
+        resetActiveRunnerForTest()
+    })
 })
