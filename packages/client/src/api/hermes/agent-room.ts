@@ -146,7 +146,6 @@ export interface AgentRoomRoleBinding {
     role: AgentRoomRole
     profileName: string
     createdAt: string
-    updatedAt: string
 }
 
 /** Fixed roles for AgentRoom (mirrors server AGENT_ROOM_ROLES) */
@@ -302,6 +301,16 @@ export async function listWorkflowEvents(sessionId: string): Promise<AgentRoomWo
 
 export async function runWorkflow(sessionId: string, taskId: string): Promise<{ success: boolean; run?: AgentRoomRun }> {
     return request(`${BASE}/sessions/${sessionId}/tasks/${taskId}/workflow`, {
+        method: 'POST',
+    })
+}
+
+/**
+ * Start workflow asynchronously: returns the run record immediately.
+ * The workflow executes in the background; use polling to track progress.
+ */
+export async function startWorkflow(sessionId: string, taskId: string): Promise<{ success: boolean; run?: AgentRoomRun }> {
+    return request(`${BASE}/sessions/${sessionId}/tasks/${taskId}/workflow/start`, {
         method: 'POST',
     })
 }

@@ -110,7 +110,6 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
         // Resolve target from role binding / assignedAgentId → profileName → upstream/apiKey/model/provider.
         // For multi-role workflows, resolve the developer role by default (the primary execution role).
         // Planner/reviewer/delivery roles are resolved via roleBindings when needed.
-        const developerBinding = input.roleBindings?.get('developer')
         const target = this.profileResolver(
             input.assignedAgentId,
             this.upstream,
@@ -129,6 +128,8 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
             timeoutMs: this.timeoutMs,
             model: target.model,
             provider: target.provider,
+            onUpstreamRunCreated: input.hooks?.onUpstreamRunCreated,
+            onRawEvent: input.hooks?.onRawEvent,
         })
 
         return this.buildOutput(input, result.output, result.runId, target)

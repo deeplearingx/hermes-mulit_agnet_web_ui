@@ -48,6 +48,12 @@ export interface HermesAgentRuntimeInput {
      * Example: roleBindings.get('planner') → { role: 'planner', profileName: 'gpt-4o' }
      */
     roleBindings?: Map<AgentRoomRole, RuntimeRoleBinding>
+
+    /**
+     * Optional hooks for real-time observability during task execution.
+     * The runtime should call these at key lifecycle points (e.g. when upstream run_id is received).
+     */
+    hooks?: HermesAgentRuntimeHooks
 }
 
 /** A workflow event in runtime output. */
@@ -107,6 +113,25 @@ export interface HermesAgentRuntimeOutput {
 
     /** Optional artifacts produced by the runtime. */
     artifacts?: HermesAgentRuntimeArtifact[]
+}
+
+/**
+ * Runtime hooks for observability during task execution.
+ * Called by the runtime implementation (e.g. GatewayHermesRuntime) at key lifecycle points.
+ * All hooks are fire-and-forget — errors are swallowed to avoid breaking the main flow.
+ */
+export interface HermesAgentRuntimeHooks {
+    /**
+     * Called when the upstream Gateway returns a run_id from POST /v1/runs.
+     * Enables the caller to bind the upstream run_id to the local run record in real time.
+     */
+    onUpstreamRunCreated?: (upstreamRunId: string) => void
+
+    /**
+     * Called for every parsed SSE event from the upstream Gateway.
+     * Enables real-time event persistence and observability.
+     */
+    onRawEvent?: (event: Record<string, unknown>) => void
 }
 
 /**

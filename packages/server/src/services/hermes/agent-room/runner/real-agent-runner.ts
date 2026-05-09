@@ -39,6 +39,7 @@ export class RealAgentRunner implements AgentRoomRunner {
             assignedAgentId: ctx.task.assignedAgentId,
             revisionRound: ctx.task.revisionRound,
             roleBindings: ctx.roleBindings,
+            hooks: ctx.hooks,
         }
     }
 

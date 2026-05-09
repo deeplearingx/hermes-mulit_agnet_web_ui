@@ -9,6 +9,7 @@ import type {
     AgentRoomArtifact,
     AgentRoomMessageType,
 } from '../index'
+import type { HermesAgentRuntimeHooks } from './runtime/types'
 
 /**
  * Role binding entry passed to runners for multi-role profile resolution.
@@ -36,6 +37,12 @@ export interface AgentRoomRunnerContext {
      * Example: roleBindings.get('planner') → { role: 'planner', profileName: 'gpt-4o' }
      */
     roleBindings: Map<AgentRoomRole, RunnerRoleBinding>
+
+    /**
+     * Optional hooks for real-time observability during task execution.
+     * The runner should pass these through to the runtime implementation.
+     */
+    hooks?: HermesAgentRuntimeHooks
 
     /** Transition task status via the service state machine. */
     updateTaskStatus(taskId: string, newStatus: AgentRoomTask['status']): AgentRoomTask | null

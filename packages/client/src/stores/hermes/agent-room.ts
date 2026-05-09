@@ -33,7 +33,7 @@ import {
     listWorkflowEvents as apiListWorkflowEvents,
     listArtifacts as apiListArtifacts,
     deleteArtifact as apiDeleteArtifact,
-    runWorkflow as apiRunWorkflow,
+    startWorkflow as apiStartWorkflow,
     deleteSession as apiDeleteSession,
     deleteTask as apiDeleteTask,
     listRoleBindings as apiListRoleBindings,
@@ -561,13 +561,17 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         actionLoadingTaskId.value = taskId
         error.value = null
         try {
-            await apiRunWorkflow(currentSessionId.value, taskId)
+            const result = await apiStartWorkflow(currentSessionId.value, taskId)
             touchSession(currentSessionId.value)
-            await refreshCurrentSession()
-            // Start polling if there are active runs
-            if (hasActiveRuns.value) {
-                startPolling()
+            // Insert the returned run locally for immediate UI feedback
+            if (result.run) {
+                const existing = runs.value.findIndex(r => r.id === result.run!.id)
+                if (existing === -1) {
+                    runs.value = [...runs.value, result.run]
+                }
             }
+            // Start polling immediately — the run is executing in the background
+            startPolling()
         } catch (err: any) {
             error.value = err.message
             throw err
@@ -578,19 +582,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
 
     // Compatibility alias — delegates to runWorkflow
     async function runMockWorkflow(taskId: string) {
-        if (!currentSessionId.value) return
-        actionLoadingTaskId.value = taskId
-        error.value = null
-        try {
-            await apiRunWorkflow(currentSessionId.value, taskId)
-            touchSession(currentSessionId.value)
-            await refreshCurrentSession()
-        } catch (err: any) {
-            error.value = err.message
-            throw err
-        } finally {
-            actionLoadingTaskId.value = null
-        }
+        return runWorkflow(taskId)
     }
 
     // ─── Reset ─────────────────────────────────────────────────

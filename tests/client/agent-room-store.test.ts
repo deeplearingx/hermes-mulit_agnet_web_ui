@@ -19,6 +19,7 @@ const mockApi = vi.hoisted(() => ({
     listArtifacts: vi.fn(),
     deleteArtifact: vi.fn(),
     runWorkflow: vi.fn(),
+    startWorkflow: vi.fn(),
     deleteSession: vi.fn(),
     deleteTask: vi.fn(),
     listRoleBindings: vi.fn(),
@@ -133,25 +134,51 @@ describe('Agent Room Client Store — Artifact Stability', () => {
     })
 
     // ─── Workflow Facade ───────────────────────────────────────
-    it('runWorkflow calls API and refreshes session data', async () => {
+    it('runWorkflow calls startWorkflow API and inserts run locally', async () => {
         const store = useAgentRoomStore()
 
         store.currentSessionId = 's1'
         store.sessions = [{ id: 's1', name: 'Test', createdAt: '2025-01-01', updatedAt: '2025-01-01' }]
 
-        mockApi.runWorkflow.mockResolvedValue({ success: true })
-        mockApi.listMessages.mockResolvedValue([])
-        mockApi.listTasks.mockResolvedValue([])
-        mockApi.listReviews.mockResolvedValue([])
-        mockApi.listWorkflowEvents.mockResolvedValue([])
-        mockApi.listArtifacts.mockResolvedValue([])
-        mockApi.listRoleBindings.mockResolvedValue([])
-        mockApi.listRuns.mockResolvedValue([])
+        const mockRun = { id: 'run-1', sessionId: 's1', taskId: 't1', status: 'queued', runnerName: 'real', createdAt: '2025-01-01', updatedAt: '2025-01-01' }
+        mockApi.startWorkflow.mockResolvedValue({ success: true, run: mockRun })
 
         await store.runWorkflow('t1')
 
-        expect(mockApi.runWorkflow).toHaveBeenCalledWith('s1', 't1')
+        expect(mockApi.startWorkflow).toHaveBeenCalledWith('s1', 't1')
+        expect(store.runs).toContainEqual(mockRun)
         expect(store.actionLoadingTaskId).toBeNull()
+    })
+
+    it('runWorkflow starts polling for active runs', async () => {
+        vi.useFakeTimers()
+        const store = useAgentRoomStore()
+
+        store.currentSessionId = 's1'
+        store.sessions = [{ id: 's1', name: 'Test', createdAt: '2025-01-01', updatedAt: '2025-01-01' }]
+
+        const mockRun = { id: 'run-1', sessionId: 's1', taskId: 't1', status: 'queued', runnerName: 'real', createdAt: '2025-01-01', updatedAt: '2025-01-01' }
+        mockApi.startWorkflow.mockResolvedValue({ success: true, run: mockRun })
+
+        // After polling starts, listRuns returns completed run so polling stops
+        mockApi.listRuns.mockResolvedValue([
+            { ...mockRun, status: 'completed' },
+        ])
+        mockApi.listRunEventsBySession.mockResolvedValue([])
+
+        await store.runWorkflow('t1')
+
+        // The run should be in local state
+        expect(store.runs).toContainEqual(mockRun)
+
+        // Advance timers to trigger the polling interval (3000ms)
+        await vi.advanceTimersByTimeAsync(3500)
+
+        // listRuns should have been called by the polling tick
+        expect(mockApi.listRuns).toHaveBeenCalledWith('s1')
+        expect(mockApi.listRunEventsBySession).toHaveBeenCalledWith('s1')
+
+        vi.useRealTimers()
     })
 
     it('runMockWorkflow still works as alias for runWorkflow', async () => {
@@ -160,18 +187,12 @@ describe('Agent Room Client Store — Artifact Stability', () => {
         store.currentSessionId = 's1'
         store.sessions = [{ id: 's1', name: 'Test', createdAt: '2025-01-01', updatedAt: '2025-01-01' }]
 
-        mockApi.runWorkflow.mockResolvedValue({ success: true })
-        mockApi.listMessages.mockResolvedValue([])
-        mockApi.listTasks.mockResolvedValue([])
-        mockApi.listReviews.mockResolvedValue([])
-        mockApi.listWorkflowEvents.mockResolvedValue([])
-        mockApi.listArtifacts.mockResolvedValue([])
-        mockApi.listRoleBindings.mockResolvedValue([])
-        mockApi.listRuns.mockResolvedValue([])
+        const mockRun = { id: 'run-1', sessionId: 's1', taskId: 't1', status: 'queued', runnerName: 'real', createdAt: '2025-01-01', updatedAt: '2025-01-01' }
+        mockApi.startWorkflow.mockResolvedValue({ success: true, run: mockRun })
 
         await store.runMockWorkflow('t1')
 
-        expect(mockApi.runWorkflow).toHaveBeenCalledWith('s1', 't1')
+        expect(mockApi.startWorkflow).toHaveBeenCalledWith('s1', 't1')
     })
 
     it('runWorkflow sets error on API failure', async () => {
@@ -179,7 +200,7 @@ describe('Agent Room Client Store — Artifact Stability', () => {
 
         store.currentSessionId = 's1'
 
-        mockApi.runWorkflow.mockRejectedValue(new Error('Workflow is already running'))
+        mockApi.startWorkflow.mockRejectedValue(new Error('Workflow is already running'))
 
         await expect(store.runWorkflow('t1')).rejects.toThrow('Workflow is already running')
         expect(store.error).toBe('Workflow is already running')

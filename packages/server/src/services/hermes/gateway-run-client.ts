@@ -32,6 +32,11 @@ export interface GatewayRunParams {
      * Useful for diagnostics / smoke tests to inspect the raw event shape.
      */
     onRawEvent?: (event: Record<string, unknown>) => void
+    /**
+     * Optional callback invoked when the upstream Gateway returns a run_id from POST /v1/runs.
+     * Enables real-time binding of upstream run_id to local run records.
+     */
+    onUpstreamRunCreated?: (upstreamRunId: string) => void
     /** Optional model name to pass to the gateway */
     model?: string
     /** Optional provider name to pass to the gateway */
@@ -115,6 +120,7 @@ export async function runHermesGatewayTask(params: GatewayRunParams): Promise<Ga
         sessionId,
         timeoutMs = 120_000,
         onRawEvent,
+        onUpstreamRunCreated,
         model,
         provider,
     } = params
@@ -157,6 +163,11 @@ export async function runHermesGatewayTask(params: GatewayRunParams): Promise<Ga
     const runId = runData.run_id as string | undefined
     if (!runId) {
         throw new Error('Hermes Gateway response missing run_id')
+    }
+
+    // Notify caller of the upstream run_id immediately (fire-and-forget)
+    if (onUpstreamRunCreated) {
+        try { onUpstreamRunCreated(runId) } catch { /* swallow hook errors */ }
     }
 
     // ── Step 2: GET /v1/runs/:run_id/events (SSE) ──────────────

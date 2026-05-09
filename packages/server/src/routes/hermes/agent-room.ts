@@ -211,10 +211,30 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/deliver'
     }
 })
 
-// Run workflow (delegates to active runner)
+// Run workflow synchronously (delegates to active runner, awaits completion)
 agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/workflow', async (ctx) => {
     try {
         const run = await agentRoomService.runWorkflow(ctx.params.sessionId, ctx.params.taskId)
+        ctx.body = { success: true, run }
+    } catch (err: any) {
+        mapAgentRoomError(ctx, err)
+    }
+})
+
+// Run workflow synchronously (explicit alias — same behavior as /workflow)
+agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/workflow/run-sync', async (ctx) => {
+    try {
+        const run = await agentRoomService.runWorkflow(ctx.params.sessionId, ctx.params.taskId)
+        ctx.body = { success: true, run }
+    } catch (err: any) {
+        mapAgentRoomError(ctx, err)
+    }
+})
+
+// Start workflow asynchronously (returns run immediately, executes in background)
+agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/workflow/start', async (ctx) => {
+    try {
+        const run = agentRoomService.startWorkflow(ctx.params.sessionId, ctx.params.taskId)
         ctx.body = { success: true, run }
     } catch (err: any) {
         mapAgentRoomError(ctx, err)
