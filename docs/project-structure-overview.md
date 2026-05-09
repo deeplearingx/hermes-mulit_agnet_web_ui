@@ -15,6 +15,12 @@ It highlights the main directories, the execution paths, and the files that are 
 - `docs/`
 - `packages/`
 - `scripts/`
+- `scripts/smoke-agent-room-workflow.ts`
+  - Single-role GatewayHermesRuntime smoke test
+- `scripts/smoke-orchestrated-dual-role.ts`
+  - Orchestrated planner → developer dual-role smoke helper
+  - Validates full API chain: session → role bindings → task → workflow → runs → events → artifacts
+  - Verifies _agentRole, plannerRunId/developerRunId, submitted_for_review, upstreamRunId semantics
 - `tests/`
 
 ## Docs
@@ -219,6 +225,7 @@ For planner → developer dual-role orchestration, the primary file set is:
 - `tests/server/agent-room-orchestrated-runtime.test.ts`
 - `tests/server/agent-room-async-start.test.ts`
 - `tests/server/agent-room-runner-result.test.ts`
+- `scripts/smoke-orchestrated-dual-role.ts`
 
 ## Usage Note for Future Subtasks
 
