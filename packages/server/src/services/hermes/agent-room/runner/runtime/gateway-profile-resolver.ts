@@ -28,12 +28,18 @@ export interface GatewayRuntimeTarget {
     /** The profile name resolved from assignedAgentId (for metadata). */
     profileName?: string
     /**
-     * How this target was resolved.
+     * How the profileName was determined.
      * - 'role-binding': resolved via agent_room_role_bindings table
+     * - 'assigned-agent': derived from assignedAgentId directly
+     * - 'none': no profile name available
+     */
+    bindingSource?: 'role-binding' | 'assigned-agent' | 'none'
+    /**
+     * How the upstream/apiKey transport was resolved.
      * - 'gateway-manager': resolved via GatewayManager.getUpstream/getApiKey
      * - 'constructor-fallback': fell back to constructor upstream/apiKey
      */
-    resolutionSource?: 'role-binding' | 'gateway-manager' | 'constructor-fallback'
+    transportSource?: 'gateway-manager' | 'constructor-fallback'
 }
 
 /**
@@ -41,6 +47,8 @@ export interface GatewayRuntimeTarget {
  */
 export interface GatewayProfileResolverContext {
     sessionId?: string
+    /** The AgentRoom role to look up in role bindings (default: 'developer'). */
+    role?: string
 }
 
 /**
@@ -69,14 +77,14 @@ export function createDefaultGatewayProfileResolver(): GatewayProfileResolver {
 
         // Priority 1: Role binding lookup (graceful degradation if table missing)
         let profileName: string | undefined
-        let resolutionSource: GatewayRuntimeTarget['resolutionSource']
+        let bindingSource: GatewayRuntimeTarget['bindingSource'] = 'none'
 
         if (context?.sessionId) {
             try {
-                const binding = getRoleBindingBySessionAndRole(context.sessionId, 'developer')
+                const binding = getRoleBindingBySessionAndRole(context.sessionId, context.role ?? 'developer')
                 if (binding) {
-                    profileName = binding.agentId
-                    resolutionSource = 'role-binding'
+                    profileName = binding.profileName
+                    bindingSource = 'role-binding'
                 }
             } catch {
                 // Table may not exist yet — fall through to assignedAgentId
@@ -84,8 +92,9 @@ export function createDefaultGatewayProfileResolver(): GatewayProfileResolver {
         }
 
         // Priority 2: assignedAgentId direct mapping
-        if (!profileName) {
-            profileName = assignedAgentId || undefined
+        if (!profileName && assignedAgentId) {
+            profileName = assignedAgentId
+            bindingSource = 'assigned-agent'
         }
 
         // Priority 3+4: GatewayManager or constructor fallback
@@ -94,7 +103,8 @@ export function createDefaultGatewayProfileResolver(): GatewayProfileResolver {
                 upstream: mgr.getUpstream(profileName),
                 apiKey: mgr.getApiKey(profileName) ?? fallbackApiKey ?? null,
                 profileName,
-                resolutionSource: resolutionSource ?? 'gateway-manager',
+                bindingSource,
+                transportSource: 'gateway-manager',
             }
         }
 
@@ -102,7 +112,8 @@ export function createDefaultGatewayProfileResolver(): GatewayProfileResolver {
             return {
                 upstream: mgr.getUpstream() || fallbackUpstream,
                 apiKey: mgr.getApiKey() ?? fallbackApiKey ?? null,
-                resolutionSource: resolutionSource ?? 'gateway-manager',
+                bindingSource,
+                transportSource: 'gateway-manager',
             }
         }
 
@@ -111,7 +122,8 @@ export function createDefaultGatewayProfileResolver(): GatewayProfileResolver {
             upstream: fallbackUpstream,
             apiKey: fallbackApiKey ?? null,
             profileName,
-            resolutionSource: resolutionSource ?? 'constructor-fallback',
+            bindingSource,
+            transportSource: 'constructor-fallback',
         }
     }
 }

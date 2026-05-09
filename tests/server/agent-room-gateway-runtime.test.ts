@@ -108,7 +108,7 @@ describe('GatewayHermesRuntime', () => {
             expect(result.steps[3].status).toBe('submitted_for_review')
         })
 
-        it('submitted_for_review step carries runId, source, profileName, and resolutionSource metadata', async () => {
+        it('submitted_for_review step carries runId, source, profileName, bindingSource, and transportSource metadata', async () => {
             vi.mocked(runHermesGatewayTask).mockResolvedValue({
                 output: 'Login page implemented',
                 runId: 'run-100',
@@ -119,11 +119,11 @@ describe('GatewayHermesRuntime', () => {
             const result = await runtime.runTask(makeInput())
 
             const finalStep = result.steps[3]
-            expect(finalStep.events[0].payload).toEqual({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent', resolutionSource: 'constructor-fallback' })
-            expect(finalStep.messages![0].metadata).toEqual({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent', resolutionSource: 'constructor-fallback' })
+            expect(finalStep.events[0].payload).toEqual({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent', bindingSource: 'assigned-agent', transportSource: 'constructor-fallback' })
+            expect(finalStep.messages![0].metadata).toEqual({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent', bindingSource: 'assigned-agent', transportSource: 'constructor-fallback' })
         })
 
-        it('artifact type is code_output with runId, profileName, and resolutionSource metadata', async () => {
+        it('artifact type is code_output with runId, profileName, bindingSource, and transportSource metadata', async () => {
             vi.mocked(runHermesGatewayTask).mockResolvedValue({
                 output: 'Login page implemented',
                 runId: 'run-100',
@@ -136,7 +136,7 @@ describe('GatewayHermesRuntime', () => {
             expect(result.artifacts).toHaveLength(1)
             expect(result.artifacts![0].type).toBe('code_output')
             expect(result.artifacts![0].content).toBe('Login page implemented')
-            expect(result.artifacts![0].metadata).toEqual({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent', resolutionSource: 'constructor-fallback' })
+            expect(result.artifacts![0].metadata).toEqual({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent', bindingSource: 'assigned-agent', transportSource: 'constructor-fallback' })
         })
 
         it('planned step has planner agentRole', async () => {
@@ -412,7 +412,7 @@ describe('GatewayHermesRuntime', () => {
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
             await runtime.runTask(makeInput())
 
-            expect(resolver).toHaveBeenCalledWith('dev-agent', 'http://127.0.0.1:8642', null, { sessionId: 'sess-1' })
+            expect(resolver).toHaveBeenCalledWith('dev-agent', 'http://127.0.0.1:8642', null, { sessionId: 'sess-1', role: 'developer' })
 
             const call = vi.mocked(runHermesGatewayTask).mock.calls[0][0]
             expect(call.upstream).toBe('http://profile-gateway:9999')
@@ -436,10 +436,10 @@ describe('GatewayHermesRuntime', () => {
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
             await runtime.runTask(makeInput({ assignedAgentId: 'my-agent' }))
 
-            expect(resolver).toHaveBeenCalledWith('my-agent', 'http://127.0.0.1:8642', null, { sessionId: 'sess-1' })
+            expect(resolver).toHaveBeenCalledWith('my-agent', 'http://127.0.0.1:8642', null, { sessionId: 'sess-1', role: 'developer' })
         })
 
-        it('includes profileName/model/provider/resolutionSource in artifact metadata', async () => {
+        it('includes profileName/model/provider/bindingSource/transportSource in artifact metadata', async () => {
             vi.mocked(runHermesGatewayTask).mockResolvedValue({
                 output: 'done',
                 runId: 'run-meta',
@@ -452,7 +452,8 @@ describe('GatewayHermesRuntime', () => {
                 model: 'gpt-4o',
                 provider: 'openai',
                 profileName: 'openai-profile',
-                resolutionSource: 'gateway-manager' as const,
+                bindingSource: 'assigned-agent' as const,
+                transportSource: 'gateway-manager' as const,
             })
 
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
@@ -464,7 +465,8 @@ describe('GatewayHermesRuntime', () => {
                 profileName: 'openai-profile',
                 model: 'gpt-4o',
                 provider: 'openai',
-                resolutionSource: 'gateway-manager',
+                bindingSource: 'assigned-agent',
+                transportSource: 'gateway-manager',
             })
         })
 
@@ -479,7 +481,8 @@ describe('GatewayHermesRuntime', () => {
                 upstream: 'http://127.0.0.1:8642',
                 apiKey: 'sk-secret-123',
                 profileName: 'secret-profile',
-                resolutionSource: 'gateway-manager' as const,
+                bindingSource: 'assigned-agent' as const,
+                transportSource: 'gateway-manager' as const,
             })
 
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
@@ -490,7 +493,7 @@ describe('GatewayHermesRuntime', () => {
             expect(JSON.stringify(metadata)).not.toContain('sk-secret-123')
         })
 
-        it('fallback resolver returns resolutionSource=constructor-fallback', async () => {
+        it('fallback resolver returns bindingSource=none and transportSource=constructor-fallback', async () => {
             vi.mocked(runHermesGatewayTask).mockResolvedValue({
                 output: 'done',
                 runId: 'run-fb',
@@ -504,7 +507,8 @@ describe('GatewayHermesRuntime', () => {
                 runId: 'run-fb',
                 source: 'hermes-gateway',
                 profileName: 'dev-agent',
-                resolutionSource: 'constructor-fallback',
+                bindingSource: 'assigned-agent',
+                transportSource: 'constructor-fallback',
             })
         })
 

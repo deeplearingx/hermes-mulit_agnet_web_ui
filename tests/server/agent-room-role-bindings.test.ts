@@ -55,10 +55,9 @@ describe('Agent Room Role Bindings', () => {
     describe('store CRUD', () => {
         it('createRoleBinding and getRoleBinding', async () => {
             const store = await import('../../packages/server/src/db/hermes/agent-room-store')
-            // Create session first
             store.createSession({ id: 'sess-1', name: 'test', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' })
 
-            const binding = { id: 'rb-1', sessionId: 'sess-1', role: 'developer', agentId: 'agent-a', createdAt: '2025-01-01T00:00:00Z' }
+            const binding = { id: 'rb-1', sessionId: 'sess-1', role: 'developer', profileName: 'agent-a', createdAt: '2025-01-01T00:00:00Z' }
             store.createRoleBinding(binding)
 
             const fetched = store.getRoleBinding('rb-1')
@@ -69,8 +68,8 @@ describe('Agent Room Role Bindings', () => {
             const store = await import('../../packages/server/src/db/hermes/agent-room-store')
             store.createSession({ id: 'sess-1', name: 'test', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' })
 
-            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', agentId: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
-            store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-1', role: 'reviewer', agentId: 'agent-b', createdAt: '2025-01-01T00:00:01Z' })
+            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', profileName: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
+            store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-1', role: 'reviewer', profileName: 'agent-b', createdAt: '2025-01-01T00:00:01Z' })
 
             const bindings = store.listRoleBindingsBySession('sess-1')
             expect(bindings).toHaveLength(2)
@@ -82,32 +81,32 @@ describe('Agent Room Role Bindings', () => {
             const store = await import('../../packages/server/src/db/hermes/agent-room-store')
             store.createSession({ id: 'sess-1', name: 'test', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' })
 
-            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', agentId: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
+            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', profileName: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
 
             const binding = store.getRoleBindingBySessionAndRole('sess-1', 'developer')
             expect(binding).not.toBeNull()
-            expect(binding!.agentId).toBe('agent-a')
+            expect(binding!.profileName).toBe('agent-a')
 
             const missing = store.getRoleBindingBySessionAndRole('sess-1', 'reviewer')
             expect(missing).toBeNull()
         })
 
-        it('updateRoleBinding changes agentId', async () => {
+        it('updateRoleBinding changes profileName', async () => {
             const store = await import('../../packages/server/src/db/hermes/agent-room-store')
             store.createSession({ id: 'sess-1', name: 'test', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' })
 
-            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', agentId: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
-            store.updateRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', agentId: 'agent-z', createdAt: '2025-01-01T00:00:00Z' })
+            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', profileName: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
+            store.updateRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', profileName: 'agent-z', createdAt: '2025-01-01T00:00:00Z' })
 
             const updated = store.getRoleBinding('rb-1')
-            expect(updated!.agentId).toBe('agent-z')
+            expect(updated!.profileName).toBe('agent-z')
         })
 
         it('deleteRoleBinding removes specific binding', async () => {
             const store = await import('../../packages/server/src/db/hermes/agent-room-store')
             store.createSession({ id: 'sess-1', name: 'test', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' })
 
-            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', agentId: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
+            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', profileName: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
             store.deleteRoleBinding('rb-1')
 
             expect(store.getRoleBinding('rb-1')).toBeNull()
@@ -117,8 +116,8 @@ describe('Agent Room Role Bindings', () => {
             const store = await import('../../packages/server/src/db/hermes/agent-room-store')
             store.createSession({ id: 'sess-1', name: 'test', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' })
 
-            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', agentId: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
-            store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-1', role: 'reviewer', agentId: 'agent-b', createdAt: '2025-01-01T00:00:01Z' })
+            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', profileName: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
+            store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-1', role: 'reviewer', profileName: 'agent-b', createdAt: '2025-01-01T00:00:01Z' })
             store.deleteRoleBindingsBySession('sess-1')
 
             expect(store.listRoleBindingsBySession('sess-1')).toHaveLength(0)
@@ -137,8 +136,8 @@ describe('Agent Room Role Bindings', () => {
             const store = await import('../../packages/server/src/db/hermes/agent-room-store')
             store.createSession({ id: 'sess-1', name: 'test', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' })
 
-            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', agentId: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
-            store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-1', role: 'reviewer', agentId: 'agent-b', createdAt: '2025-01-01T00:00:01Z' })
+            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', profileName: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
+            store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-1', role: 'reviewer', profileName: 'agent-b', createdAt: '2025-01-01T00:00:01Z' })
 
             store.deleteSessionCascade('sess-1')
 
@@ -151,8 +150,8 @@ describe('Agent Room Role Bindings', () => {
             store.createSession({ id: 'sess-1', name: 'test-1', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' })
             store.createSession({ id: 'sess-2', name: 'test-2', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' })
 
-            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', agentId: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
-            store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-2', role: 'developer', agentId: 'agent-b', createdAt: '2025-01-01T00:00:01Z' })
+            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', profileName: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
+            store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-2', role: 'developer', profileName: 'agent-b', createdAt: '2025-01-01T00:00:01Z' })
 
             store.deleteSessionCascade('sess-1')
 
@@ -173,7 +172,7 @@ describe('Agent Room Role Bindings', () => {
             const binding = svc.createRoleBinding(sessionId, 'developer', 'agent-alpha')
             expect(binding.sessionId).toBe(sessionId)
             expect(binding.role).toBe('developer')
-            expect(binding.agentId).toBe('agent-alpha')
+            expect(binding.profileName).toBe('agent-alpha')
             expect(binding.id).toBeDefined()
             expect(binding.createdAt).toBeDefined()
         })
@@ -219,13 +218,13 @@ describe('Agent Room Role Bindings', () => {
 
             const binding = svc.getRoleBindingForAgent(sessionId, 'developer')
             expect(binding).not.toBeNull()
-            expect(binding!.agentId).toBe('agent-alpha')
+            expect(binding!.profileName).toBe('agent-alpha')
 
             const missing = svc.getRoleBindingForAgent(sessionId, 'reviewer')
             expect(missing).toBeNull()
         })
 
-        it('updateRoleBinding changes agentId', async () => {
+        it('updateRoleBinding changes profileName', async () => {
             const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
             svc.createSession('test-session')
             const sessions = svc.listSessions()
@@ -234,7 +233,7 @@ describe('Agent Room Role Bindings', () => {
             const binding = svc.createRoleBinding(sessionId, 'developer', 'agent-alpha')
             const updated = svc.updateRoleBinding(sessionId, binding.id, 'agent-zeta')
 
-            expect(updated.agentId).toBe('agent-zeta')
+            expect(updated.profileName).toBe('agent-zeta')
             expect(updated.id).toBe(binding.id)
         })
 
@@ -307,9 +306,47 @@ describe('Agent Room Role Bindings', () => {
 
             svc.deleteSession(sessionId)
 
-            // Verify bindings are gone by checking store directly
             const store = await import('../../packages/server/src/db/hermes/agent-room-store')
             expect(store.listRoleBindingsBySession(sessionId)).toHaveLength(0)
+        })
+    })
+
+    // ─── setRoleBinding upsert ───────────────────────────────────
+
+    describe('setRoleBinding upsert', () => {
+        it('creates binding when none exists', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            const binding = svc.setRoleBinding(sessionId, 'developer', 'agent-alpha')
+            expect(binding.profileName).toBe('agent-alpha')
+            expect(binding.role).toBe('developer')
+            expect(binding.id).toBeDefined()
+        })
+
+        it('updates profileName when binding already exists', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            svc.createSession('test-session')
+            const sessions = svc.listSessions()
+            const sessionId = sessions[0].id
+
+            const first = svc.setRoleBinding(sessionId, 'developer', 'agent-alpha')
+            const second = svc.setRoleBinding(sessionId, 'developer', 'agent-zeta')
+
+            expect(second.id).toBe(first.id)
+            expect(second.profileName).toBe('agent-zeta')
+
+            const bindings = svc.listRoleBindings(sessionId)
+            expect(bindings).toHaveLength(1)
+            expect(bindings[0].profileName).toBe('agent-zeta')
+        })
+
+        it('throws on non-existent session', async () => {
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            expect(() => svc.setRoleBinding('non-existent', 'developer', 'agent-alpha'))
+                .toThrow('Session not found')
         })
     })
 
@@ -320,8 +357,8 @@ describe('Agent Room Role Bindings', () => {
             const store = await import('../../packages/server/src/db/hermes/agent-room-store')
             store.createSession({ id: 'sess-1', name: 'test', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' })
 
-            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', agentId: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
-            expect(() => store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-1', role: 'developer', agentId: 'agent-b', createdAt: '2025-01-01T00:00:01Z' }))
+            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', profileName: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
+            expect(() => store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-1', role: 'developer', profileName: 'agent-b', createdAt: '2025-01-01T00:00:01Z' }))
                 .toThrow()
         })
 
@@ -330,8 +367,8 @@ describe('Agent Room Role Bindings', () => {
             store.createSession({ id: 'sess-1', name: 'test-1', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' })
             store.createSession({ id: 'sess-2', name: 'test-2', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' })
 
-            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', agentId: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
-            store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-2', role: 'developer', agentId: 'agent-b', createdAt: '2025-01-01T00:00:01Z' })
+            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', profileName: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
+            store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-2', role: 'developer', profileName: 'agent-b', createdAt: '2025-01-01T00:00:01Z' })
 
             expect(store.listRoleBindingsBySession('sess-1')).toHaveLength(1)
             expect(store.listRoleBindingsBySession('sess-2')).toHaveLength(1)
@@ -341,9 +378,9 @@ describe('Agent Room Role Bindings', () => {
             const store = await import('../../packages/server/src/db/hermes/agent-room-store')
             store.createSession({ id: 'sess-1', name: 'test', createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' })
 
-            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', agentId: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
-            store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-1', role: 'reviewer', agentId: 'agent-b', createdAt: '2025-01-01T00:00:01Z' })
-            store.createRoleBinding({ id: 'rb-3', sessionId: 'sess-1', role: 'planner', agentId: 'agent-c', createdAt: '2025-01-01T00:00:02Z' })
+            store.createRoleBinding({ id: 'rb-1', sessionId: 'sess-1', role: 'developer', profileName: 'agent-a', createdAt: '2025-01-01T00:00:00Z' })
+            store.createRoleBinding({ id: 'rb-2', sessionId: 'sess-1', role: 'reviewer', profileName: 'agent-b', createdAt: '2025-01-01T00:00:01Z' })
+            store.createRoleBinding({ id: 'rb-3', sessionId: 'sess-1', role: 'planner', profileName: 'agent-c', createdAt: '2025-01-01T00:00:02Z' })
 
             expect(store.listRoleBindingsBySession('sess-1')).toHaveLength(3)
         })

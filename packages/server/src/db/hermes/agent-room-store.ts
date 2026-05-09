@@ -93,7 +93,8 @@ export interface AgentRoomRoleBinding {
     id: string
     sessionId: string
     role: string
-    agentId: string
+    /** The Hermes profile name used for Gateway resolution. Maps to agent_id column. */
+    profileName: string
     createdAt: string
 }
 
@@ -392,7 +393,7 @@ function mapRoleBindingRow(row: Record<string, unknown>): AgentRoomRoleBinding {
         id: String(row.id),
         sessionId: String(row.session_id),
         role: String(row.role),
-        agentId: String(row.agent_id),
+        profileName: String(row.agent_id),
         createdAt: String(row.created_at),
     }
 }
@@ -400,7 +401,7 @@ function mapRoleBindingRow(row: Record<string, unknown>): AgentRoomRoleBinding {
 export function createRoleBinding(binding: AgentRoomRoleBinding): void {
     const db = requireDb()
     db.prepare(`INSERT INTO ${AR_ROLE_BINDINGS_TABLE} (id, session_id, role, agent_id, created_at) VALUES (?, ?, ?, ?, ?)`)
-        .run(binding.id, binding.sessionId, binding.role, binding.agentId, binding.createdAt)
+        .run(binding.id, binding.sessionId, binding.role, binding.profileName, binding.createdAt)
 }
 
 export function getRoleBinding(id: string): AgentRoomRoleBinding | null {
@@ -424,7 +425,7 @@ export function getRoleBindingBySessionAndRole(sessionId: string, role: string):
 export function updateRoleBinding(binding: AgentRoomRoleBinding): void {
     const db = requireDb()
     db.prepare(`UPDATE ${AR_ROLE_BINDINGS_TABLE} SET agent_id = ? WHERE id = ?`)
-        .run(binding.agentId, binding.id)
+        .run(binding.profileName, binding.id)
 }
 
 export function deleteRoleBinding(id: string): void {

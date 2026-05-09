@@ -102,11 +102,11 @@ async function main(): Promise<void> {
         if (ASSIGNED_AGENT_ID && codeOutput?.metadata?.profileName !== ASSIGNED_AGENT_ID) {
             errors.push(`Expected metadata.profileName=${ASSIGNED_AGENT_ID}, got ${codeOutput?.metadata?.profileName}`)
         }
-        if (ASSIGNED_AGENT_ID && INIT_GATEWAY_MANAGER && codeOutput?.metadata?.resolutionSource !== 'gateway-manager') {
-            errors.push(`Expected metadata.resolutionSource=gateway-manager, got ${codeOutput?.metadata?.resolutionSource}`)
+        if (ASSIGNED_AGENT_ID && INIT_GATEWAY_MANAGER && codeOutput?.metadata?.transportSource !== 'gateway-manager') {
+            errors.push(`Expected metadata.transportSource=gateway-manager, got ${codeOutput?.metadata?.transportSource}`)
         }
-        if (ASSIGNED_AGENT_ID && !INIT_GATEWAY_MANAGER && codeOutput?.metadata?.resolutionSource !== 'constructor-fallback') {
-            errors.push(`Expected metadata.resolutionSource=constructor-fallback, got ${codeOutput?.metadata?.resolutionSource}`)
+        if (ASSIGNED_AGENT_ID && !INIT_GATEWAY_MANAGER && codeOutput?.metadata?.transportSource !== 'constructor-fallback') {
+            errors.push(`Expected metadata.transportSource=constructor-fallback, got ${codeOutput?.metadata?.transportSource}`)
         }
 
         if (errors.length > 0) {

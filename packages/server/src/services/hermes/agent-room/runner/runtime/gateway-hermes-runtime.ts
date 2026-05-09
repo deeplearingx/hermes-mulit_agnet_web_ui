@@ -108,7 +108,7 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
         assertSupportedStartStatus(input.currentStatus)
 
         // Resolve target from role binding / assignedAgentId → profileName → upstream/apiKey/model/provider.
-        const target = this.profileResolver(input.assignedAgentId, this.upstream, this.apiKey, { sessionId: input.sessionId })
+        const target = this.profileResolver(input.assignedAgentId, this.upstream, this.apiKey, { sessionId: input.sessionId, role: 'developer' })
 
         const gatewaySessionId = `agent-room-${input.sessionId}-${input.taskId}`
 
@@ -142,7 +142,8 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
         if (target.profileName) metadata.profileName = target.profileName
         if (target.model) metadata.model = target.model
         if (target.provider) metadata.provider = target.provider
-        if (target.resolutionSource) metadata.resolutionSource = target.resolutionSource
+        if (target.bindingSource) metadata.bindingSource = target.bindingSource
+        if (target.transportSource) metadata.transportSource = target.transportSource
         const safeName = safeTitle(title)
 
         // Revision/retry path: revision_required | need_user_decision | failed → in_progress → submitted_for_review

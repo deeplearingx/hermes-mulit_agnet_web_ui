@@ -576,6 +576,7 @@ function applyRunnerResult(
                 name: art.name,
                 type: art.type,
                 content: art.content,
+                metadata: art.metadata,
                 createdAt: new Date().toISOString(),
             }
             store.createArtifact(artifact as store.AgentRoomArtifact)
@@ -776,11 +777,12 @@ export interface AgentRoomRoleBinding {
     id: string
     sessionId: string
     role: AgentRoomRole
-    agentId: string
+    /** The Hermes profile name used for Gateway resolution. */
+    profileName: string
     createdAt: string
 }
 
-export function createRoleBinding(sessionId: string, role: AgentRoomRole, agentId: string): AgentRoomRoleBinding {
+export function createRoleBinding(sessionId: string, role: AgentRoomRole, profileName: string): AgentRoomRoleBinding {
     assertSessionExists(sessionId)
     const existing = store.getRoleBindingBySessionAndRole(sessionId, role)
     if (existing) {
@@ -790,32 +792,47 @@ export function createRoleBinding(sessionId: string, role: AgentRoomRole, agentI
         id: randomUUID(),
         sessionId,
         role,
-        agentId,
+        profileName,
         createdAt: new Date().toISOString(),
     }
     store.createRoleBinding(binding)
     return binding
 }
 
+/**
+ * Upsert a role binding: create if not exists, update profileName if exists.
+ * Preferred API for frontend/UI callers.
+ */
+export function setRoleBinding(sessionId: string, role: AgentRoomRole, profileName: string): AgentRoomRoleBinding {
+    assertSessionExists(sessionId)
+    const existing = store.getRoleBindingBySessionAndRole(sessionId, role)
+    if (existing) {
+        const updated: AgentRoomRoleBinding = { ...existing, role: existing.role as AgentRoomRole, profileName }
+        store.updateRoleBinding(updated)
+        return updated
+    }
+    return createRoleBinding(sessionId, role, profileName)
+}
+
 export function listRoleBindings(sessionId: string): AgentRoomRoleBinding[] {
     assertSessionExists(sessionId)
-    return store.listRoleBindingsBySession(sessionId) as AgentRoomRoleBinding[]
+    return store.listRoleBindingsBySession(sessionId) as unknown as AgentRoomRoleBinding[]
 }
 
 export function getRoleBindingForAgent(sessionId: string, role: AgentRoomRole): AgentRoomRoleBinding | null {
     assertSessionExists(sessionId)
-    return store.getRoleBindingBySessionAndRole(sessionId, role) as AgentRoomRoleBinding | null
+    return store.getRoleBindingBySessionAndRole(sessionId, role) as unknown as AgentRoomRoleBinding | null
 }
 
-export function updateRoleBinding(sessionId: string, bindingId: string, agentId: string): AgentRoomRoleBinding {
+export function updateRoleBinding(sessionId: string, bindingId: string, profileName: string): AgentRoomRoleBinding {
     assertSessionExists(sessionId)
     const binding = store.getRoleBinding(bindingId)
     if (!binding) throw new Error('Role binding not found')
     if (binding.sessionId !== sessionId) {
         throw new Error(`Role binding belongs to session ${binding.sessionId}, not ${sessionId}`)
     }
-    const updated: AgentRoomRoleBinding = { ...binding, role: binding.role as AgentRoomRole, agentId }
-    store.updateRoleBinding(updated)
+    const updated: AgentRoomRoleBinding = { ...binding, role: binding.role as AgentRoomRole, profileName }
+    store.updateRoleBinding(updated as store.AgentRoomRoleBinding)
     return updated
 }
 

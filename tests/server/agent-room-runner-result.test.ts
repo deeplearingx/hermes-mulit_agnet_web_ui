@@ -725,6 +725,10 @@ describe('Agent Room RunnerResult Protocol', () => {
         expect(artifacts).toHaveLength(1)
         expect(artifacts[0].type).toBe('code_output')
         expect(artifacts[0].content).toBe('Login page implemented with OAuth2 support')
+        // Verify metadata is persisted through runWorkflow → applyRunnerResult → DB
+        expect(artifacts[0].metadata).toBeDefined()
+        expect(artifacts[0].metadata?.runId).toBe('run-gw-001')
+        expect(artifacts[0].metadata?.source).toBe('hermes-gateway')
 
         resetActiveRunnerForTest()
     })
