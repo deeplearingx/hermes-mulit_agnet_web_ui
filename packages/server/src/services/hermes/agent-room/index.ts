@@ -55,6 +55,7 @@ export type AgentRoomWorkflowEventType =
 export interface AgentRoomSession {
     id: string
     name: string
+    autoDeliveryEnabled: boolean
     createdAt: string
     updatedAt: string
 }
@@ -213,6 +214,7 @@ export function createSession(name: string): AgentRoomSession {
     const session: AgentRoomSession = {
         id: randomUUID(),
         name,
+        autoDeliveryEnabled: false,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
     }
@@ -377,6 +379,13 @@ export function submitReview(
             // 2a. submitted_for_review → review_passed
             updateTaskStatus(taskId, 'review_passed')
             emitEventAndMessage(sessionId, taskId, 'review_passed', 'reviewer', task.title, { comment })
+
+            // Auto-delivery: if session has auto-delivery enabled, deliver immediately
+            // Uses deliverTaskCore to avoid nested runInTransaction()
+            const session = store.getSession(sessionId)
+            if (session?.autoDeliveryEnabled) {
+                deliverTaskCore(sessionId, taskId, task, 'auto')
+            }
         } else {
             // 2b. submitted_for_review → review_rejected (transient)
             // Compute nextRevisionRound BEFORE any state mutation
@@ -993,36 +1002,111 @@ export function deleteTask(sessionId: string, taskId: string): void {
 }
 
 /**
+ * Core delivery logic — does NOT open its own transaction.
+ * Callers that are already inside runInTransaction() should call this directly.
+ * External callers should use deliverTask() which wraps in a transaction.
+ */
+function deliverTaskCore(sessionId: string, taskId: string, task: AgentRoomTask, deliveryMode: 'manual' | 'auto'): void {
+    // Gather enrichment data
+    const reviewFeedback = getLatestReviewFeedback(taskId)
+
+    // Transition to delivering via state machine
+    updateTaskStatus(taskId, 'delivering')
+    emitEventAndMessage(sessionId, taskId, 'delivery_started', 'delivery', task.title, {
+        deliveryMode,
+    })
+
+    // Complete via state machine
+    updateTaskStatus(taskId, 'completed')
+    emitEventAndMessage(sessionId, taskId, 'delivery_completed', 'delivery', task.title, {
+        deliveryMode,
+    })
+
+    // Build enriched delivery summary
+    const summaryLines = [
+        `任务「${task.title}」已完成交付。`,
+        '',
+        `交付模式: ${deliveryMode === 'auto' ? '自动' : '手动'}`,
+    ]
+    if (task.revisionRound > 0) {
+        summaryLines.push(`修改轮次: ${task.revisionRound}/${task.maxRevisionRounds}`)
+    }
+    if (reviewFeedback) {
+        summaryLines.push(`审核反馈: ${reviewFeedback}`)
+    }
+    summaryLines.push(`交付时间: ${new Date().toISOString()}`)
+
+    // Create final_delivery artifact with enriched metadata
+    const artifact: AgentRoomArtifact = {
+        id: randomUUID(),
+        sessionId,
+        taskId,
+        name: `${task.title} — 交付结果`,
+        type: 'final_delivery',
+        content: summaryLines.join('\n'),
+        metadata: {
+            deliveryMode,
+            revisionRound: task.revisionRound,
+            maxRevisionRounds: task.maxRevisionRounds,
+            reviewFeedback: reviewFeedback ?? null,
+            deliveredAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+    }
+    store.createArtifact(artifact as store.AgentRoomArtifact)
+}
+
+/**
  * Deliver a task: review_passed → delivering → completed.
  * All messages produced via event adapter.
+ *
+ * @param sessionId  Session containing the task
+ * @param taskId     Task to deliver
+ * @param deliveryMode  'manual' (default) or 'auto' — recorded in artifact metadata
  */
-export function deliverTask(sessionId: string, taskId: string): AgentRoomTask | null {
+export function deliverTask(sessionId: string, taskId: string, deliveryMode: 'manual' | 'auto' = 'manual'): AgentRoomTask | null {
     const task = assertTaskInSession(taskId, sessionId)
 
+    // Guard: only review_passed can be delivered
+    if (task.status !== 'review_passed') {
+        throw new Error(`Cannot deliver task in status "${task.status}". Expected: review_passed`)
+    }
+
     store.runInTransaction(() => {
-        // Transition to delivering via state machine
-        updateTaskStatus(taskId, 'delivering')
-        emitEventAndMessage(sessionId, taskId, 'delivery_started', 'delivery', task.title)
-
-        // Complete via state machine
-        updateTaskStatus(taskId, 'completed')
-        emitEventAndMessage(sessionId, taskId, 'delivery_completed', 'delivery', task.title)
-
-        // Create final_delivery artifact
-        const artifact: AgentRoomArtifact = {
-            id: randomUUID(),
-            sessionId,
-            taskId,
-            name: `${task.title} — 交付结果`,
-            type: 'final_delivery',
-            content: `任务「${task.title}」已完成交付。`,
-            createdAt: new Date().toISOString(),
-        }
-        store.createArtifact(artifact as store.AgentRoomArtifact)
+        deliverTaskCore(sessionId, taskId, task, deliveryMode)
     })
 
     store.updateSessionTimestamp(sessionId)
     return store.getTask(taskId) as AgentRoomTask | null
+}
+
+// ─── Session Config ────────────────────────────────────────────
+
+export interface AgentRoomSessionConfig {
+    autoDeliveryEnabled: boolean
+}
+
+/**
+ * Get session delivery configuration.
+ */
+export function getSessionConfig(sessionId: string): AgentRoomSessionConfig {
+    const session = assertSessionExists(sessionId)
+    return { autoDeliveryEnabled: session.autoDeliveryEnabled }
+}
+
+/**
+ * Update session delivery configuration.
+ * Only `autoDeliveryEnabled` is mutable; other fields are immutable.
+ */
+export function updateSessionConfig(sessionId: string, config: Partial<AgentRoomSessionConfig>): AgentRoomSessionConfig {
+    assertSessionExists(sessionId)
+    store.runInTransaction(() => {
+        if (config.autoDeliveryEnabled !== undefined) {
+            store.updateSessionAutoDelivery(sessionId, config.autoDeliveryEnabled)
+        }
+        store.updateSessionTimestamp(sessionId)
+    })
+    return getSessionConfig(sessionId)
 }
 
 // ─── Artifact CRUD ─────────────────────────────────────────────

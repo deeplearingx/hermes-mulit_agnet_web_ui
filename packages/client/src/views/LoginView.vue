@@ -411,8 +411,8 @@ function stopOAuthPolling() {
   gap: 10px;
 
   &:hover:not(:disabled) {
-    background: $bg-hover;
-    border-color: $border-hover;
+    background: $bg-card-hover;
+    border-color: $accent-hover;
   }
 
   &:disabled {

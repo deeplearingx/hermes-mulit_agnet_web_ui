@@ -29,6 +29,7 @@ import {
     submitReview as apiSubmitReview,
     retryTask as apiRetryTask,
     deliverTask as apiDeliverTask,
+    updateSessionConfig as apiUpdateSessionConfig,
     listReviews as apiListReviews,
     listWorkflowEvents as apiListWorkflowEvents,
     listArtifacts as apiListArtifacts,
@@ -586,6 +587,26 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         return runWorkflow(taskId)
     }
 
+    // ─── Session Config Actions ─────────────────────────────────
+    const autoDeliveryEnabled = computed(() =>
+        currentSession.value?.autoDeliveryEnabled ?? false,
+    )
+
+    async function updateAutoDelivery(enabled: boolean) {
+        if (!currentSessionId.value) return
+        try {
+            await apiUpdateSessionConfig(currentSessionId.value, { autoDeliveryEnabled: enabled })
+            // Update local session object immediately
+            const idx = sessions.value.findIndex(s => s.id === currentSessionId.value)
+            if (idx >= 0) {
+                sessions.value[idx] = { ...sessions.value[idx], autoDeliveryEnabled: enabled }
+            }
+        } catch (err: any) {
+            error.value = err.message
+            throw err
+        }
+    }
+
     // ─── Reset ─────────────────────────────────────────────────
     function setActiveTask(taskId: string | null) {
         activeTaskId.value = taskId
@@ -644,6 +665,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         activeRuns,
         hasActiveRuns,
         runEventsByRunId,
+        autoDeliveryEnabled,
         // Actions
         loadSessions,
         createSession,
@@ -666,6 +688,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         loadRoleBindings,
         saveRoleBinding,
         removeRoleBinding,
+        updateAutoDelivery,
         runWorkflow,
         runMockWorkflow,
         setActiveTask,

@@ -143,6 +143,15 @@ async function handleDeleteArtifact(artifactId: string) {
     }
 }
 
+// ─── Auto-Delivery Toggle ──────────────────────────────────────
+async function handleToggleAutoDelivery() {
+    try {
+        await store.updateAutoDelivery(!store.autoDeliveryEnabled)
+    } catch {
+        // Error already set in store
+    }
+}
+
 // ─── Role Binding Actions ──────────────────────────────────────
 async function handleSaveRoleBinding(data: { role: AgentRoomRole; profileName: string }) {
     savingRoleBinding.value = true
@@ -189,6 +198,15 @@ async function handleDeleteRoleBinding(role: AgentRoomRole) {
             </div>
             <button class="btn-new-session" :disabled="store.creatingSession" @click="showNewSession = !showNewSession">
                 + 新建会话
+            </button>
+            <button
+                v-if="store.currentSessionId"
+                class="btn-auto-delivery"
+                :class="{ active: store.autoDeliveryEnabled }"
+                title="自动交付: 审核通过后自动交付"
+                @click="handleToggleAutoDelivery"
+            >
+                {{ store.autoDeliveryEnabled ? '📦 自动交付' : '📦 手动交付' }}
             </button>
             <button
                 v-if="store.currentSessionId"
@@ -484,6 +502,30 @@ async function handleDeleteRoleBinding(role: AgentRoomRole) {
     &:hover {
         background: #1e293b;
         color: #e2e8f0;
+    }
+}
+
+.btn-auto-delivery {
+    padding: 4px 10px;
+    border: 1px solid #334155;
+    border-radius: 3px;
+    background: transparent;
+    color: #94a3b8;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: 'Courier New', monospace;
+    white-space: nowrap;
+    margin-left: 4px;
+
+    &:hover {
+        background: #1e293b;
+        color: #e2e8f0;
+    }
+
+    &.active {
+        border-color: #06b6d4;
+        color: #06b6d4;
+        background: rgba(6, 182, 212, 0.1);
     }
 }
 

@@ -29,6 +29,7 @@ import {
 export interface AgentRoomSession {
     id: string
     name: string
+    autoDeliveryEnabled: boolean
     createdAt: string
     updatedAt: string
 }
@@ -142,6 +143,7 @@ function mapSessionRow(row: Record<string, unknown>): AgentRoomSession {
     return {
         id: String(row.id),
         name: String(row.name),
+        autoDeliveryEnabled: Number(row.auto_delivery_enabled) === 1,
         createdAt: String(row.created_at),
         updatedAt: String(row.updated_at),
     }
@@ -239,8 +241,8 @@ export function runInTransaction(fn: () => void): void {
 export function createSession(session: AgentRoomSession): void {
     const db = requireDb()
     db.prepare(
-        `INSERT INTO ${AR_SESSIONS_TABLE} (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)`,
-    ).run(session.id, session.name, session.createdAt, session.updatedAt)
+        `INSERT INTO ${AR_SESSIONS_TABLE} (id, name, auto_delivery_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+    ).run(session.id, session.name, session.autoDeliveryEnabled ? 1 : 0, session.createdAt, session.updatedAt)
 }
 
 export function getSession(id: string): AgentRoomSession | null {
@@ -258,6 +260,15 @@ export function listSessions(): AgentRoomSession[] {
 export function updateSessionTimestamp(id: string): void {
     const db = requireDb()
     db.prepare(`UPDATE ${AR_SESSIONS_TABLE} SET updated_at = ? WHERE id = ?`).run(new Date().toISOString(), id)
+}
+
+export function updateSessionAutoDelivery(id: string, enabled: boolean): void {
+    const db = requireDb()
+    db.prepare(`UPDATE ${AR_SESSIONS_TABLE} SET auto_delivery_enabled = ?, updated_at = ? WHERE id = ?`).run(
+        enabled ? 1 : 0,
+        new Date().toISOString(),
+        id,
+    )
 }
 
 // ─── Task CRUD ─────────────────────────────────────────────────

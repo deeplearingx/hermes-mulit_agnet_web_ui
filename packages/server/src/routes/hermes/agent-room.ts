@@ -199,7 +199,7 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/retry', 
 // Deliver task
 agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/deliver', async (ctx) => {
     try {
-        const task = agentRoomService.deliverTask(ctx.params.sessionId, ctx.params.taskId)
+        const task = agentRoomService.deliverTask(ctx.params.sessionId, ctx.params.taskId, 'manual')
         if (!task) {
             ctx.status = 404
             ctx.body = { error: 'Task not found' }
@@ -304,6 +304,32 @@ agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/run-events', async (ctx
 // List run events for a specific run
 agentRoomRoutes.get('/api/agent-room/runs/:runId/events', async (ctx) => {
     ctx.body = agentRoomService.listRunEventsByRun(ctx.params.runId)
+})
+
+// ─── Session Config ─────────────────────────────────────────────
+
+// Get session config
+agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/config', async (ctx) => {
+    try {
+        ctx.body = agentRoomService.getSessionConfig(ctx.params.sessionId)
+    } catch (err: any) {
+        mapAgentRoomError(ctx, err)
+    }
+})
+
+// Update session config
+agentRoomRoutes.patch('/api/agent-room/sessions/:sessionId/config', async (ctx) => {
+    const { autoDeliveryEnabled } = ctx.request.body as { autoDeliveryEnabled?: boolean }
+    if (autoDeliveryEnabled === undefined) {
+        ctx.status = 400
+        ctx.body = { error: 'autoDeliveryEnabled is required' }
+        return
+    }
+    try {
+        ctx.body = agentRoomService.updateSessionConfig(ctx.params.sessionId, { autoDeliveryEnabled })
+    } catch (err: any) {
+        mapAgentRoomError(ctx, err)
+    }
 })
 
 // ─── Delete ─────────────────────────────────────────────────────

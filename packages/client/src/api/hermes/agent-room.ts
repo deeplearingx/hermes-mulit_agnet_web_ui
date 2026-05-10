@@ -178,8 +178,13 @@ export interface AgentRoomArtifact {
 export interface AgentRoomSession {
     id: string
     name: string
+    autoDeliveryEnabled: boolean
     createdAt: string
     updatedAt: string
+}
+
+export interface AgentRoomSessionConfig {
+    autoDeliveryEnabled: boolean
 }
 
 // ─── Fixed Agents (v1) ────────────────────────────────────────
@@ -380,6 +385,20 @@ export async function setRoleBinding(sessionId: string, role: AgentRoomRole, pro
 export async function deleteRoleBindingByRole(sessionId: string, role: AgentRoomRole): Promise<{ success: boolean }> {
     return request(`${BASE}/sessions/${sessionId}/role-bindings/${role}`, {
         method: 'DELETE',
+    })
+}
+
+// ─── Session Config API ────────────────────────────────────────
+
+export async function getSessionConfig(sessionId: string): Promise<AgentRoomSessionConfig> {
+    return request(`${BASE}/sessions/${sessionId}/config`)
+}
+
+export async function updateSessionConfig(sessionId: string, config: Partial<AgentRoomSessionConfig>): Promise<AgentRoomSessionConfig> {
+    return request(`${BASE}/sessions/${sessionId}/config`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
     })
 }
 
