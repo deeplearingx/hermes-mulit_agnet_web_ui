@@ -408,31 +408,17 @@ describe('OrchestratedGatewayRuntime dual-run (P4.11-A4)', () => {
         })
     })
 
-    describe('unsupported status for dual-run', () => {
-        it('throws for revision_required status', async () => {
+    describe('unsupported status', () => {
+        it('throws for planning status (not implemented)', async () => {
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
-            await expect(runtime.runTask(makeInput({ currentStatus: 'revision_required' }))).rejects.toThrow(
-                /dual-run requires status 'created'/,
-            )
-        })
-
-        it('throws for need_user_decision status', async () => {
-            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
-            await expect(runtime.runTask(makeInput({ currentStatus: 'need_user_decision' }))).rejects.toThrow(
-                /dual-run requires status 'created'/,
-            )
-        })
-
-        it('throws for failed status', async () => {
-            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
-            await expect(runtime.runTask(makeInput({ currentStatus: 'failed' }))).rejects.toThrow(
-                /dual-run requires status 'created'/,
+            await expect(runtime.runTask(makeInput({ currentStatus: 'planned' }))).rejects.toThrow(
+                /OrchestratedGatewayRuntime only supports/,
             )
         })
 
         it('does NOT call runHermesGatewayTask for unsupported status', async () => {
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
-            await expect(runtime.runTask(makeInput({ currentStatus: 'revision_required' }))).rejects.toThrow()
+            await expect(runtime.runTask(makeInput({ currentStatus: 'planned' }))).rejects.toThrow()
             expect(runHermesGatewayTask).not.toHaveBeenCalled()
         })
     })

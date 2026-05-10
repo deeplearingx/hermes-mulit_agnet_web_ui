@@ -122,6 +122,8 @@ Important files:
 - `packages/server/src/services/hermes/agent-room/runner/runtime/orchestrated-gateway-runtime.ts`
    - orchestrated runtime with planner → developer dual-run Gateway orchestration (P4.11-A3 + P4.11-A4)
    - P4.11-A5 observability: role-tagged SSE hooks, dual run IDs, combined metadata
+   - P2 reviewer phase: planner → developer → reviewer triple-run with unified reviewer metadata
+   - P3 revision retry: developer + reviewer (skip planner) for revision_required/need_user_decision/failed
    - P4.11-A6 failure handling: phase-specific try/catch with console.error for planner/developer failures
 - `packages/server/src/services/hermes/agent-room/runner/runtime/gateway-profile-resolver.ts`
   - DB-free profileName → Gateway target resolution
@@ -159,7 +161,9 @@ AgentRoom and runtime related tests:
 - `tests/server/agent-room-gateway-runtime.test.ts`
   - single-role Gateway runtime behavior
 - `tests/server/agent-room-orchestrated-runtime.test.ts`
-    - orchestrated runtime: skeleton, dual-run, failure handling, E2E (67 tests)
+    - orchestrated runtime: skeleton, dual-run, failure handling, E2E (65 tests)
+- `tests/server/agent-room-retry-loop.test.ts`
+    - P3 revision retry loop: orchestrated runtime retry paths, service integration, mixed review modes (16 tests)
 - `tests/server/agent-room-runner-result.test.ts`
   - end-to-end runner result protocol and Gateway integration
 - `tests/server/agent-room-role-bindings.test.ts`

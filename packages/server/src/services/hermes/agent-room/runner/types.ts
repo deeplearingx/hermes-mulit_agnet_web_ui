@@ -62,6 +62,13 @@ export interface AgentRoomRunnerContext {
 
     /** Bump session updatedAt after workflow completes. */
     updateSessionTimestamp(sessionId: string): void
+
+    /**
+     * P3: Get the most recent rejected review comment for a task.
+     * Returns undefined if no rejected review exists.
+     * Used to pass review feedback to the developer agent during retry.
+     */
+    getLatestReviewFeedback?(taskId: string): string | undefined
 }
 
 // ─── RunnerResult Protocol ─────────────────────────────────────

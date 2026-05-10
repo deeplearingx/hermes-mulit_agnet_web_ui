@@ -98,8 +98,16 @@ export interface HermesAgentRuntimeInput {
      * All fields are optional and additive — populated only when multi-role orchestration is active.
      * See {@link HermesAgentRuntimeMetadata} for the full shape.
      * Currently unused by GatewayHermesRuntime — reserved for OrchestratedGatewayRuntime in P4.11-A3+.
-     */
-    metadata?: HermesAgentRuntimeMetadata
+    */
+   metadata?: HermesAgentRuntimeMetadata
+
+   /**
+    * P3: Feedback from the most recent rejected review.
+    * Populated when retrying from revision_required or need_user_decision.
+    * Enables the developer agent to address specific reviewer concerns.
+    * Empty/undefined when retrying from failed or first attempt.
+    */
+   previousReviewFeedback?: string
 }
 
 /** A workflow event in runtime output. */

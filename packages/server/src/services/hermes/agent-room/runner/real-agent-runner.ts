@@ -40,6 +40,8 @@ export class RealAgentRunner implements AgentRoomRunner {
             revisionRound: ctx.task.revisionRound,
             roleBindings: ctx.roleBindings,
             hooks: ctx.hooks,
+            // P3: Pass previous review feedback for retry paths
+            previousReviewFeedback: ctx.getLatestReviewFeedback?.(ctx.taskId),
         }
     }
 

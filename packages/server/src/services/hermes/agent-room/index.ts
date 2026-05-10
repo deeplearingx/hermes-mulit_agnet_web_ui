@@ -764,6 +764,7 @@ async function executeRun(
             },
             runInTransaction: (fn) => store.runInTransaction(fn),
             updateSessionTimestamp: (sid) => store.updateSessionTimestamp(sid),
+            getLatestReviewFeedback: (tid) => getLatestReviewFeedback(tid),
         }
 
         const result = await activeRunner.run(ctx)
@@ -899,6 +900,21 @@ export function updateRunUpstreamId(runId: string, upstreamRunId: string): store
  */
 export function findRunByUpstreamId(upstreamRunId: string): store.AgentRoomRun | null {
     return store.findByUpstreamRunId(upstreamRunId)
+}
+
+// ─── Review Feedback Helper ─────────────────────────────────────
+
+/**
+ * Get the most recent rejected review comment for a task.
+ * Returns undefined if no rejected review exists.
+ * Used by the runner to pass review feedback to the developer agent during retry.
+ */
+function getLatestReviewFeedback(taskId: string): string | undefined {
+    const reviews = store.listReviewsByTask(taskId)
+    const rejected = reviews.filter(r => r.status === 'rejected')
+    if (rejected.length === 0) return undefined
+    // Reviews are ordered by created_at ASC; get the last rejected one
+    return rejected[rejected.length - 1].comment || undefined
 }
 
 // ─── Retry / Deliver ───────────────────────────────────────────

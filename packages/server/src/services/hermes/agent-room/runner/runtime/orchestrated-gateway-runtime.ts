@@ -231,6 +231,58 @@ function buildReviewerInstructions(input: HermesAgentRuntimeInput): string {
 }
 
 /**
+ * Build developer-specific input text for a revision retry.
+ * Includes task context, revision round, and previous review feedback
+ * so the developer can address specific reviewer concerns.
+ */
+function buildRevisionDeveloperInput(input: HermesAgentRuntimeInput): string {
+    const parts = [
+        `任务标题：${input.taskTitle}`,
+        `任务描述：${input.taskDescription}`,
+        `当前阶段：${input.currentStatus}`,
+        `修订轮次：${input.revisionRound}`,
+    ]
+
+    if (input.previousReviewFeedback) {
+        parts.push(
+            '',
+            '--- 上一轮审核反馈（需要针对以下反馈进行修改）---',
+            input.previousReviewFeedback,
+            '--- 反馈结束 ---',
+            '',
+            '请根据上述审核反馈修改你的实现。重点解决审核者提出的问题，同时保持已有工作的完整性。',
+        )
+    } else {
+        parts.push(
+            '',
+            '请重新实现任务，之前的工作因执行失败需要重试。',
+        )
+    }
+
+    parts.push(
+        '',
+        '请返回清晰的执行结果、关键步骤、产物说明和需要审核的内容。',
+    )
+    return parts.join('\n')
+}
+
+/**
+ * Build developer-specific system instructions for a revision retry.
+ * Constrains the agent to revision based on review feedback.
+ */
+function buildRevisionDeveloperInstructions(input: HermesAgentRuntimeInput): string {
+    return [
+        '你是 AgentRoom 中的开发 Agent，当前处于修订模式。',
+        '你将收到上一轮审核的反馈，请根据反馈修改你的实现。',
+        '不要重新执行整个任务，只需针对审核反馈进行修正。',
+        '你只需要完成任务执行，不要输出 AgentRoom 状态机字段。',
+        '请返回清晰的执行结果、关键步骤、产物说明和需要审核的内容。',
+        `当前任务：${input.taskTitle}`,
+        `修订轮次：${input.revisionRound}`,
+    ].join('\n')
+}
+
+/**
  * Parse reviewer output to extract a review decision and feedback.
  * Falls back to a default heuristic when structured output is absent.
  */
@@ -310,16 +362,19 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
     }
 
     async runTask(input: HermesAgentRuntimeInput): Promise<HermesAgentRuntimeOutput> {
-        // Only 'created' is supported for orchestrated dual-run.
-        // Other statuses require different step sequences (not yet implemented).
+        // Route to retry path for revision/retry statuses
+        const retryStatuses = ['revision_required', 'need_user_decision', 'failed']
+        if (retryStatuses.includes(input.currentStatus)) {
+            return this.runRetryPath(input)
+        }
+
         if (input.currentStatus !== 'created') {
             throw new Error(
-                `OrchestratedGatewayRuntime dual-run requires status 'created', got '${input.currentStatus}'. ` +
-                'Revision/retry step sequences are not yet implemented.',
+                `OrchestratedGatewayRuntime only supports 'created', 'revision_required', 'need_user_decision', 'failed'. Got '${input.currentStatus}'.`,
             )
         }
 
-        // ── Phase 1: Planner run ──────────────────────────────────
+        // ── Phase 1: Planner run (created path) ───────────────────
 
         // Step 1: Resolve planner binding — fail explicitly if missing
         const plannerProfileName = resolvePlannerBinding(input)
@@ -675,6 +730,261 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                         reviewerRunId: reviewerResult.runId,
                         reviewerProfileName,
                         reviewDecision,
+                    },
+                },
+            ],
+        }
+    }
+
+    /**
+     * P3: Retry path for revision_required, need_user_decision, and failed.
+     * Skips planner phase — executes developer (with review feedback context) → reviewer.
+     *
+     * Context inheritance:
+     *   - planner metadata: NOT inherited (planner skipped)
+     *   - developer metadata: NEW (new upstream run ID)
+     *   - reviewer metadata: NEW (new upstream run ID)
+     *   - revisionRound: managed by service-layer state machine
+     *   - previousReviewFeedback: from store (last rejected review comment)
+     */
+    private async runRetryPath(input: HermesAgentRuntimeInput): Promise<HermesAgentRuntimeOutput> {
+        // ── Phase 1: Developer revision run ──────────────────────
+
+        const { profileName: developerProfileName, bindingSource: developerBindingSource } =
+            resolveDeveloperBinding(input)
+
+        const developerTarget = this.profileResolver(
+            developerProfileName,
+            this.upstream,
+            this.apiKey,
+        )
+
+        const developerSessionId = `agent-room-developer-${input.sessionId}-${input.taskId}-rev${input.revisionRound}`
+        const developerHooks = createRoleTaggedHooks(input.hooks, 'developer')
+
+        const developerResult = await runHermesGatewayTask({
+            upstream: developerTarget.upstream,
+            apiKey: developerTarget.apiKey,
+            input: buildRevisionDeveloperInput(input),
+            instructions: buildRevisionDeveloperInstructions(input),
+            sessionId: developerSessionId,
+            timeoutMs: this.timeoutMs,
+            model: developerTarget.model,
+            provider: developerTarget.provider,
+            onUpstreamRunCreated: developerHooks?.onUpstreamRunCreated,
+            onRawEvent: developerHooks?.onRawEvent,
+        })
+
+        // ── Phase 2: Reviewer run ────────────────────────────────
+
+        const reviewerProfileName = resolveReviewerBinding(input)
+
+        const reviewerTarget = this.profileResolver(
+            reviewerProfileName,
+            this.upstream,
+            this.apiKey,
+        )
+
+        const reviewerSessionId = `agent-room-reviewer-${input.sessionId}-${input.taskId}-rev${input.revisionRound}`
+        const reviewerHooks = createRoleTaggedHooks(input.hooks, 'reviewer')
+
+        const reviewerResult = await runHermesGatewayTask({
+            upstream: reviewerTarget.upstream,
+            apiKey: reviewerTarget.apiKey,
+            input: buildReviewerInput(input, developerResult.output),
+            instructions: buildReviewerInstructions(input),
+            sessionId: reviewerSessionId,
+            timeoutMs: this.timeoutMs,
+            model: reviewerTarget.model,
+            provider: reviewerTarget.provider,
+            onUpstreamRunCreated: reviewerHooks?.onUpstreamRunCreated,
+            onRawEvent: reviewerHooks?.onRawEvent,
+        })
+
+        // ── Build output ──────────────────────────────────────────
+
+        const { decision: reviewDecision, feedback: reviewFeedback } =
+            parseReviewerDecision(reviewerResult.output, 'approved')
+
+        const developerMetadata: HermesAgentRuntimeMetadata = {
+            developerRunId: developerResult.runId,
+            developerProfileName: developerProfileName ?? '(default)',
+            developerSource: 'orchestrated-developer-revision',
+            developerBindingSource,
+            revisionRound: input.revisionRound,
+            previousReviewFeedback: input.previousReviewFeedback,
+        }
+        if (developerTarget.model) developerMetadata.developerModel = developerTarget.model
+        if (developerTarget.provider) developerMetadata.developerProvider = developerTarget.provider
+
+        const reviewerMetadata: HermesAgentRuntimeMetadata = {
+            reviewerRunId: reviewerResult.runId,
+            reviewerProfileName,
+            reviewDecision,
+            reviewFeedback,
+            reviewerSource: 'orchestrated-reviewer-revision',
+        }
+        if (reviewerTarget.model) reviewerMetadata.reviewerModel = reviewerTarget.model
+        if (reviewerTarget.provider) reviewerMetadata.reviewerProvider = reviewerTarget.provider
+
+        const combinedMetadata: Record<string, unknown> = {
+            ...developerMetadata,
+            ...reviewerMetadata,
+            source: 'orchestrated-revision-retry',
+        }
+
+        const title = input.taskTitle
+        const safeName = safeTitle(title)
+
+        type ReviewFinalStatus = 'review_passed' | 'revision_required' | 'need_user_decision'
+        type ReviewEventType = 'review_passed' | 'review_rejected' | 'need_user_decision'
+
+        const decisionStatusMap: Record<typeof reviewDecision, { status: ReviewFinalStatus; eventType: ReviewEventType }> = {
+            approved: { status: 'review_passed', eventType: 'review_passed' },
+            revision_required: { status: 'revision_required', eventType: 'review_rejected' },
+            need_user_decision: { status: 'need_user_decision', eventType: 'need_user_decision' },
+        }
+
+        const finalStatus = decisionStatusMap[reviewDecision]
+
+        return {
+            steps: [
+                {
+                    status: 'in_progress',
+                    activeRole: 'developer',
+                    events: [{
+                        type: input.currentStatus === 'failed' ? 'task_started' : 'revision_started',
+                        agentRole: 'developer',
+                        payload: { revisionRound: input.revisionRound },
+                    }],
+                    messages: [{
+                        senderRole: 'developer',
+                        senderId: 'developer',
+                        senderName: '开发 Agent',
+                        content: input.previousReviewFeedback
+                            ? `开始修订（第 ${input.revisionRound} 轮），针对审核反馈进行修改。`
+                            : `开始重试任务「${title}」（之前执行失败）。`,
+                    }],
+                },
+                {
+                    status: 'submitted_for_review',
+                    activeRole: 'developer',
+                    events: [{
+                        type: 'task_submitted',
+                        agentRole: 'developer',
+                        payload: combinedMetadata,
+                    }],
+                    messages: [{
+                        senderRole: 'developer',
+                        senderId: 'developer',
+                        senderName: '开发 Agent',
+                        type: 'agent_message',
+                        content: developerResult.output,
+                        metadata: combinedMetadata,
+                    }],
+                },
+                ...(reviewDecision === 'approved'
+                    ? [{
+                        status: 'review_passed' as const,
+                        activeRole: 'reviewer' as const,
+                        events: [{
+                            type: 'review_passed' as const,
+                            agentRole: 'reviewer' as const,
+                            payload: {
+                                reviewerRunId: reviewerResult.runId,
+                                reviewerProfileName,
+                                reviewDecision,
+                                reviewFeedback,
+                            },
+                        }],
+                        messages: [{
+                            senderRole: 'reviewer' as const,
+                            senderId: 'reviewer',
+                            senderName: '审核 Agent',
+                            type: 'review_result' as const,
+                            content: reviewFeedback,
+                            metadata: {
+                                reviewerRunId: reviewerResult.runId,
+                                reviewerProfileName,
+                                reviewDecision,
+                            },
+                        }],
+                    }]
+                    : [
+                        {
+                            status: 'review_rejected' as const,
+                            activeRole: 'reviewer' as const,
+                            events: [{
+                                type: 'review_rejected' as const,
+                                agentRole: 'reviewer' as const,
+                                payload: {
+                                    reviewerRunId: reviewerResult.runId,
+                                    reviewerProfileName,
+                                    reviewDecision,
+                                    reviewFeedback,
+                                    revisionRound: input.revisionRound,
+                                },
+                            }],
+                            messages: [{
+                                senderRole: 'reviewer' as const,
+                                senderId: 'reviewer',
+                                senderName: '审核 Agent',
+                                type: 'review_result' as const,
+                                content: `❌ 审核驳回：${reviewFeedback}`,
+                                metadata: {
+                                    reviewerRunId: reviewerResult.runId,
+                                    reviewerProfileName,
+                                    reviewDecision,
+                                },
+                            }],
+                        },
+                        {
+                            status: finalStatus.status,
+                            activeRole: 'reviewer' as const,
+                            events: [{
+                                type: finalStatus.eventType,
+                                agentRole: 'reviewer' as const,
+                                payload: {
+                                    reviewerRunId: reviewerResult.runId,
+                                    reviewerProfileName,
+                                    reviewDecision,
+                                    reviewFeedback,
+                                    revisionRound: input.revisionRound,
+                                },
+                            }],
+                            messages: [{
+                                senderRole: 'reviewer' as const,
+                                senderId: 'reviewer',
+                                senderName: '审核 Agent',
+                                type: 'review_result' as const,
+                                content: reviewDecision === 'need_user_decision'
+                                    ? `⚠️ 任务需要用户决策：${reviewFeedback}`
+                                    : `需要修改：${reviewFeedback}`,
+                                metadata: {
+                                    reviewerRunId: reviewerResult.runId,
+                                    reviewerProfileName,
+                                    reviewDecision,
+                                },
+                            }],
+                        },
+                    ]),
+            ],
+            artifacts: [
+                {
+                    name: `${safeName}-rev${input.revisionRound}.md`,
+                    type: 'code_output',
+                    content: developerResult.output,
+                    metadata: combinedMetadata,
+                },
+                {
+                    name: `${safeName}-rev${input.revisionRound}-review.md`,
+                    type: 'review_report',
+                    content: reviewFeedback,
+                    metadata: {
+                        reviewerRunId: reviewerResult.runId,
+                        reviewerProfileName,
+                        reviewDecision,
+                        revisionRound: input.revisionRound,
                     },
                 },
             ],
