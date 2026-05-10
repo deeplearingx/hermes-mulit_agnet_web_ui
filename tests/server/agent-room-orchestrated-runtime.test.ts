@@ -755,25 +755,35 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
     it('orchestrated mode: run transitions queued → running → completed', async () => {
         const { runHermesGatewayTask } = await import('../../packages/server/src/services/hermes/gateway-run-client')
 
+        const plannerRunId = 'run-planner-e2e-001'
+        const developerRunId = 'run-dev-e2e-001'
+
         let callCount = 0
         vi.mocked(runHermesGatewayTask).mockImplementation(async (params: any) => {
             callCount++
-            if (params.onUpstreamRunCreated) {
-                params.onUpstreamRunCreated(`upstream-run-${callCount}`)
-            }
-            if (params.onRawEvent) {
-                params.onRawEvent({ event: 'run.created', data: { id: `upstream-run-${callCount}` } })
-            }
             if (callCount === 1) {
+                if (params.onUpstreamRunCreated) {
+                    params.onUpstreamRunCreated(plannerRunId)
+                }
+                if (params.onRawEvent) {
+                    params.onRawEvent({ event: 'run.created', data: { id: plannerRunId } })
+                }
                 return {
                     output: 'Detailed plan: step 1, step 2, step 3',
-                    runId: 'run-planner-e2e-001',
+                    runId: plannerRunId,
                     sessionId: `agent-room-planner-${params.sessionId}`,
                 }
             }
+            // Developer run
+            if (params.onUpstreamRunCreated) {
+                params.onUpstreamRunCreated(developerRunId)
+            }
+            if (params.onRawEvent) {
+                params.onRawEvent({ event: 'run.completed', data: { id: developerRunId } })
+            }
             return {
                 output: 'Implementation complete: feature built successfully',
-                runId: 'run-dev-e2e-001',
+                runId: developerRunId,
                 sessionId: `agent-room-developer-${params.sessionId}`,
             }
         })
@@ -808,22 +818,48 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
         const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
         expect(finalTask.status).toBe('submitted_for_review')
 
-        // run.upstreamRunId should be set to developer's upstream run ID (last-wins via onUpstreamRunCreated hook)
-        const completedRun = svc.getRun(run.id)!
-        expect(completedRun.upstreamRunId).toBe('upstream-run-2')
-
         // Metadata should include both plannerRunId and developerRunId
         const artifacts = svc.listTaskArtifacts(session.id, task.id)
         expect(artifacts).toHaveLength(1)
         const meta = artifacts[0].metadata as Record<string, unknown>
-        expect(meta.plannerRunId).toBe('run-planner-e2e-001')
-        expect(meta.developerRunId).toBe('run-dev-e2e-001')
+        expect(meta.plannerRunId).toBe(plannerRunId)
+        expect(meta.developerRunId).toBe(developerRunId)
         expect(meta.source).toBe('orchestrated-dual-run')
+
+        // P1.3.d: upstreamRunId semantics
+        // plannerRunId should differ from developerRunId
+        expect(meta.plannerRunId).not.toBe(meta.developerRunId)
+        // run.upstreamRunId should equal the developer's run ID (last-wins, developer is primary)
+        const completedRun = svc.getRun(run.id)!
+        expect(completedRun.upstreamRunId).toBe(meta.developerRunId)
+
+        // P1.3.b.1: developer binding source should be 'role-binding' when developer binding is set
+        expect(meta.developerBindingSource).toBe('role-binding')
+        expect(meta.developerProfileName).toBe('claude-3.5-sonnet')
+
+        // P1.3.f: artifact metadata must NOT contain sensitive keys
+        const sensitiveKeys = ['apiKey', 'Authorization', 'token', 'secret', 'password', 'key', 'credential', 'apikey', 'auth', 'bearer']
+        const metaKeys = Object.keys(meta).map(k => k.toLowerCase())
+        const metaValues = JSON.stringify(meta).toLowerCase()
+        for (const sensitive of sensitiveKeys) {
+            expect(metaKeys).not.toContain(sensitive)
+            expect(metaValues).not.toContain(sensitive)
+        }
 
         // run_events should have gateway_sse source with _agentRole dimension
         const runEvents = svc.listRunEventsByRun(run.id)
         const gatewayEvents = runEvents.filter(e => e.source === 'gateway_sse')
         expect(gatewayEvents.length).toBeGreaterThanOrEqual(2)
+
+        // P1.3.e: gateway_sse events must have _agentRole dimension from role-tagged hooks
+        const plannerGatewayEvents = gatewayEvents.filter(
+            e => (e.payload as Record<string, unknown>)?._agentRole === 'planner',
+        )
+        const developerGatewayEvents = gatewayEvents.filter(
+            e => (e.payload as Record<string, unknown>)?._agentRole === 'developer',
+        )
+        expect(plannerGatewayEvents.length).toBeGreaterThanOrEqual(1)
+        expect(developerGatewayEvents.length).toBeGreaterThanOrEqual(1)
 
         // Runner step events should be persisted
         const runnerEvents = runEvents.filter(e => e.source === 'runner')
@@ -1006,6 +1042,190 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
         // Task stays in 'created'
         const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
         expect(finalTask.status).toBe('created')
+
+        resetActiveRunnerForTest()
+    })
+
+    // ── Group 6: planner missing binding E2E (P1.3.a) ────────────
+
+    it('P1.3.a: planner missing binding → run fails, task stays created, no artifacts', async () => {
+        const { runHermesGatewayTask } = await import('../../packages/server/src/services/hermes/gateway-run-client')
+
+        // Mock should NOT be called — planner binding missing causes immediate rejection
+        vi.mocked(runHermesGatewayTask).mockResolvedValue({
+            output: 'should not be called',
+            runId: 'should-not-be-called',
+            sessionId: 'should-not',
+        })
+
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+        setActiveRunnerForTest(new RealAgentRunner(runtime))
+
+        const session = svc.createSession('Planner Missing E2E')
+        // Create task WITHOUT setting planner role binding
+        const task = svc.createTask(session.id, 'No Planner', 'Task without planner binding')
+
+        const run = svc.startWorkflow(session.id, task.id)
+
+        await vi.waitFor(() => {
+            const updatedRun = svc.getRun(run.id)!
+            expect(updatedRun.status).toBe('failed')
+        }, { timeout: 5000 })
+
+        // Run errorMessage must contain "planner"
+        const failedRun = svc.getRun(run.id)!
+        expect(failedRun.errorMessage).not.toBeNull()
+        expect(failedRun.errorMessage!.toLowerCase()).toContain('planner')
+
+        // Task remains in "created" — no partial advancement
+        const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(finalTask.status).toBe('created')
+
+        // No artifacts created
+        const artifacts = svc.listTaskArtifacts(session.id, task.id)
+        expect(artifacts).toHaveLength(0)
+
+        // runHermesGatewayTask should not have been called
+        expect(runHermesGatewayTask).not.toHaveBeenCalled()
+
+        resetActiveRunnerForTest()
+    })
+
+    // ── Group 7: developer fallback E2E (P1.3.b.2, P1.3.b.3) ────
+
+    it('P1.3.b.2: developer fallback to assignedAgentId when no developer binding', async () => {
+        const { runHermesGatewayTask } = await import('../../packages/server/src/services/hermes/gateway-run-client')
+
+        let callCount = 0
+        vi.mocked(runHermesGatewayTask).mockImplementation(async (_params: any) => {
+            callCount++
+            if (callCount === 1) {
+                return { output: 'Plan output', runId: 'run-fb-2-p', sessionId: 'sess-fb-2-p' }
+            }
+            return { output: 'Dev output', runId: 'run-fb-2-d', sessionId: 'sess-fb-2-d' }
+        })
+
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+        setActiveRunnerForTest(new RealAgentRunner(runtime))
+
+        const session = svc.createSession('Dev Fallback E2E')
+        // Only planner binding, no developer binding
+        svc.setRoleBinding(session.id, 'planner', 'gpt-4o')
+        // Task with assignedAgentId for fallback
+        const task = svc.createTask(session.id, 'Task', 'Description', 'fallback-agent-id')
+
+        const run = svc.startWorkflow(session.id, task.id)
+
+        await vi.waitFor(() => {
+            const updatedRun = svc.getRun(run.id)!
+            expect(updatedRun.status).toBe('completed')
+        }, { timeout: 5000 })
+
+        // Developer binding source should be 'assigned-agent'
+        const artifacts = svc.listTaskArtifacts(session.id, task.id)
+        expect(artifacts).toHaveLength(1)
+        const meta = artifacts[0].metadata as Record<string, unknown>
+        expect(meta.developerBindingSource).toBe('assigned-agent')
+        expect(meta.developerProfileName).toBe('fallback-agent-id')
+
+        resetActiveRunnerForTest()
+    })
+
+    it('P1.3.b.3: developer fallback to "none" when neither binding nor assignedAgentId', async () => {
+        const { runHermesGatewayTask } = await import('../../packages/server/src/services/hermes/gateway-run-client')
+
+        let callCount = 0
+        vi.mocked(runHermesGatewayTask).mockImplementation(async (_params: any) => {
+            callCount++
+            if (callCount === 1) {
+                return { output: 'Plan output', runId: 'run-fb-3-p', sessionId: 'sess-fb-3-p' }
+            }
+            return { output: 'Dev output', runId: 'run-fb-3-d', sessionId: 'sess-fb-3-d' }
+        })
+
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+        setActiveRunnerForTest(new RealAgentRunner(runtime))
+
+        const session = svc.createSession('Dev None E2E')
+        // Only planner binding, no developer binding and no assignedAgentId
+        svc.setRoleBinding(session.id, 'planner', 'gpt-4o')
+        const task = svc.createTask(session.id, 'Task', 'Description')
+
+        const run = svc.startWorkflow(session.id, task.id)
+
+        await vi.waitFor(() => {
+            const updatedRun = svc.getRun(run.id)!
+            expect(updatedRun.status).toBe('completed')
+        }, { timeout: 5000 })
+
+        // Developer binding source should be 'none'
+        const artifacts = svc.listTaskArtifacts(session.id, task.id)
+        expect(artifacts).toHaveLength(1)
+        const meta = artifacts[0].metadata as Record<string, unknown>
+        expect(meta.developerBindingSource).toBe('none')
+
+        resetActiveRunnerForTest()
+    })
+
+    // ── Group 8: planner output injection (P1.3.c) ────────────────
+
+    it('P1.3.c: developer input includes planner output and plan wrapper text', async () => {
+        const { runHermesGatewayTask } = await import('../../packages/server/src/services/hermes/gateway-run-client')
+
+        const plannerOutput = 'Detailed architectural plan: step A, step B, step C'
+        const developerCallParams: any[] = []
+
+        vi.mocked(runHermesGatewayTask).mockImplementation(async (params: any) => {
+            developerCallParams.push(params)
+            if (developerCallParams.length === 1) {
+                return { output: plannerOutput, runId: 'run-p1-3c-p', sessionId: 'sess-p1-3c-p' }
+            }
+            return { output: 'Dev output', runId: 'run-p1-3c-d', sessionId: 'sess-p1-3c-d' }
+        })
+
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+        setActiveRunnerForTest(new RealAgentRunner(runtime))
+
+        const session = svc.createSession('Planner Injection E2E')
+        svc.setRoleBinding(session.id, 'planner', 'gpt-4o')
+        svc.setRoleBinding(session.id, 'developer', 'claude-3.5-sonnet')
+        const task = svc.createTask(session.id, 'Task', 'Description')
+
+        const run = svc.startWorkflow(session.id, task.id)
+
+        await vi.waitFor(() => {
+            const updatedRun = svc.getRun(run.id)!
+            expect(updatedRun.status).toBe('completed')
+        }, { timeout: 5000 })
+
+        // runHermesGatewayTask should have been called exactly twice
+        expect(runHermesGatewayTask).toHaveBeenCalledTimes(2)
+
+        // Second call (developer) must include planner output and plan wrapper text
+        const devCall = developerCallParams[1]
+        expect(devCall.input).toContain(plannerOutput)
+        expect(devCall.input).toContain('执行计划')
+        expect(devCall.input).toContain('计划结束')
 
         resetActiveRunnerForTest()
     })

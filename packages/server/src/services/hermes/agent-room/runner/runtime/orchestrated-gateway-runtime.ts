@@ -18,6 +18,13 @@
 //   - Metadata includes plannerRunId, developerRunId, plannerProfileName, developerProfileName
 //   - run.upstreamRunId ends with developer's run ID (last-wins, developer is primary execution role)
 //
+// P2: Reviewer phase — extends multi-role pipeline to planner → developer → reviewer.
+//   - Resolves reviewer profile from roleBindings.get('reviewer')
+//   - Executes reviewer Gateway run using developer output as review context
+//   - Produces unified reviewer metadata (reviewerRunId, reviewerProfileName,
+//     reviewDecision, reviewFeedback) compatible with manual submitReview path
+//   - Final status: review_passed | revision_required | need_user_decision
+//
 // Design decisions:
 //   - Does NOT extend GatewayHermesRuntime (composition over inheritance)
 //   - Does NOT modify GatewayHermesRuntime (single-role runtime stays clean)
@@ -170,6 +177,86 @@ function buildDeveloperInstructions(input: HermesAgentRuntimeInput): string {
 }
 
 /**
+ * Resolve the reviewer profileName from roleBindings.
+ * Throws explicitly if the reviewer binding is missing (reviewer phase is mandatory
+ * in full pipeline mode).
+ */
+function resolveReviewerBinding(input: HermesAgentRuntimeInput): string {
+    const binding = input.roleBindings?.get('reviewer')
+    if (!binding) {
+        throw new Error(
+            'OrchestratedGatewayRuntime reviewer phase requires a reviewer role binding. ' +
+            'Ensure roleBindings.get("reviewer") is set before starting an orchestrated run.',
+        )
+    }
+    return binding.profileName
+}
+
+/**
+ * Build reviewer-specific input text for the Gateway run.
+ * Includes developer output as the artifact to review.
+ */
+function buildReviewerInput(input: HermesAgentRuntimeInput, developerOutput: string): string {
+    const parts = [
+        `任务标题：${input.taskTitle}`,
+        `任务描述：${input.taskDescription}`,
+        `当前阶段：${input.currentStatus}`,
+        `修订轮次：${input.revisionRound}`,
+        '',
+        '--- 开发输出（由开发 Agent 生成）---',
+        developerOutput,
+        '--- 输出结束 ---',
+        '',
+        '请审核上述开发输出，给出审核结论和反馈。',
+        '审核结论必须是以下之一：',
+        '- approved（通过）',
+        '- revision_required（需要修改）',
+        '- need_user_decision（需要用户决策）',
+        '请用中文返回审核结论和详细反馈。',
+    ]
+    return parts.join('\n')
+}
+
+/**
+ * Build reviewer-specific system instructions for the Gateway agent.
+ * Constrains the agent to review only — no implementation.
+ */
+function buildReviewerInstructions(input: HermesAgentRuntimeInput): string {
+    return [
+        '你是 AgentRoom 中的审核 Agent。',
+        '你只需要审核开发 Agent 的输出质量，不要执行代码实现。',
+        '请给出审核结论（approved / revision_required / need_user_decision）和详细反馈。',
+        `当前任务：${input.taskTitle}`,
+    ].join('\n')
+}
+
+/**
+ * Parse reviewer output to extract a review decision and feedback.
+ * Falls back to a default heuristic when structured output is absent.
+ */
+function parseReviewerDecision(
+    output: string,
+    fallbackDecision: 'approved' | 'revision_required' | 'need_user_decision',
+): { decision: 'approved' | 'revision_required' | 'need_user_decision'; feedback: string } {
+    const trimmed = output.trim()
+
+    // Try to extract explicit decision keywords
+    const lower = trimmed.toLowerCase()
+    if (lower.includes('approved') || lower.includes('通过')) {
+        return { decision: 'approved', feedback: trimmed }
+    }
+    if (lower.includes('need_user_decision') || lower.includes('需要用户决策')) {
+        return { decision: 'need_user_decision', feedback: trimmed }
+    }
+    if (lower.includes('revision_required') || lower.includes('需要修改') || lower.includes('要求修改')) {
+        return { decision: 'revision_required', feedback: trimmed }
+    }
+
+    // Fallback: use caller-supplied default
+    return { decision: fallbackDecision, feedback: trimmed }
+}
+
+/**
  * Create role-tagged hook wrappers for observability.
  *
  * - onUpstreamRunCreated: forwarded as-is (caller handles upstreamRunId binding)
@@ -180,7 +267,7 @@ function buildDeveloperInstructions(input: HermesAgentRuntimeInput): string {
  */
 function createRoleTaggedHooks(
     baseHooks: HermesAgentRuntimeHooks | undefined,
-    role: 'planner' | 'developer',
+    role: 'planner' | 'developer' | 'reviewer',
 ): HermesAgentRuntimeHooks | undefined {
     if (!baseHooks) return undefined
     return {
@@ -313,9 +400,53 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
             )
         }
 
+        // ── Phase 3: Reviewer run ────────────────────────────────
+
+        // Step 7: Resolve reviewer binding — fail explicitly if missing
+        const reviewerProfileName = resolveReviewerBinding(input)
+
+        // Step 8: Resolve reviewer Gateway target via profile resolver
+        const reviewerTarget = this.profileResolver(
+            reviewerProfileName,
+            this.upstream,
+            this.apiKey,
+        )
+
+        // Step 9: Execute reviewer Gateway run using developer output as review context
+        const reviewerSessionId = `agent-room-reviewer-${input.sessionId}-${input.taskId}`
+        const reviewerHooks = createRoleTaggedHooks(input.hooks, 'reviewer')
+
+        let reviewerResult: Awaited<ReturnType<typeof runHermesGatewayTask>>
+        try {
+            reviewerResult = await runHermesGatewayTask({
+                upstream: reviewerTarget.upstream,
+                apiKey: reviewerTarget.apiKey,
+                input: buildReviewerInput(input, developerResult.output),
+                instructions: buildReviewerInstructions(input),
+                sessionId: reviewerSessionId,
+                timeoutMs: this.timeoutMs,
+                model: reviewerTarget.model,
+                provider: reviewerTarget.provider,
+                onUpstreamRunCreated: reviewerHooks?.onUpstreamRunCreated,
+                onRawEvent: reviewerHooks?.onRawEvent,
+            })
+        } catch (err: any) {
+            console.error(
+                `[orchestrated-runtime] Reviewer phase failed (profile=${reviewerProfileName}, developerRunId=${developerResult.runId}, task=${input.taskId}):`,
+                err?.message ?? err,
+            )
+            throw new Error(
+                `Orchestrated reviewer phase failed: ${err?.message ?? err}`,
+            )
+        }
+
         // ── Build output ──────────────────────────────────────────
 
-        // Step 7: Build dual-run metadata
+        // Step 10: Parse reviewer decision from reviewer output
+        const { decision: reviewDecision, feedback: reviewFeedback } =
+            parseReviewerDecision(reviewerResult.output, 'approved')
+
+        // Step 11: Build dual-run metadata
         const plannerMetadata: HermesAgentRuntimeMetadata = {
             plannerRunId: plannerResult.runId,
             plannerProfileName,
@@ -339,17 +470,44 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
             developerMetadata.developerTransportSource = developerTarget.transportSource
         }
 
-        // Combined metadata for the final submitted_for_review step
+        // Unified reviewer metadata — compatible with manual submitReview path
+        const reviewerMetadata: HermesAgentRuntimeMetadata = {
+            reviewerRunId: reviewerResult.runId,
+            reviewerProfileName,
+            reviewDecision,
+            reviewFeedback,
+            reviewerSource: 'orchestrated-reviewer',
+        }
+        if (reviewerTarget.model) reviewerMetadata.reviewerModel = reviewerTarget.model
+        if (reviewerTarget.provider) reviewerMetadata.reviewerProvider = reviewerTarget.provider
+        if (reviewerTarget.transportSource) {
+            reviewerMetadata.reviewerTransportSource = reviewerTarget.transportSource
+        }
+
+        // Combined metadata for observability
         const combinedMetadata: Record<string, unknown> = {
             ...plannerMetadata,
             ...developerMetadata,
-            source: 'orchestrated-dual-run',
+            ...reviewerMetadata,
+            source: 'orchestrated-triple-run',
         }
 
         const title = input.taskTitle
         const safeName = safeTitle(title)
 
-        // Step 8: Return ordered steps: planned → assigned → in_progress → submitted_for_review
+        // Step 12: Map reviewer decision to AgentRoom final status and event type
+        type ReviewFinalStatus = 'review_passed' | 'revision_required' | 'need_user_decision'
+        type ReviewEventType = 'review_passed' | 'review_rejected' | 'need_user_decision'
+
+        const decisionStatusMap: Record<typeof reviewDecision, { status: ReviewFinalStatus; eventType: ReviewEventType }> = {
+            approved: { status: 'review_passed', eventType: 'review_passed' },
+            revision_required: { status: 'revision_required', eventType: 'review_rejected' },
+            need_user_decision: { status: 'need_user_decision', eventType: 'need_user_decision' },
+        }
+
+        const finalStatus = decisionStatusMap[reviewDecision]
+
+        // Step 13: Return ordered steps: planned → assigned → in_progress → submitted_for_review → review_final
         return {
             steps: [
                 {
@@ -411,13 +569,115 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                         metadata: combinedMetadata,
                     }],
                 },
+                // P2 reviewer decision: for non-approved decisions, state machine
+                // requires submitted_for_review → review_rejected → revision_required|need_user_decision.
+                // For approved, submitted_for_review → review_passed is a direct valid transition.
+                ...(reviewDecision === 'approved'
+                    ? [{
+                        status: 'review_passed' as const,
+                        activeRole: 'reviewer' as const,
+                        events: [{
+                            type: 'review_passed' as const,
+                            agentRole: 'reviewer' as const,
+                            payload: {
+                                reviewerRunId: reviewerResult.runId,
+                                reviewerProfileName,
+                                reviewDecision,
+                                reviewFeedback,
+                            },
+                        }],
+                        messages: [{
+                            senderRole: 'reviewer' as const,
+                            senderId: 'reviewer',
+                            senderName: '审核 Agent',
+                            type: 'review_result' as const,
+                            content: reviewFeedback,
+                            metadata: {
+                                reviewerRunId: reviewerResult.runId,
+                                reviewerProfileName,
+                                reviewDecision,
+                            },
+                        }],
+                    }]
+                    : [
+                        // Intermediate transient step: review_rejected
+                        {
+                            status: 'review_rejected' as const,
+                            activeRole: 'reviewer' as const,
+                            events: [{
+                                type: 'review_rejected' as const,
+                                agentRole: 'reviewer' as const,
+                                payload: {
+                                    reviewerRunId: reviewerResult.runId,
+                                    reviewerProfileName,
+                                    reviewDecision,
+                                    reviewFeedback,
+                                    revisionRound: input.revisionRound,
+                                },
+                            }],
+                            messages: [{
+                                senderRole: 'reviewer' as const,
+                                senderId: 'reviewer',
+                                senderName: '审核 Agent',
+                                type: 'review_result' as const,
+                                content: `❌ 审核驳回：${reviewFeedback}`,
+                                metadata: {
+                                    reviewerRunId: reviewerResult.runId,
+                                    reviewerProfileName,
+                                    reviewDecision,
+                                },
+                            }],
+                        },
+                        // Final step: revision_required or need_user_decision
+                        {
+                            status: finalStatus.status,
+                            activeRole: 'reviewer' as const,
+                            events: [{
+                                type: finalStatus.eventType,
+                                agentRole: 'reviewer' as const,
+                                payload: {
+                                    reviewerRunId: reviewerResult.runId,
+                                    reviewerProfileName,
+                                    reviewDecision,
+                                    reviewFeedback,
+                                    revisionRound: input.revisionRound,
+                                },
+                            }],
+                            messages: [{
+                                senderRole: 'reviewer' as const,
+                                senderId: 'reviewer',
+                                senderName: '审核 Agent',
+                                type: 'review_result' as const,
+                                content: reviewDecision === 'need_user_decision'
+                                    ? `⚠️ 任务需要用户决策：${reviewFeedback}`
+                                    : `需要修改：${reviewFeedback}`,
+                                metadata: {
+                                    reviewerRunId: reviewerResult.runId,
+                                    reviewerProfileName,
+                                    reviewDecision,
+                                },
+                            }],
+                        },
+                    ]),
             ],
-            artifacts: [{
-                name: `${safeName}.md`,
-                type: 'code_output',
-                content: developerResult.output,
-                metadata: combinedMetadata,
-            }],
+            artifacts: [
+                {
+                    name: `${safeName}.md`,
+                    type: 'code_output',
+                    content: developerResult.output,
+                    metadata: combinedMetadata,
+                },
+                {
+                    name: `${safeName}-review.md`,
+                    type: 'review_report',
+                    content: reviewFeedback,
+                    metadata: {
+                        reviewerRunId: reviewerResult.runId,
+                        reviewerProfileName,
+                        reviewDecision,
+                    },
+                },
+            ],
         }
     }
 }

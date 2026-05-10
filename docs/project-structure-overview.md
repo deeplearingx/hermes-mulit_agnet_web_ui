@@ -159,7 +159,7 @@ AgentRoom and runtime related tests:
 - `tests/server/agent-room-gateway-runtime.test.ts`
   - single-role Gateway runtime behavior
 - `tests/server/agent-room-orchestrated-runtime.test.ts`
-   - orchestrated runtime: skeleton, dual-run, failure handling, E2E (63 tests)
+    - orchestrated runtime: skeleton, dual-run, failure handling, E2E (67 tests)
 - `tests/server/agent-room-runner-result.test.ts`
   - end-to-end runner result protocol and Gateway integration
 - `tests/server/agent-room-role-bindings.test.ts`

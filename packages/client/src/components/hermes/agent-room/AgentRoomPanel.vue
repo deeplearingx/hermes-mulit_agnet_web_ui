@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useAgentRoomStore, type AgentRoomView } from '@/stores/hermes/agent-room'
+import { useAgentRoomStore } from '@/stores/hermes/agent-room'
 import type { AgentRoomTask, AgentRoomRole } from '@/api/hermes/agent-room'
 import AgentRoomWorkspace from './AgentRoomWorkspace.vue'
 import AgentRoomTaskPanel from './AgentRoomTaskPanel.vue'

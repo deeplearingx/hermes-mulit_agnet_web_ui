@@ -38,6 +38,14 @@ export interface HermesAgentRuntimeMetadata {
     plannerProfileName?: string
     /** Resolved profile name used for the developer role. */
     developerProfileName?: string
+    /** Upstream Gateway run ID for the reviewer phase (if executed). */
+    reviewerRunId?: string
+    /** Resolved profile name used for the reviewer role. */
+    reviewerProfileName?: string
+    /** Reviewer decision: approved | revision_required | need_user_decision. */
+    reviewDecision?: 'approved' | 'revision_required' | 'need_user_decision'
+    /** Structured or free-form reviewer feedback. */
+    reviewFeedback?: string
     /** Extensible bag for future metadata without interface changes. */
     [key: string]: unknown
 }

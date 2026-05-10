@@ -50,6 +50,11 @@ export interface AgentRoomReview {
     reviewerAgentId: string
     status: 'passed' | 'rejected'
     comment: string
+    /** Optional unified reviewer metadata (populated for automated reviewer runs). */
+    reviewerRunId?: string
+    reviewerProfileName?: string
+    reviewDecision?: 'approved' | 'revision_required' | 'need_user_decision'
+    reviewFeedback?: string
     createdAt: string
 }
 
@@ -76,6 +81,11 @@ export interface AgentRoomMessage {
         status?: string
         roundIndex?: number
         reviewComment?: string
+        /** P2: Unified reviewer metadata (populated from automated reviewer runs). */
+        reviewerRunId?: string
+        reviewerProfileName?: string
+        reviewDecision?: string
+        reviewFeedback?: string
     }
     createdAt: string
 }
