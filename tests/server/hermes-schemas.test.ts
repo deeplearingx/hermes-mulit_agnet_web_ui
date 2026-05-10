@@ -122,7 +122,7 @@ describe('Hermes schema migrations', () => {
 
     expect(() => initAllHermesTables()).not.toThrow()
 
-    // Verify all 6 agent_room tables exist
+    // Verify all agent_room tables exist (P3.1: includes role_runs)
     const tables = [
       'agent_room_sessions',
       'agent_room_tasks',
@@ -130,6 +130,7 @@ describe('Hermes schema migrations', () => {
       'agent_room_messages',
       'agent_room_workflow_events',
       'agent_room_artifacts',
+      'agent_room_role_runs',
     ]
     for (const table of tables) {
       const row = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(table) as any

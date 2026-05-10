@@ -18,6 +18,8 @@ const inputText = ref('')
 const showNewSession = ref(false)
 const newSessionName = ref('')
 const taskPanelRef = ref<InstanceType<typeof AgentRoomTaskPanel> | null>(null)
+const autoDeliveryToast = ref<{ message: string; type: 'success' | 'error' } | null>(null)
+let toastTimer: ReturnType<typeof setTimeout> | null = null
 
 // ─── Modal State ───────────────────────────────────────────────
 const showCreateTask = ref(false)
@@ -43,6 +45,9 @@ async function handleCreateSession() {
 
 async function handleSelectSession(sessionId: string) {
     if (sessionId === store.currentSessionId) return
+    // Clear toast on session switch
+    if (toastTimer) { clearTimeout(toastTimer); toastTimer = null }
+    autoDeliveryToast.value = null
     await store.selectSession(sessionId)
 }
 
@@ -145,11 +150,22 @@ async function handleDeleteArtifact(artifactId: string) {
 
 // ─── Auto-Delivery Toggle ──────────────────────────────────────
 async function handleToggleAutoDelivery() {
+    const newState = !store.autoDeliveryEnabled
     try {
-        await store.updateAutoDelivery(!store.autoDeliveryEnabled)
+        await store.updateAutoDelivery(newState)
+        showToast(newState ? '已开启自动交付：审核通过后自动交付产出物' : '已关闭自动交付：审核通过后需手动交付', 'success')
     } catch {
-        // Error already set in store
+        showToast('切换自动交付失败，请重试', 'error')
     }
+}
+
+function showToast(message: string, type: 'success' | 'error') {
+    if (toastTimer) clearTimeout(toastTimer)
+    autoDeliveryToast.value = { message, type }
+    toastTimer = setTimeout(() => {
+        autoDeliveryToast.value = null
+        toastTimer = null
+    }, 3000)
 }
 
 // ─── Role Binding Actions ──────────────────────────────────────
@@ -203,7 +219,7 @@ async function handleDeleteRoleBinding(role: AgentRoomRole) {
                 v-if="store.currentSessionId"
                 class="btn-auto-delivery"
                 :class="{ active: store.autoDeliveryEnabled }"
-                title="自动交付: 审核通过后自动交付"
+                :title="store.autoDeliveryEnabled ? '自动交付已开启：审核通过后将自动交付产出物。点击关闭。' : '自动交付已关闭：审核通过后需手动交付。点击开启。'"
                 @click="handleToggleAutoDelivery"
             >
                 {{ store.autoDeliveryEnabled ? '📦 自动交付' : '📦 手动交付' }}
@@ -234,6 +250,18 @@ async function handleDeleteRoleBinding(role: AgentRoomRole) {
             <span class="error-text">⚠️ {{ store.error }}</span>
             <button class="error-dismiss" @click="store.clearError()">✕</button>
         </div>
+
+        <!-- Auto-Delivery Toast -->
+        <transition name="toast-fade">
+            <div
+                v-if="autoDeliveryToast"
+                class="auto-delivery-toast"
+                :class="autoDeliveryToast.type"
+            >
+                <span class="toast-icon">{{ autoDeliveryToast.type === 'success' ? '✅' : '❌' }}</span>
+                <span class="toast-text">{{ autoDeliveryToast.message }}</span>
+            </div>
+        </transition>
 
         <!-- Main Content -->
         <div v-if="store.currentSessionId" class="room-content">
@@ -283,8 +311,10 @@ async function handleDeleteRoleBinding(role: AgentRoomRole) {
                             v-else-if="store.activeView === 'runs'"
                             :runs="store.runs"
                             :run-events="store.runEvents"
+                            :role-runs="store.roleRuns"
                             :tasks="store.tasks"
                             :has-active-runs="store.hasActiveRuns"
+                            @load-role-runs="store.loadRoleRunsForRun($event)"
                         />
                     </div>
                     <!-- Chat Input (always visible for quick message sending) -->
@@ -368,6 +398,7 @@ async function handleDeleteRoleBinding(role: AgentRoomRole) {
     background: #0a0f1e;
     color: #e2e8f0;
     font-family: 'Courier New', monospace;
+    position: relative;
 }
 
 // ─── Error Banner ──────────────────────────────────────────────
@@ -799,5 +830,54 @@ async function handleDeleteRoleBinding(role: AgentRoomRole) {
     .view-content {
         min-height: 200px;
     }
+}
+
+// ─── Auto-Delivery Toast ───────────────────────────────────────
+.auto-delivery-toast {
+    position: absolute;
+    top: 40px;
+    right: 12px;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: 'Courier New', monospace;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    pointer-events: none;
+
+    &.success {
+        background: rgba(34, 197, 94, 0.15);
+        border: 1px solid rgba(34, 197, 94, 0.3);
+        color: #86efac;
+    }
+
+    &.error {
+        background: rgba(239, 68, 68, 0.15);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        color: #fca5a5;
+    }
+
+    .toast-icon {
+        flex-shrink: 0;
+        font-size: 12px;
+    }
+
+    .toast-text {
+        flex: 1;
+    }
+}
+
+.toast-fade-enter-active,
+.toast-fade-leave-active {
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.toast-fade-enter-from,
+.toast-fade-leave-to {
+    opacity: 0;
+    transform: translateY(-8px);
 }
 </style>

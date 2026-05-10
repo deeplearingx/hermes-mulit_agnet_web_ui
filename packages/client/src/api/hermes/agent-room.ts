@@ -135,6 +135,27 @@ export interface AgentRoomRun {
     updatedAt: string
 }
 
+// ─── Role Run Entity (P3.1: per-role execution record) ─────────
+export type AgentRoomRoleRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'skipped'
+
+export interface AgentRoomRoleRun {
+    id: string
+    runId: string
+    sessionId: string
+    taskId: string
+    role: string
+    phase: string
+    profileName?: string
+    upstreamRunId?: string
+    status: AgentRoomRoleRunStatus
+    startedAt?: string
+    finishedAt?: string
+    errorMessage?: string
+    metadata?: Record<string, unknown>
+    createdAt: string
+    updatedAt: string
+}
+
 // ─── Run Event Entity ──────────────────────────────────────────
 export interface AgentRoomRunEvent {
     id: string
@@ -341,6 +362,10 @@ export async function listRuns(sessionId: string, taskId?: string): Promise<Agen
 
 export async function getRun(runId: string): Promise<AgentRoomRun> {
     return request(`${BASE}/runs/${runId}`)
+}
+
+export async function listRoleRunsByRun(runId: string): Promise<AgentRoomRoleRun[]> {
+    return request(`${BASE}/runs/${runId}/role-runs`)
 }
 
 export async function listArtifacts(sessionId: string): Promise<AgentRoomArtifact[]> {

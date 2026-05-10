@@ -15,7 +15,7 @@ import type { AgentRoomRole } from './role-types'
 import { assertAgentRoomRole } from './role-types'
 export type { AgentRoomRole }
 export { isAgentRoomRole, assertAgentRoomRole, AGENT_ROOM_ROLES } from './role-types'
-export type { AgentRoomRunStatus, AgentRoomRun } from '../../../db/hermes/agent-room-store'
+export type { AgentRoomRunStatus, AgentRoomRun, AgentRoomRoleRunStatus, AgentRoomRoleRun } from '../../../db/hermes/agent-room-store'
 export type AgentRoomTaskStatus =
     | 'created'
     | 'planned'
@@ -258,7 +258,7 @@ export function getTask(taskId: string): AgentRoomTask | null {
     return store.getTask(taskId) as AgentRoomTask | null
 }
 
-export function createTask(sessionId: string, title: string, description: string, assignedAgentId?: string): AgentRoomTask {
+export function createTask(sessionId: string, title: string, description: string, assignedAgentId?: string, maxRevisionRounds?: number): AgentRoomTask {
     assertSessionExists(sessionId)
     const task: AgentRoomTask = {
         id: randomUUID(),
@@ -268,7 +268,7 @@ export function createTask(sessionId: string, title: string, description: string
         assignedAgentId,
         status: 'created',
         revisionRound: 0,
-        maxRevisionRounds: MAX_REVISION_ROUNDS,
+        maxRevisionRounds: maxRevisionRounds ?? MAX_REVISION_ROUNDS,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
     }
@@ -673,28 +673,131 @@ function emitRunEventsFromWorkflowEvents(runId: string, sessionId: string, taskI
 }
 
 /**
- * Build runtime hooks for a run record.
- * onUpstreamRunCreated: binds the upstream Gateway run_id to the local run record.
- * onRawEvent: persists SSE events as run_events for real-time observability.
- * Both hooks swallow errors to avoid breaking the main execution flow.
+ * Map AgentRoom role to the corresponding phase name for role run tracking.
  */
-function buildRunHooks(run: store.AgentRoomRun): HermesAgentRuntimeHooks {
+function roleToPhase(role: AgentRoomRole): string {
+    switch (role) {
+        case 'planner': return 'planning'
+        case 'developer': return 'development'
+        case 'reviewer': return 'review'
+        case 'delivery': return 'delivery'
+        case 'conversation': return 'conversation'
+        default: return 'unknown'
+    }
+}
+
+/**
+ * Create role run records for each bound role in a workflow run.
+ * Returns the created role runs in binding order (planner → developer → reviewer → delivery).
+ */
+function createRoleRunsForRun(
+    run: store.AgentRoomRun,
+    bindings: Map<AgentRoomRole, RunnerRoleBinding>,
+): store.AgentRoomRoleRun[] {
+    const now = new Date().toISOString()
+    const roleRuns: store.AgentRoomRoleRun[] = []
+    for (const [role, binding] of bindings) {
+        const roleRun: store.AgentRoomRoleRun = {
+            id: randomUUID(),
+            runId: run.id,
+            sessionId: run.sessionId,
+            taskId: run.taskId,
+            role,
+            phase: roleToPhase(role),
+            profileName: binding.profileName,
+            status: 'queued',
+            createdAt: now,
+            updatedAt: now,
+        }
+        store.createRoleRun(roleRun)
+        roleRuns.push(roleRun)
+    }
+    return roleRuns
+}
+
+/**
+ * Finalize role run records after workflow completion or failure.
+ * - Roles that were already started (running) get marked as terminalStatus.
+ * - Roles that were never started (queued) get marked as 'skipped'.
+ * On failure, only the first non-terminal role run gets the error message.
+ */
+function finalizeRoleRuns(
+    roleRuns: store.AgentRoomRoleRun[],
+    terminalStatus: 'completed' | 'failed',
+    errorMessage?: string,
+): void {
+    const now = new Date().toISOString()
+    let errorApplied = false
+    for (const roleRun of roleRuns) {
+        if (roleRun.status === 'completed' || roleRun.status === 'failed' || roleRun.status === 'skipped') {
+            continue // already finalized
+        }
+        if (roleRun.status === 'running') {
+            // Was started — mark as terminal
+            roleRun.status = terminalStatus
+            roleRun.finishedAt = now
+            roleRun.updatedAt = now
+            if (terminalStatus === 'failed' && errorMessage && !errorApplied) {
+                roleRun.errorMessage = errorMessage
+                errorApplied = true
+            }
+        } else {
+            // queued — never started, mark as skipped
+            roleRun.status = 'skipped'
+            roleRun.finishedAt = now
+            roleRun.updatedAt = now
+        }
+        store.updateRoleRun(roleRun)
+    }
+}
+
+/**
+ * Build runtime hooks for a run record.
+ * onUpstreamRunCreated: binds the upstream Gateway run_id to the local run record
+ *   and advances the role run lifecycle (P3.3).
+ * onRawEvent: persists SSE events as run_events with role_run_id correlation (P3.3/P3.4).
+ * Both hooks swallow errors to avoid breaking the main execution flow.
+ *
+ * @param run       The workflow-level run record
+ * @param roleRuns  Optional role run records for role-level observability (P3.3)
+ */
+function buildRunHooks(run: store.AgentRoomRun, roleRuns?: store.AgentRoomRoleRun[]): HermesAgentRuntimeHooks {
+    // Track which role run is "active" — advances sequentially as
+    // the orchestrated runtime calls onUpstreamRunCreated for each phase.
+    let activeRoleRunIndex = 0
+
     return {
         onUpstreamRunCreated: (upstreamRunId: string) => {
             try {
                 updateRunUpstreamId(run.id, upstreamRunId)
                 // Also update in-memory object so the final store.updateRun() preserves it
                 run.upstreamRunId = upstreamRunId
+
+                // P3.3: Advance the next unbound role run to 'running' with upstream_run_id
+                if (roleRuns && activeRoleRunIndex < roleRuns.length) {
+                    const roleRun = roleRuns[activeRoleRunIndex]
+                    roleRun.upstreamRunId = upstreamRunId
+                    roleRun.status = 'running'
+                    roleRun.startedAt = new Date().toISOString()
+                    roleRun.updatedAt = roleRun.startedAt
+                    store.updateRoleRun(roleRun)
+                    activeRoleRunIndex++
+                }
             } catch { /* swallow — non-critical */ }
         },
         onRawEvent: (event: Record<string, unknown>) => {
             try {
                 const eventType = typeof event.event === 'string' ? event.event : 'unknown'
+                // P3.3/P3.4: Tag run_event with the active role_run_id for correlation
+                const activeRoleRunId = (roleRuns && activeRoleRunIndex > 0)
+                    ? roleRuns[activeRoleRunIndex - 1].id
+                    : undefined
                 const runEvent: store.AgentRoomRunEvent = {
                     id: randomUUID(),
                     runId: run.id,
                     sessionId: run.sessionId,
                     taskId: run.taskId,
+                    roleRunId: activeRoleRunId,
                     source: 'gateway_sse',
                     sequence: store.getNextRunEventSequence(run.id),
                     eventType,
@@ -750,16 +853,17 @@ async function executeRun(
     run.updatedAt = run.startedAt
     store.updateRun(run)
 
-    try {
-        // Build role bindings map for multi-role profile resolution
-        const bindings = store.listRoleBindingsBySession(sessionId)
-        const roleBindings = new Map<AgentRoomRole, RunnerRoleBinding>()
-        for (const b of bindings) {
-            roleBindings.set(b.role as AgentRoomRole, { role: b.role as AgentRoomRole, profileName: b.profileName })
-        }
+    // P3.3: Create role run records for each bound role
+    const bindings = store.listRoleBindingsBySession(sessionId)
+    const roleBindings = new Map<AgentRoomRole, RunnerRoleBinding>()
+    for (const b of bindings) {
+        roleBindings.set(b.role as AgentRoomRole, { role: b.role as AgentRoomRole, profileName: b.profileName })
+    }
+    const roleRuns = createRoleRunsForRun(run, roleBindings)
 
-        // Build hooks for real-time observability
-        const hooks = buildRunHooks(run)
+    try {
+        // Build hooks for real-time observability (P3.3: with role run tracking)
+        const hooks = buildRunHooks(run, roleRuns)
 
         const ctx: AgentRoomRunnerContext = {
             sessionId,
@@ -790,11 +894,29 @@ async function executeRun(
             emitRunEventsFromWorkflowEvents(run.id, sessionId, taskId)
         }
 
+        // ─── Unified autoDelivery hook ──────────────────────────────
+        // After runner completes, check if the task reached review_passed
+        // and the session has autoDelivery enabled. This unifies the
+        // autoDelivery logic between manual submitReview() and runner-produced
+        // review_passed status (e.g. orchestrated reviewer approval).
+        const taskAfterRun = store.getTask(taskId) as AgentRoomTask | null
+        if (taskAfterRun?.status === 'review_passed') {
+            const session = store.getSession(sessionId)
+            if (session?.autoDeliveryEnabled) {
+                store.runInTransaction(() => {
+                    deliverTaskCore(sessionId, taskId, taskAfterRun, 'auto')
+                })
+            }
+        }
+
         // Mark run as completed
         run.status = 'completed'
         run.finishedAt = new Date().toISOString()
         run.updatedAt = run.finishedAt
         store.updateRun(run)
+
+        // P3.3: Finalize role runs — mark completed ones, skip unstarted ones
+        finalizeRoleRuns(roleRuns, 'completed')
     } catch (err: any) {
         // Mark run as failed
         run.status = 'failed'
@@ -802,6 +924,9 @@ async function executeRun(
         run.finishedAt = new Date().toISOString()
         run.updatedAt = run.finishedAt
         store.updateRun(run)
+
+        // P3.3: Finalize role runs — mark active one as failed, skip remaining
+        finalizeRoleRuns(roleRuns, 'failed', err?.message)
 
         if (rethrow) {
             throw err
@@ -1009,6 +1134,13 @@ export function deleteTask(sessionId: string, taskId: string): void {
 function deliverTaskCore(sessionId: string, taskId: string, task: AgentRoomTask, deliveryMode: 'manual' | 'auto'): void {
     // Gather enrichment data
     const reviewFeedback = getLatestReviewFeedback(taskId)
+    const deliveredAt = new Date().toISOString()
+
+    // P4.1: Resolve role run IDs for observability
+    const roleRuns = store.listRoleRunsByTask(taskId)
+    const plannerRunId = roleRuns.find(r => r.role === 'planner')?.runId
+    const developerRunId = roleRuns.find(r => r.role === 'developer')?.runId
+    const reviewerRunId = roleRuns.find(r => r.role === 'reviewer')?.runId
 
     // Transition to delivering via state machine
     updateTaskStatus(taskId, 'delivering')
@@ -1034,7 +1166,21 @@ function deliverTaskCore(sessionId: string, taskId: string, task: AgentRoomTask,
     if (reviewFeedback) {
         summaryLines.push(`审核反馈: ${reviewFeedback}`)
     }
-    summaryLines.push(`交付时间: ${new Date().toISOString()}`)
+    summaryLines.push(`交付时间: ${deliveredAt}`)
+
+    // P4.1: Standardized final_delivery artifact metadata
+    const metadata: Record<string, unknown> = {
+        source: deliveryMode === 'auto' ? 'auto-delivery' : 'manual-delivery',
+        deliveryMode,
+        deliveryRole: 'delivery',
+        revisionRound: task.revisionRound,
+        maxRevisionRounds: task.maxRevisionRounds,
+        reviewFeedback: reviewFeedback ?? null,
+        deliveredAt,
+    }
+    if (plannerRunId) metadata.plannerRunId = plannerRunId
+    if (developerRunId) metadata.developerRunId = developerRunId
+    if (reviewerRunId) metadata.reviewerRunId = reviewerRunId
 
     // Create final_delivery artifact with enriched metadata
     const artifact: AgentRoomArtifact = {
@@ -1044,14 +1190,8 @@ function deliverTaskCore(sessionId: string, taskId: string, task: AgentRoomTask,
         name: `${task.title} — 交付结果`,
         type: 'final_delivery',
         content: summaryLines.join('\n'),
-        metadata: {
-            deliveryMode,
-            revisionRound: task.revisionRound,
-            maxRevisionRounds: task.maxRevisionRounds,
-            reviewFeedback: reviewFeedback ?? null,
-            deliveredAt: new Date().toISOString(),
-        },
-        createdAt: new Date().toISOString(),
+        metadata,
+        createdAt: deliveredAt,
     }
     store.createArtifact(artifact as store.AgentRoomArtifact)
 }
@@ -1269,4 +1409,34 @@ export function listRunEventsByRun(runId: string): store.AgentRoomRunEvent[] {
 export function listRunEventsBySession(sessionId: string): store.AgentRoomRunEvent[] {
     assertSessionExists(sessionId)
     return store.listRunEventsBySession(sessionId)
+}
+
+// ─── Role Run Queries (P3.2) ──────────────────────────────────
+
+/**
+ * Get a role run by ID.
+ */
+export function getRoleRun(roleRunId: string): store.AgentRoomRoleRun | null {
+    return store.getRoleRun(roleRunId)
+}
+
+/**
+ * Get a role run by workflow run ID and role name.
+ */
+export function getRoleRunByRunAndRole(runId: string, role: AgentRoomRole): store.AgentRoomRoleRun | null {
+    return store.getRoleRunByRunAndRole(runId, role)
+}
+
+/**
+ * List all role runs for a specific workflow run.
+ */
+export function listRoleRunsByRun(runId: string): store.AgentRoomRoleRun[] {
+    return store.listRoleRunsByRun(runId)
+}
+
+/**
+ * List all role runs for a specific task.
+ */
+export function listRoleRunsByTask(taskId: string): store.AgentRoomRoleRun[] {
+    return store.listRoleRunsByTask(taskId)
 }

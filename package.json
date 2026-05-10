@@ -57,7 +57,8 @@
     "test:coverage": "vitest run --coverage",
     "smoke:agent-room-gateway": "TS_NODE_PROJECT=packages/server/tsconfig.json node -r ts-node/register scripts/smoke-agent-room-gateway.ts",
     "smoke:agent-room-workflow": "TS_NODE_PROJECT=packages/server/tsconfig.json node -r ts-node/register scripts/smoke-agent-room-workflow.ts",
-    "smoke:orchestrated-dual-role": "TS_NODE_PROJECT=packages/server/tsconfig.json node -r ts-node/register scripts/smoke-orchestrated-dual-role.ts"
+    "smoke:orchestrated-dual-role": "TS_NODE_PROJECT=packages/server/tsconfig.json node -r ts-node/register scripts/smoke-orchestrated-dual-role.ts",
+    "smoke:full-chain": "TS_NODE_PROJECT=packages/server/tsconfig.json node -r ts-node/register scripts/smoke-agent-room-full-chain.ts"
   },
   "files": [
     "bin/",

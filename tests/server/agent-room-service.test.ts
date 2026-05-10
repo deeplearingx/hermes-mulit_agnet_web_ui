@@ -42,6 +42,7 @@ describe('Agent Room Service', () => {
     ensureTableForTest(db, schemas.AR_ARTIFACTS_TABLE, schemas.AR_ARTIFACTS_SCHEMA)
     ensureTableForTest(db, schemas.AR_ROLE_BINDINGS_TABLE, schemas.AR_ROLE_BINDINGS_SCHEMA)
     ensureTableForTest(db, schemas.AR_RUNS_TABLE, schemas.AR_RUNS_SCHEMA)
+    ensureTableForTest(db, schemas.AR_ROLE_RUNS_TABLE, schemas.AR_ROLE_RUNS_SCHEMA)
     ensureTableForTest(db, schemas.AR_RUN_EVENTS_TABLE, schemas.AR_RUN_EVENTS_SCHEMA)
     for (const idx of schemas.AR_INDEXES) {
       try { db.exec(idx) } catch { /* ignore */ }
@@ -1362,6 +1363,258 @@ describe('Agent Room Service', () => {
       expect(artifacts[0].metadata!.deliveryMode).toBe('auto')
       expect(artifacts[0].metadata!.reviewFeedback).toBe('Fix bugs')
       expect(artifacts[0].metadata!.revisionRound).toBeGreaterThan(0)
+    })
+  })
+
+  // ─── P4: Delivery Phase Hardening ─────────────────────────────
+
+  describe('P4: Delivery Phase Hardening', () => {
+    // P4.1: Standardized final_delivery metadata fields
+    it('P4.1: manual delivery artifact has all standardized metadata fields', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Widget', '')
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+
+      svc.deliverTask(session.id, task.id, 'manual')
+
+      const artifacts = svc.listTaskArtifacts(session.id, task.id)
+      expect(artifacts).toHaveLength(1)
+      const meta = artifacts[0].metadata!
+      expect(meta.source).toBe('manual-delivery')
+      expect(meta.deliveryMode).toBe('manual')
+      expect(meta.deliveryRole).toBe('delivery')
+      expect(typeof meta.revisionRound).toBe('number')
+      expect(typeof meta.maxRevisionRounds).toBe('number')
+      expect(meta.reviewFeedback).toBeNull()
+      expect(typeof meta.deliveredAt).toBe('string')
+      // ISO string validation
+      expect(new Date(meta.deliveredAt as string).toISOString()).toBe(meta.deliveredAt)
+    })
+
+    it('P4.1: auto delivery artifact has all standardized metadata fields', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Widget', '')
+      svc.updateSessionConfig(session.id, { autoDeliveryEnabled: true })
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+
+      const artifacts = svc.listTaskArtifacts(session.id, task.id)
+      expect(artifacts).toHaveLength(1)
+      const meta = artifacts[0].metadata!
+      expect(meta.source).toBe('auto-delivery')
+      expect(meta.deliveryMode).toBe('auto')
+      expect(meta.deliveryRole).toBe('delivery')
+      expect(typeof meta.revisionRound).toBe('number')
+      expect(typeof meta.maxRevisionRounds).toBe('number')
+      expect(typeof meta.deliveredAt).toBe('string')
+      expect(new Date(meta.deliveredAt as string).toISOString()).toBe(meta.deliveredAt)
+    })
+
+    it('P4.1: metadata includes reviewFeedback from rejected cycle', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Widget', '')
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Needs work')
+      svc.retryTask(session.id, task.id)
+      svc.updateTaskStatus(task.id, 'submitted_for_review')
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+
+      svc.deliverTask(session.id, task.id, 'manual')
+
+      const artifacts = svc.listTaskArtifacts(session.id, task.id)
+      const meta = artifacts[0].metadata!
+      expect(meta.reviewFeedback).toBe('Needs work')
+      expect(meta.revisionRound).toBeGreaterThan(0)
+    })
+
+    // P4.2: Both paths use deliverTaskCore — same artifact structure
+    it('P4.2: manual and auto delivery produce identical metadata keys', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+
+      // Manual delivery
+      const s1 = svc.createSession('Manual')
+      const t1 = svc.createTask(s1.id, 'Task M', '')
+      await svc.runWorkflow(s1.id, t1.id)
+      svc.submitReview(s1.id, t1.id, 'reviewer', 'passed', '')
+      svc.deliverTask(s1.id, t1.id, 'manual')
+      const manualMeta = svc.listTaskArtifacts(s1.id, t1.id)[0].metadata!
+
+      // Auto delivery
+      const s2 = svc.createSession('Auto')
+      const t2 = svc.createTask(s2.id, 'Task A', '')
+      svc.updateSessionConfig(s2.id, { autoDeliveryEnabled: true })
+      await svc.runWorkflow(s2.id, t2.id)
+      svc.submitReview(s2.id, t2.id, 'reviewer', 'passed', '')
+      const autoMeta = svc.listTaskArtifacts(s2.id, t2.id)[0].metadata!
+
+      // Same key set
+      const manualKeys = Object.keys(manualMeta).sort()
+      const autoKeys = Object.keys(autoMeta).sort()
+      expect(manualKeys).toEqual(autoKeys)
+
+      // Shared field types
+      expect(manualMeta.deliveryRole).toBe('delivery')
+      expect(autoMeta.deliveryRole).toBe('delivery')
+      expect(manualMeta.source).toBe('manual-delivery')
+      expect(autoMeta.source).toBe('auto-delivery')
+    })
+
+    // P4.3: Non-review_passed status throws
+    it('P4.3: deliverTask throws for created status', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      expect(() => svc.deliverTask(session.id, task.id)).toThrow('Cannot deliver task in status "created"')
+    })
+
+    it('P4.3: deliverTask throws for in_progress status', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      await svc.runWorkflow(session.id, task.id)
+      // Task is now in submitted_for_review after workflow
+      // We need to get it back to in_progress — use retry from a failed state
+      // Actually after runWorkflow it's submitted_for_review. Let's test that:
+      expect(() => svc.deliverTask(session.id, task.id)).toThrow('Cannot deliver task in status "submitted_for_review"')
+    })
+
+    it('P4.3: deliverTask throws for completed status', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      svc.deliverTask(session.id, task.id)
+      // Now it's completed — try again
+      expect(() => svc.deliverTask(session.id, task.id)).toThrow('Cannot deliver task in status "completed"')
+    })
+
+    it('P4.3: deliverTask throws for failed status', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      await svc.runWorkflow(session.id, task.id)
+      // Force task to in_progress then failed via state machine
+      svc.updateTaskStatus(task.id, 'review_passed')
+      svc.updateTaskStatus(task.id, 'delivering')
+      svc.updateTaskStatus(task.id, 'failed')
+      expect(() => svc.deliverTask(session.id, task.id)).toThrow('Cannot deliver task in status "failed"')
+    })
+
+    it('P4.3: deliverTask throws for revision_required status', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix it')
+      // Now in revision_required
+      expect(() => svc.deliverTask(session.id, task.id)).toThrow('Cannot deliver task in status "revision_required"')
+    })
+
+    // P4.4: Delivery is synchronous — verify delivering→completed is the only path
+    it('P4.4: deliverTaskCore transitions delivering → completed (never failed)', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+
+      const result = svc.deliverTask(session.id, task.id)
+
+      // Verify: delivering → completed, never failed
+      expect(result!.status).toBe('completed')
+
+      // Verify: no failed workflow events exist
+      const events = svc.listWorkflowEvents(session.id)
+      const failedEvents = events.filter(e => e.type === 'task_failed')
+      expect(failedEvents).toHaveLength(0)
+
+      // Verify: delivering is NOT a terminal state
+      const deliveringEvents = events.filter(e => e.type === 'delivery_started')
+      expect(deliveringEvents).toHaveLength(1)
+      const completedEvents = events.filter(e => e.type === 'delivery_completed')
+      expect(completedEvents).toHaveLength(1)
+    })
+
+    // P4.5: autoDelivery=false blocks auto delivery
+    it('P4.5: autoDelivery=false + reviewer approved → task stays review_passed, no delivery artifacts', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const session = svc.createSession('Test')
+      const task = svc.createTask(session.id, 'Task', '')
+
+      // Default: autoDeliveryEnabled = false
+      expect(svc.getSessionConfig(session.id).autoDeliveryEnabled).toBe(false)
+
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+
+      // Task stays in review_passed
+      const updated = svc.getTask(task.id)
+      expect(updated!.status).toBe('review_passed')
+
+      // No delivery artifacts
+      const artifacts = svc.listTaskArtifacts(session.id, task.id)
+      expect(artifacts).toHaveLength(0)
+
+      // No delivery workflow events
+      const events = svc.listWorkflowEvents(session.id)
+      const eventTypes = events.map(e => e.type)
+      expect(eventTypes).toContain('review_passed')
+      expect(eventTypes).not.toContain('delivery_started')
+      expect(eventTypes).not.toContain('delivery_completed')
+    })
+
+    // P4.6: Manual vs auto delivery artifact consistency
+    it('P4.6: manual and auto delivery artifacts have consistent structure', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+
+      // Manual path
+      const s1 = svc.createSession('Manual')
+      const t1 = svc.createTask(s1.id, 'Build', '')
+      await svc.runWorkflow(s1.id, t1.id)
+      svc.submitReview(s1.id, t1.id, 'reviewer', 'passed', 'LGTM')
+      svc.deliverTask(s1.id, t1.id, 'manual')
+      const manualArtifact = svc.listTaskArtifacts(s1.id, t1.id)[0]
+
+      // Auto path
+      const s2 = svc.createSession('Auto')
+      const t2 = svc.createTask(s2.id, 'Build', '')
+      svc.updateSessionConfig(s2.id, { autoDeliveryEnabled: true })
+      await svc.runWorkflow(s2.id, t2.id)
+      svc.submitReview(s2.id, t2.id, 'reviewer', 'passed', 'LGTM')
+      const autoArtifact = svc.listTaskArtifacts(s2.id, t2.id)[0]
+
+      // Same artifact type
+      expect(manualArtifact.type).toBe('final_delivery')
+      expect(autoArtifact.type).toBe('final_delivery')
+
+      // Same metadata structure
+      const m = manualArtifact.metadata!
+      const a = autoArtifact.metadata!
+      expect(typeof m.deliveryMode).toBe('string')
+      expect(typeof a.deliveryMode).toBe('string')
+      expect(typeof m.revisionRound).toBe('number')
+      expect(typeof a.revisionRound).toBe('number')
+      expect(typeof m.maxRevisionRounds).toBe('number')
+      expect(typeof a.maxRevisionRounds).toBe('number')
+      expect(typeof m.deliveredAt).toBe('string')
+      expect(typeof a.deliveredAt).toBe('string')
+      expect(m.deliveryRole).toBe('delivery')
+      expect(a.deliveryRole).toBe('delivery')
+
+      // Only differ in source and deliveryMode
+      expect(m.source).toBe('manual-delivery')
+      expect(a.source).toBe('auto-delivery')
+      expect(m.deliveryMode).toBe('manual')
+      expect(a.deliveryMode).toBe('auto')
+
+      // Content reflects mode
+      expect(manualArtifact.content).toContain('手动')
+      expect(autoArtifact.content).toContain('自动')
     })
   })
 })

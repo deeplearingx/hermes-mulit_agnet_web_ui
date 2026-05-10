@@ -42,6 +42,7 @@ describe('Agent Room Store', () => {
     ensureTableForTest(db, schemas.AR_ARTIFACTS_TABLE, schemas.AR_ARTIFACTS_SCHEMA)
     ensureTableForTest(db, schemas.AR_ROLE_BINDINGS_TABLE, schemas.AR_ROLE_BINDINGS_SCHEMA)
     ensureTableForTest(db, schemas.AR_RUNS_TABLE, schemas.AR_RUNS_SCHEMA)
+    ensureTableForTest(db, schemas.AR_ROLE_RUNS_TABLE, schemas.AR_ROLE_RUNS_SCHEMA)
     ensureTableForTest(db, schemas.AR_RUN_EVENTS_TABLE, schemas.AR_RUN_EVENTS_SCHEMA)
     for (const idx of schemas.AR_INDEXES) {
       try { db.exec(idx) } catch { /* ignore */ }
@@ -282,5 +283,124 @@ describe('Agent Room Store', () => {
 
     store.deleteSessionCascade('s1')
     expect(store.getArtifact('a1')).toBeNull()
+  })
+
+  // ─── Role Run CRUD (P3.2) ──────────────────────────────────────
+
+  it('createRoleRun / getRoleRun / updateRoleRun', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+    store.createRun({ id: 'r1', sessionId: 's1', taskId: 't1', status: 'running', runnerName: 'mock', createdAt: now, updatedAt: now })
+
+    const roleRun = {
+      id: 'rr1', runId: 'r1', sessionId: 's1', taskId: 't1',
+      role: 'planner', phase: 'planning', profileName: 'gpt-4o',
+      status: 'queued' as const, createdAt: now, updatedAt: now,
+    }
+    store.createRoleRun(roleRun)
+
+    const fetched = store.getRoleRun('rr1')
+    expect(fetched).toMatchObject({ id: 'rr1', role: 'planner', phase: 'planning', status: 'queued', profileName: 'gpt-4o' })
+
+    // Update to running
+    store.updateRoleRun({ ...roleRun, status: 'running', startedAt: now, updatedAt: now })
+    const updated = store.getRoleRun('rr1')!
+    expect(updated.status).toBe('running')
+    expect(updated.startedAt).toBe(now)
+  })
+
+  it('getRoleRunByRunAndRole returns correct role run', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+    store.createRun({ id: 'r1', sessionId: 's1', taskId: 't1', status: 'running', runnerName: 'mock', createdAt: now, updatedAt: now })
+    store.createRoleRun({ id: 'rr1', runId: 'r1', sessionId: 's1', taskId: 't1', role: 'planner', phase: 'planning', status: 'queued', createdAt: now, updatedAt: now })
+    store.createRoleRun({ id: 'rr2', runId: 'r1', sessionId: 's1', taskId: 't1', role: 'developer', phase: 'development', status: 'queued', createdAt: now, updatedAt: now })
+
+    const dev = store.getRoleRunByRunAndRole('r1', 'developer')
+    expect(dev).toMatchObject({ id: 'rr2', role: 'developer' })
+
+    expect(store.getRoleRunByRunAndRole('r1', 'reviewer')).toBeNull()
+  })
+
+  it('listRoleRunsByRun / listRoleRunsByTask', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+    store.createRun({ id: 'r1', sessionId: 's1', taskId: 't1', status: 'running', runnerName: 'mock', createdAt: now, updatedAt: now })
+    store.createRoleRun({ id: 'rr1', runId: 'r1', sessionId: 's1', taskId: 't1', role: 'planner', phase: 'planning', status: 'completed', createdAt: now, updatedAt: now })
+    store.createRoleRun({ id: 'rr2', runId: 'r1', sessionId: 's1', taskId: 't1', role: 'developer', phase: 'development', status: 'running', createdAt: now, updatedAt: now })
+
+    expect(store.listRoleRunsByRun('r1')).toHaveLength(2)
+    expect(store.listRoleRunsByTask('t1')).toHaveLength(2)
+    expect(store.listRoleRunsByRun('nonexistent')).toHaveLength(0)
+  })
+
+  it('deleteRoleRunsByRun / deleteRoleRunsBySession', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+    store.createRun({ id: 'r1', sessionId: 's1', taskId: 't1', status: 'running', runnerName: 'mock', createdAt: now, updatedAt: now })
+    store.createRoleRun({ id: 'rr1', runId: 'r1', sessionId: 's1', taskId: 't1', role: 'planner', phase: 'planning', status: 'completed', createdAt: now, updatedAt: now })
+    store.createRoleRun({ id: 'rr2', runId: 'r1', sessionId: 's1', taskId: 't1', role: 'developer', phase: 'development', status: 'completed', createdAt: now, updatedAt: now })
+
+    store.deleteRoleRunsByRun('r1')
+    expect(store.listRoleRunsByRun('r1')).toHaveLength(0)
+
+    // Re-create for session delete test
+    store.createRoleRun({ id: 'rr3', runId: 'r1', sessionId: 's1', taskId: 't1', role: 'reviewer', phase: 'review', status: 'queued', createdAt: now, updatedAt: now })
+    store.deleteRoleRunsBySession('s1')
+    expect(store.listRoleRunsByRun('r1')).toHaveLength(0)
+  })
+
+  // ─── Run Event with role_run_id (P3.4) ─────────────────────────
+
+  it('createRunEvent with roleRunId persists and queries correctly', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+    store.createRun({ id: 'r1', sessionId: 's1', taskId: 't1', status: 'running', runnerName: 'mock', createdAt: now, updatedAt: now })
+
+    const evt = {
+      id: 'evt1', runId: 'r1', sessionId: 's1', taskId: 't1',
+      roleRunId: 'rr1', source: 'gateway_sse', sequence: 1,
+      eventType: 'run.created', payload: { _agentRole: 'planner' }, createdAt: now,
+    }
+    store.createRunEvent(evt)
+
+    const fetched = store.listRunEventsByRun('r1')
+    expect(fetched).toHaveLength(1)
+    expect(fetched[0].roleRunId).toBe('rr1')
+    expect(fetched[0].payload).toMatchObject({ _agentRole: 'planner' })
+  })
+
+  it('deleteSessionCascade removes role runs', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+    store.createRun({ id: 'r1', sessionId: 's1', taskId: 't1', status: 'running', runnerName: 'mock', createdAt: now, updatedAt: now })
+    store.createRoleRun({ id: 'rr1', runId: 'r1', sessionId: 's1', taskId: 't1', role: 'planner', phase: 'planning', status: 'completed', createdAt: now, updatedAt: now })
+
+    store.deleteSessionCascade('s1')
+    expect(store.getRoleRun('rr1')).toBeNull()
+  })
+
+  it('deleteTaskCascade removes role runs for the task', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+    store.createRun({ id: 'r1', sessionId: 's1', taskId: 't1', status: 'running', runnerName: 'mock', createdAt: now, updatedAt: now })
+    store.createRoleRun({ id: 'rr1', runId: 'r1', sessionId: 's1', taskId: 't1', role: 'planner', phase: 'planning', status: 'completed', createdAt: now, updatedAt: now })
+
+    store.deleteTaskCascade('s1', 't1')
+    expect(store.getRoleRun('rr1')).toBeNull()
   })
 })

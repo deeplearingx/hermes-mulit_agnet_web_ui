@@ -21,6 +21,7 @@ import {
     AR_ARTIFACTS_TABLE,
     AR_ROLE_BINDINGS_TABLE,
     AR_RUNS_TABLE,
+    AR_ROLE_RUNS_TABLE,
     AR_RUN_EVENTS_TABLE,
 } from './schemas'
 
@@ -113,6 +114,28 @@ export interface AgentRoomRun {
     errorMessage?: string
     startedAt?: string
     finishedAt?: string
+    createdAt: string
+    updatedAt: string
+}
+
+// P3.1: Role-level run status — includes 'skipped' for roles that were not executed
+export type AgentRoomRoleRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'skipped'
+
+// P3.1: Per-role execution record within a workflow-level run
+export interface AgentRoomRoleRun {
+    id: string
+    runId: string
+    sessionId: string
+    taskId: string
+    role: string
+    phase: string
+    profileName?: string
+    upstreamRunId?: string
+    status: AgentRoomRoleRunStatus
+    startedAt?: string
+    finishedAt?: string
+    errorMessage?: string
+    metadata?: Record<string, unknown>
     createdAt: string
     updatedAt: string
 }
@@ -542,14 +565,98 @@ export function deleteRunsByTask(taskId: string): void {
     db.prepare(`DELETE FROM ${AR_RUNS_TABLE} WHERE task_id = ?`).run(taskId)
 }
 
+// ─── Role Run CRUD (P3.2) ──────────────────────────────────────
+
+function mapRoleRunRow(row: Record<string, unknown>): AgentRoomRoleRun {
+    return {
+        id: String(row.id),
+        runId: String(row.run_id),
+        sessionId: String(row.session_id),
+        taskId: String(row.task_id),
+        role: String(row.role),
+        phase: String(row.phase),
+        profileName: row.profile_name != null ? String(row.profile_name) : undefined,
+        upstreamRunId: row.upstream_run_id != null ? String(row.upstream_run_id) : undefined,
+        status: String(row.status) as AgentRoomRoleRunStatus,
+        startedAt: row.started_at != null ? String(row.started_at) : undefined,
+        finishedAt: row.finished_at != null ? String(row.finished_at) : undefined,
+        errorMessage: row.error_message != null ? String(row.error_message) : undefined,
+        metadata: decodeJson<Record<string, unknown>>(row.metadata),
+        createdAt: String(row.created_at),
+        updatedAt: String(row.updated_at),
+    }
+}
+
+export function createRoleRun(roleRun: AgentRoomRoleRun): void {
+    const db = requireDb()
+    db.prepare(
+        `INSERT INTO ${AR_ROLE_RUNS_TABLE} (id, run_id, session_id, task_id, role, phase, profile_name, upstream_run_id, status, started_at, finished_at, error_message, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+        roleRun.id, roleRun.runId, roleRun.sessionId, roleRun.taskId,
+        roleRun.role, roleRun.phase,
+        roleRun.profileName ?? null, roleRun.upstreamRunId ?? null,
+        roleRun.status, roleRun.startedAt ?? null, roleRun.finishedAt ?? null,
+        roleRun.errorMessage ?? null, encodeJson(roleRun.metadata),
+        roleRun.createdAt, roleRun.updatedAt,
+    )
+}
+
+export function updateRoleRun(roleRun: AgentRoomRoleRun): void {
+    const db = requireDb()
+    db.prepare(
+        `UPDATE ${AR_ROLE_RUNS_TABLE} SET status = ?, upstream_run_id = ?, profile_name = ?, started_at = ?, finished_at = ?, error_message = ?, metadata = ?, updated_at = ? WHERE id = ?`,
+    ).run(
+        roleRun.status, roleRun.upstreamRunId ?? null, roleRun.profileName ?? null,
+        roleRun.startedAt ?? null, roleRun.finishedAt ?? null,
+        roleRun.errorMessage ?? null, encodeJson(roleRun.metadata),
+        roleRun.updatedAt, roleRun.id,
+    )
+}
+
+export function getRoleRun(id: string): AgentRoomRoleRun | null {
+    const db = requireDb()
+    const row = db.prepare(`SELECT * FROM ${AR_ROLE_RUNS_TABLE} WHERE id = ?`).get(id) as Record<string, unknown> | undefined
+    return row ? mapRoleRunRow(row) : null
+}
+
+export function getRoleRunByRunAndRole(runId: string, role: string): AgentRoomRoleRun | null {
+    const db = requireDb()
+    const row = db.prepare(`SELECT * FROM ${AR_ROLE_RUNS_TABLE} WHERE run_id = ? AND role = ?`).get(runId, role) as Record<string, unknown> | undefined
+    return row ? mapRoleRunRow(row) : null
+}
+
+export function listRoleRunsByRun(runId: string): AgentRoomRoleRun[] {
+    const db = requireDb()
+    const rows = db.prepare(`SELECT * FROM ${AR_ROLE_RUNS_TABLE} WHERE run_id = ? ORDER BY created_at ASC, rowid ASC`).all(runId) as Array<Record<string, unknown>>
+    return rows.map(mapRoleRunRow)
+}
+
+export function listRoleRunsByTask(taskId: string): AgentRoomRoleRun[] {
+    const db = requireDb()
+    const rows = db.prepare(`SELECT * FROM ${AR_ROLE_RUNS_TABLE} WHERE task_id = ? ORDER BY created_at ASC, rowid ASC`).all(taskId) as Array<Record<string, unknown>>
+    return rows.map(mapRoleRunRow)
+}
+
+export function deleteRoleRunsByRun(runId: string): void {
+    const db = requireDb()
+    db.prepare(`DELETE FROM ${AR_ROLE_RUNS_TABLE} WHERE run_id = ?`).run(runId)
+}
+
+export function deleteRoleRunsBySession(sessionId: string): void {
+    const db = requireDb()
+    db.prepare(`DELETE FROM ${AR_ROLE_RUNS_TABLE} WHERE session_id = ?`).run(sessionId)
+}
+
 // ─── Run Event CRUD ─────────────────────────────────────────────
 
+// P3.4: Added roleRunId for optional role-level event correlation
 export interface AgentRoomRunEvent {
     id: string
     runId: string
     sessionId: string
     taskId: string
     upstreamRunId?: string
+    roleRunId?: string
     source: string
     sequence: number
     eventType: string
@@ -564,6 +671,7 @@ function mapRunEventRow(row: Record<string, unknown>): AgentRoomRunEvent {
         sessionId: String(row.session_id),
         taskId: String(row.task_id),
         upstreamRunId: row.upstream_run_id != null ? String(row.upstream_run_id) : undefined,
+        roleRunId: row.role_run_id != null ? String(row.role_run_id) : undefined,
         source: String(row.source),
         sequence: Number(row.sequence),
         eventType: String(row.event_type),
@@ -575,10 +683,11 @@ function mapRunEventRow(row: Record<string, unknown>): AgentRoomRunEvent {
 export function createRunEvent(event: AgentRoomRunEvent): void {
     const db = requireDb()
     db.prepare(
-        `INSERT INTO ${AR_RUN_EVENTS_TABLE} (id, run_id, session_id, task_id, upstream_run_id, source, sequence, event_type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO ${AR_RUN_EVENTS_TABLE} (id, run_id, session_id, task_id, upstream_run_id, role_run_id, source, sequence, event_type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
         event.id, event.runId, event.sessionId, event.taskId,
-        event.upstreamRunId ?? null, event.source, event.sequence,
+        event.upstreamRunId ?? null, event.roleRunId ?? null,
+        event.source, event.sequence,
         event.eventType, encodeJson(event.payload), event.createdAt,
     )
 }
@@ -633,10 +742,11 @@ export function deleteRunEventsBySession(sessionId: string): void {
  */
 export function deleteSessionCascade(sessionId: string): void {
     const db = requireDb()
-    // Delete in dependency order: reviews → workflow_events → run_events → artifacts → runs → role_bindings → messages → tasks → session
+    // Delete in dependency order: reviews → workflow_events → run_events → role_runs → artifacts → runs → role_bindings → messages → tasks → session
     db.prepare(`DELETE FROM ${AR_REVIEWS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_WORKFLOW_EVENTS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_RUN_EVENTS_TABLE} WHERE session_id = ?`).run(sessionId)
+    db.prepare(`DELETE FROM ${AR_ROLE_RUNS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_ARTIFACTS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_RUNS_TABLE} WHERE session_id = ?`).run(sessionId)
     db.prepare(`DELETE FROM ${AR_ROLE_BINDINGS_TABLE} WHERE session_id = ?`).run(sessionId)
@@ -658,6 +768,8 @@ export function deleteTaskCascade(sessionId: string, taskId: string): void {
     db.prepare(`DELETE FROM ${AR_WORKFLOW_EVENTS_TABLE} WHERE task_id = ?`).run(taskId)
     // Delete task run events
     db.prepare(`DELETE FROM ${AR_RUN_EVENTS_TABLE} WHERE task_id = ?`).run(taskId)
+    // Delete task role runs
+    db.prepare(`DELETE FROM ${AR_ROLE_RUNS_TABLE} WHERE task_id = ?`).run(taskId)
     // Delete task artifacts
     db.prepare(`DELETE FROM ${AR_ARTIFACTS_TABLE} WHERE task_id = ?`).run(taskId)
     // Delete task runs

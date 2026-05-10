@@ -103,10 +103,11 @@ agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/tasks', async (ctx) => 
 
 // Create task
 agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks', async (ctx) => {
-    const { title, description, assignedAgentId } = ctx.request.body as {
+    const { title, description, assignedAgentId, maxRevisionRounds } = ctx.request.body as {
         title?: string
         description?: string
         assignedAgentId?: string
+        maxRevisionRounds?: number
     }
     if (!title || !title.trim()) {
         ctx.status = 400
@@ -119,6 +120,7 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks', async (ctx) =>
             title.trim(),
             description?.trim() ?? '',
             assignedAgentId,
+            maxRevisionRounds,
         )
         ctx.body = task
     } catch (err: any) {
@@ -288,6 +290,17 @@ agentRoomRoutes.get('/api/agent-room/runs/:runId', async (ctx) => {
         return
     }
     ctx.body = run
+})
+
+// List role runs for a specific workflow run
+agentRoomRoutes.get('/api/agent-room/runs/:runId/role-runs', async (ctx) => {
+    const run = agentRoomService.getRun(ctx.params.runId)
+    if (!run) {
+        ctx.status = 404
+        ctx.body = { error: 'Run not found' }
+        return
+    }
+    ctx.body = agentRoomService.listRoleRunsByRun(ctx.params.runId)
 })
 
 // ─── Run Events ─────────────────────────────────────────────────

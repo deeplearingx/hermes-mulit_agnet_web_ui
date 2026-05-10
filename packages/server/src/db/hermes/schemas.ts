@@ -329,6 +329,31 @@ export const AR_RUNS_SCHEMA: Record<string, string> = {
     updated_at: 'TEXT NOT NULL',
 }
 
+// ─── Role-Level Run (P3.1) ────────────────────────────────────────
+// Tracks per-role execution within a workflow-level run.
+// Each role (planner/developer/reviewer/delivery) gets its own row
+// with lifecycle timestamps and optional upstream_run_id correlation.
+
+export const AR_ROLE_RUNS_TABLE = 'agent_room_role_runs'
+export const AR_ROLE_RUNS_SCHEMA: Record<string, string> = {
+    id: 'TEXT PRIMARY KEY',
+    run_id: 'TEXT NOT NULL',
+    session_id: 'TEXT NOT NULL',
+    task_id: 'TEXT NOT NULL',
+    role: 'TEXT NOT NULL',
+    phase: 'TEXT NOT NULL',
+    profile_name: 'TEXT',
+    upstream_run_id: 'TEXT',
+    status: "TEXT NOT NULL DEFAULT 'queued'",
+    started_at: 'TEXT',
+    finished_at: 'TEXT',
+    error_message: 'TEXT',
+    metadata: 'TEXT',
+    created_at: 'TEXT NOT NULL',
+    updated_at: 'TEXT NOT NULL',
+}
+
+// P3.4: role_run_id column added to run_events for optional role-level correlation
 export const AR_RUN_EVENTS_TABLE = 'agent_room_run_events'
 export const AR_RUN_EVENTS_SCHEMA: Record<string, string> = {
     id: 'TEXT PRIMARY KEY',
@@ -336,6 +361,7 @@ export const AR_RUN_EVENTS_SCHEMA: Record<string, string> = {
     session_id: 'TEXT NOT NULL',
     task_id: 'TEXT NOT NULL',
     upstream_run_id: 'TEXT',
+    role_run_id: 'TEXT',
     source: "TEXT NOT NULL DEFAULT 'gateway_sse'",
     sequence: 'INTEGER NOT NULL DEFAULT 0',
     event_type: 'TEXT NOT NULL',
@@ -358,10 +384,18 @@ export const AR_INDEXES = [
     'CREATE INDEX IF NOT EXISTS idx_ar_runs_session ON agent_room_runs(session_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_ar_runs_task ON agent_room_runs(task_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_ar_runs_upstream ON agent_room_runs(upstream_run_id)',
+    // P3.1: role_runs indexes
+    'CREATE INDEX IF NOT EXISTS idx_ar_role_runs_run ON agent_room_role_runs(run_id)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_role_runs_session ON agent_room_role_runs(session_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_role_runs_task ON agent_room_role_runs(task_id)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_role_runs_upstream ON agent_room_role_runs(upstream_run_id)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_role_runs_role ON agent_room_role_runs(run_id, role)',
+    // P3.4: run_events indexes (role_run_id added)
     'CREATE INDEX IF NOT EXISTS idx_ar_run_events_run ON agent_room_run_events(run_id, sequence)',
     'CREATE INDEX IF NOT EXISTS idx_ar_run_events_session ON agent_room_run_events(session_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_ar_run_events_upstream ON agent_room_run_events(upstream_run_id)',
     'CREATE INDEX IF NOT EXISTS idx_ar_run_events_type ON agent_room_run_events(event_type)',
+    'CREATE INDEX IF NOT EXISTS idx_ar_run_events_role_run ON agent_room_run_events(role_run_id)',
 ]
 
 // ============================================================================
@@ -559,6 +593,7 @@ export function initAllHermesTables(): void {
   ensureTable(AR_ARTIFACTS_TABLE, AR_ARTIFACTS_SCHEMA)
   ensureTable(AR_ROLE_BINDINGS_TABLE, AR_ROLE_BINDINGS_SCHEMA)
   ensureTable(AR_RUNS_TABLE, AR_RUNS_SCHEMA)
+  ensureTable(AR_ROLE_RUNS_TABLE, AR_ROLE_RUNS_SCHEMA)
   ensureTable(AR_RUN_EVENTS_TABLE, AR_RUN_EVENTS_SCHEMA)
   for (const idx of AR_INDEXES) {
     try { db.exec(idx) } catch { /* ignore */ }

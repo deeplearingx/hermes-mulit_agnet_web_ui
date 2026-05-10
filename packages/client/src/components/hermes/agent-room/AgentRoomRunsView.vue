@@ -1,12 +1,17 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { AgentRoomRun, AgentRoomRunEvent, AgentRoomTask } from '@/api/hermes/agent-room'
+import type { AgentRoomRun, AgentRoomRunEvent, AgentRoomRoleRun, AgentRoomTask } from '@/api/hermes/agent-room'
 
 const props = defineProps<{
     runs: AgentRoomRun[]
     runEvents: AgentRoomRunEvent[]
+    roleRuns: AgentRoomRoleRun[]
     tasks: AgentRoomTask[]
     hasActiveRuns: boolean
+}>()
+
+const emit = defineEmits<{
+    (e: 'load-role-runs', runId: string): void
 }>()
 
 const expandedRunId = ref<string | null>(null)
@@ -40,7 +45,13 @@ const expandedRunEvents = computed(() => {
 })
 
 function toggleRun(runId: string) {
-    expandedRunId.value = expandedRunId.value === runId ? null : runId
+    if (expandedRunId.value === runId) {
+        expandedRunId.value = null
+    } else {
+        expandedRunId.value = runId
+        // Fetch role runs when expanding
+        emit('load-role-runs', runId)
+    }
 }
 
 function formatDateTime(iso: string | undefined): string {
@@ -75,6 +86,31 @@ const RUN_EVENT_ICONS: Record<string, string> = {
     'agent:tool_call':   '🔧',
     'agent:tool_result': '📋',
     'artifact:created':  '📦',
+}
+
+const ROLE_RUN_STATUS_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
+    queued:    { label: '排队', color: '#94a3b8', icon: '⏳' },
+    running:   { label: '运行', color: '#22c55e', icon: '⚡' },
+    completed: { label: '完成', color: '#22c55e', icon: '✅' },
+    failed:    { label: '失败', color: '#ef4444', icon: '💥' },
+    skipped:   { label: '跳过', color: '#475569', icon: '⏭️' },
+}
+
+const ROLE_ICONS: Record<string, string> = {
+    planner:   '📐',
+    developer: '💻',
+    reviewer:  '🔍',
+    delivery:  '📦',
+    conversation: '💬',
+}
+
+function getRoleRunStatusConfig(status: string) {
+    return ROLE_RUN_STATUS_CONFIG[status] ?? { label: status, color: '#94a3b8', icon: '❓' }
+}
+
+/** Get role runs for a specific workflow run */
+function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
+    return props.roleRuns.filter(rr => rr.runId === runId)
 }
 </script>
 
@@ -114,6 +150,25 @@ const RUN_EVENT_ICONS: Record<string, string> = {
                     </div>
                     <div v-if="run.errorMessage" class="run-error">
                         {{ run.errorMessage }}
+                    </div>
+                    <!-- Role Runs (planner / developer / reviewer) -->
+                    <div v-if="getRoleRunsForRun(run.id).length > 0" class="role-runs-section">
+                        <div class="role-runs-header">角色 Runs ({{ getRoleRunsForRun(run.id).length }})</div>
+                        <div
+                            v-for="rr in getRoleRunsForRun(run.id)"
+                            :key="rr.id"
+                            class="role-run-item"
+                        >
+                            <span class="rr-role-icon">{{ ROLE_ICONS[rr.role] ?? '🤖' }}</span>
+                            <span class="rr-role">{{ rr.role }}</span>
+                            <span class="rr-profile">{{ rr.profileName ?? '—' }}</span>
+                            <span
+                                class="rr-status"
+                                :style="{ color: getRoleRunStatusConfig(rr.status).color }"
+                            >{{ getRoleRunStatusConfig(rr.status).icon }} {{ getRoleRunStatusConfig(rr.status).label }}</span>
+                            <span class="rr-upstream" v-if="rr.upstreamRunId" :title="rr.upstreamRunId">↑{{ rr.upstreamRunId.slice(0, 8) }}</span>
+                            <span class="rr-duration">{{ formatDuration(rr.startedAt, rr.finishedAt) }}</span>
+                        </div>
                     </div>
                     <div class="run-events">
                         <div class="run-events-header">事件流 ({{ expandedRunEvents.length }})</div>
@@ -345,5 +400,76 @@ const RUN_EVENT_ICONS: Record<string, string> = {
     color: #475569;
     font-size: 10px;
     padding: 4px 0;
+}
+
+// ─── Role Runs Section ─────────────────────────────────────────
+.role-runs-section {
+    margin-bottom: 6px;
+}
+
+.role-runs-header {
+    color: #64748b;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.role-run-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 4px;
+    border: 1px solid #1e293b;
+    border-radius: 3px;
+    margin-bottom: 2px;
+    background: #0d1527;
+    font-size: 11px;
+
+    &:hover {
+        background: #141e33;
+    }
+}
+
+.rr-role-icon {
+    flex-shrink: 0;
+    font-size: 11px;
+}
+
+.rr-role {
+    flex-shrink: 0;
+    color: #a855f7;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.rr-profile {
+    flex-shrink: 0;
+    color: #64748b;
+    font-size: 10px;
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rr-status {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.rr-upstream {
+    flex-shrink: 0;
+    color: #475569;
+    font-size: 9px;
+    cursor: help;
+}
+
+.rr-duration {
+    margin-left: auto;
+    flex-shrink: 0;
+    color: #475569;
+    font-size: 10px;
 }
 </style>
