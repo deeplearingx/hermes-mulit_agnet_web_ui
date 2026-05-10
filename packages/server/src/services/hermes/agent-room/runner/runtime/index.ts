@@ -16,6 +16,8 @@ export type {
     HermesAgentRuntimeMessage,
     HermesAgentRuntimeArtifact,
     HermesAgentRuntimeMetadata,
+    ReviewerDecision,
+    ReviewerOutput,
 } from './types'
 export { DeterministicHermesRuntime } from './deterministic-runtime'
 export { RealHermesRuntime } from './real-hermes-runtime'

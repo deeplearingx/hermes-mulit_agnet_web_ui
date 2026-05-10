@@ -7,8 +7,16 @@
  */
 
 import { initAllHermesTables } from './schemas'
+import { recoverStaleRuns, recoverStaleRoleRuns } from './agent-room-store'
 
 export function initAllStores(): void {
   // Initialize all tables with centralized schema definitions and migrations
   initAllHermesTables()
+
+  // Recover stale runs from previous server session
+  const recoveredRuns = recoverStaleRuns()
+  const recoveredRoleRuns = recoverStaleRoleRuns()
+  if (recoveredRuns > 0 || recoveredRoleRuns > 0) {
+    console.log(`[agent-room] Recovered ${recoveredRuns} stale runs and ${recoveredRoleRuns} stale role runs`)
+  }
 }

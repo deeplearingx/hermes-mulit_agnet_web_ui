@@ -1,12 +1,21 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { AgentRoomRun, AgentRoomRunEvent, AgentRoomRoleRun, AgentRoomTask } from '@/api/hermes/agent-room'
+import type {
+    AgentRoomRun,
+    AgentRoomRunEvent,
+    AgentRoomRoleRun,
+    AgentRoomTask,
+    AgentRoomReview,
+    AgentRoomArtifact,
+} from '@/api/hermes/agent-room'
 
 const props = defineProps<{
     runs: AgentRoomRun[]
     runEvents: AgentRoomRunEvent[]
     roleRuns: AgentRoomRoleRun[]
     tasks: AgentRoomTask[]
+    reviews: AgentRoomReview[]
+    artifacts: AgentRoomArtifact[]
     hasActiveRuns: boolean
 }>()
 
@@ -15,6 +24,7 @@ const emit = defineEmits<{
 }>()
 
 const expandedRunId = ref<string | null>(null)
+const expandedRoleRunId = ref<string | null>(null)
 
 const RUN_STATUS_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
     queued:    { label: '排队中', color: '#94a3b8', icon: '⏳' },
@@ -44,6 +54,28 @@ const expandedRunEvents = computed(() => {
         .sort((a, b) => a.sequence - b.sequence)
 })
 
+/** Reviews grouped by taskId for quick lookup */
+const reviewsByTaskId = computed(() => {
+    const map = new Map<string, AgentRoomReview[]>()
+    for (const r of props.reviews) {
+        const list = map.get(r.taskId) ?? []
+        list.push(r)
+        map.set(r.taskId, list)
+    }
+    return map
+})
+
+/** Artifacts grouped by taskId for quick lookup */
+const artifactsByTaskId = computed(() => {
+    const map = new Map<string, AgentRoomArtifact[]>()
+    for (const a of props.artifacts) {
+        const list = map.get(a.taskId) ?? []
+        list.push(a)
+        map.set(a.taskId, list)
+    }
+    return map
+})
+
 function toggleRun(runId: string) {
     if (expandedRunId.value === runId) {
         expandedRunId.value = null
@@ -52,6 +84,37 @@ function toggleRun(runId: string) {
         // Fetch role runs when expanding
         emit('load-role-runs', runId)
     }
+}
+
+/** Toggle expand/collapse role run events */
+function toggleRoleRun(roleRunId: string) {
+    expandedRoleRunId.value = expandedRoleRunId.value === roleRunId ? null : roleRunId
+}
+
+/** Get run events filtered for a specific role run */
+function getEventsForRoleRun(roleRunId: string): AgentRoomRunEvent[] {
+    return props.runEvents
+        .filter(e => e.roleRunId === roleRunId)
+        .sort((a, b) => a.sequence - b.sequence)
+}
+
+/** Get reviews for a task */
+function getReviewsForTask(taskId: string): AgentRoomReview[] {
+    return reviewsByTaskId.value.get(taskId) ?? []
+}
+
+/** Get artifacts for a task */
+function getArtifactsForTask(taskId: string): AgentRoomArtifact[] {
+    return artifactsByTaskId.value.get(taskId) ?? []
+}
+
+/** Determine which phase failed based on error message */
+function getFailedPhase(errorMessage: string | undefined): string | null {
+    if (!errorMessage) return null
+    if (errorMessage.includes('planner phase')) return 'planner'
+    if (errorMessage.includes('developer phase')) return 'developer'
+    if (errorMessage.includes('reviewer phase')) return 'reviewer'
+    return null
 }
 
 function formatDateTime(iso: string | undefined): string {
@@ -142,6 +205,10 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
                     <span class="run-duration">{{ formatDuration(run.startedAt, run.finishedAt) }}</span>
                     <span class="run-expand">{{ expandedRunId === run.id ? '▾' : '▸' }}</span>
                 </div>
+                <!-- Failed phase indicator -->
+                <div v-if="run.status === 'failed' && getFailedPhase(run.errorMessage)" class="run-failed-phase">
+                    失败阶段: {{ ROLE_ICONS[getFailedPhase(run.errorMessage)!] ?? '❌' }} {{ getFailedPhase(run.errorMessage) }}
+                </div>
                 <div v-if="expandedRunId === run.id" class="run-detail">
                     <div class="run-meta">
                         <span>ID: {{ run.id.slice(0, 12) }}…</span>
@@ -158,6 +225,8 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
                             v-for="rr in getRoleRunsForRun(run.id)"
                             :key="rr.id"
                             class="role-run-item"
+                            :class="{ clickable: getEventsForRoleRun(rr.id).length > 0 }"
+                            @click="getEventsForRoleRun(rr.id).length > 0 && toggleRoleRun(rr.id)"
                         >
                             <span class="rr-role-icon">{{ ROLE_ICONS[rr.role] ?? '🤖' }}</span>
                             <span class="rr-role">{{ rr.role }}</span>
@@ -166,10 +235,50 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
                                 class="rr-status"
                                 :style="{ color: getRoleRunStatusConfig(rr.status).color }"
                             >{{ getRoleRunStatusConfig(rr.status).icon }} {{ getRoleRunStatusConfig(rr.status).label }}</span>
+                            <!-- Reviewer decision highlight -->
+                            <span v-if="rr.role === 'reviewer' && getReviewsForTask(run.taskId).length > 0" class="rr-decision">
+                                {{ getReviewsForTask(run.taskId)[0].status === 'passed' ? '✅ Approved' : '❌ Rejected' }}
+                            </span>
                             <span class="rr-upstream" v-if="rr.upstreamRunId" :title="rr.upstreamRunId">↑{{ rr.upstreamRunId.slice(0, 8) }}</span>
                             <span class="rr-duration">{{ formatDuration(rr.startedAt, rr.finishedAt) }}</span>
                         </div>
+                        <!-- Expanded role run events -->
+                        <div
+                            v-for="rr in getRoleRunsForRun(run.id)"
+                            :key="'events-' + rr.id"
+                        >
+                            <div v-if="expandedRoleRunId === rr.id && getEventsForRoleRun(rr.id).length > 0" class="role-run-events">
+                                <div
+                                    v-for="evt in getEventsForRoleRun(rr.id)"
+                                    :key="evt.id"
+                                    class="run-event-item"
+                                >
+                                    <span class="re-icon">{{ RUN_EVENT_ICONS[evt.eventType] ?? '📌' }}</span>
+                                    <span class="re-type">{{ evt.eventType }}</span>
+                                    <span class="re-source">{{ evt.source }}</span>
+                                    <span class="re-seq">#{{ evt.sequence }}</span>
+                                    <span class="re-time">{{ formatDateTime(evt.createdAt) }}</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
+                    <!-- Artifact links -->
+                    <div v-if="getArtifactsForTask(run.taskId).length > 0" class="run-artifacts-section">
+                        <div class="run-artifacts-header">产物 ({{ getArtifactsForTask(run.taskId).length }})</div>
+                        <div
+                            v-for="artifact in getArtifactsForTask(run.taskId)"
+                            :key="artifact.id"
+                            class="run-artifact-item"
+                        >
+                            <span class="ra-icon">📦</span>
+                            <span class="ra-name">{{ artifact.name }}</span>
+                            <span class="ra-type">{{ artifact.type }}</span>
+                            <span v-if="artifact.storageUrl" class="ra-link">
+                                <a :href="artifact.storageUrl" target="_blank" rel="noopener">🔗</a>
+                            </span>
+                        </div>
+                    </div>
+                    <!-- Run events -->
                     <div class="run-events">
                         <div class="run-events-header">事件流 ({{ expandedRunEvents.length }})</div>
                         <div
@@ -347,6 +456,17 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
     font-size: 11px;
 }
 
+// ─── P5.6: Failed phase indicator ─────────────────────────────
+.run-failed-phase {
+    padding: 3px 8px;
+    margin: 0 8px 6px;
+    border-radius: 3px;
+    background: rgba(239, 68, 68, 0.08);
+    border-left: 3px solid #ef4444;
+    color: #fca5a5;
+    font-size: 10px;
+}
+
 .run-events {
     margin-top: 4px;
 }
@@ -429,6 +549,11 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
     &:hover {
         background: #141e33;
     }
+
+    // P5.6: Clickable role run items
+    &.clickable {
+        cursor: pointer;
+    }
 }
 
 .rr-role-icon {
@@ -459,6 +584,15 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
     font-weight: 600;
 }
 
+// P5.6: Reviewer decision badge
+.rr-decision {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 4px;
+    border-radius: 2px;
+}
+
 .rr-upstream {
     flex-shrink: 0;
     color: #475569;
@@ -471,5 +605,67 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
     flex-shrink: 0;
     color: #475569;
     font-size: 10px;
+}
+
+// ─── P5.6: Role run events (expanded) ──────────────────────────
+.role-run-events {
+    padding: 4px 8px 4px 20px;
+    background: #080e1c;
+    border-top: 1px dashed #1e293b;
+}
+
+// ─── P5.6: Artifacts section ───────────────────────────────────
+.run-artifacts-section {
+    margin-top: 6px;
+    padding-top: 4px;
+    border-top: 1px solid #1e293b;
+}
+
+.run-artifacts-header {
+    color: #64748b;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.run-artifact-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 4px;
+    font-size: 11px;
+}
+
+.ra-icon {
+    flex-shrink: 0;
+    font-size: 10px;
+}
+
+.ra-name {
+    color: #e2e8f0;
+    font-size: 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ra-type {
+    flex-shrink: 0;
+    color: #64748b;
+    font-size: 9px;
+}
+
+.ra-link {
+    flex-shrink: 0;
+
+    a {
+        color: #38bdf8;
+        text-decoration: none;
+
+        &:hover {
+            text-decoration: underline;
+        }
+    }
 }
 </style>

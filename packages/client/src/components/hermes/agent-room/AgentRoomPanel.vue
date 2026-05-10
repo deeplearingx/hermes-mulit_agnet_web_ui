@@ -313,6 +313,8 @@ async function handleDeleteRoleBinding(role: AgentRoomRole) {
                             :run-events="store.runEvents"
                             :role-runs="store.roleRuns"
                             :tasks="store.tasks"
+                            :reviews="store.reviews"
+                            :artifacts="store.artifacts"
                             :has-active-runs="store.hasActiveRuns"
                             @load-role-runs="store.loadRoleRunsForRun($event)"
                         />

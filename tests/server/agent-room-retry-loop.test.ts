@@ -65,7 +65,7 @@ function makeInput(overrides: Partial<HermesAgentRuntimeInput> = {}): HermesAgen
 function mockRetryGatewayRuns(
     developerRunId = 'run-dev-retry-001',
     reviewerRunId = 'run-reviewer-retry-001',
-    reviewOutput = 'approved\n\nLGTM, the changes look correct.',
+    reviewOutput = JSON.stringify({ decision: 'approved', feedback: 'LGTM, the changes look correct.' }),
 ) {
     const developerResult = {
         output: 'Revision complete: fixed the issues mentioned in review feedback',
@@ -119,7 +119,7 @@ describe('P3: OrchestratedGatewayRuntime retry path', () => {
         })
 
         it('returns ordered steps: in_progress → submitted_for_review → review_passed', async () => {
-            mockRetryGatewayRuns('dev-001', 'rev-001', 'approved\n\nLooks good.')
+            mockRetryGatewayRuns('dev-001', 'rev-001', JSON.stringify({ decision: 'approved', feedback: 'Looks good.' }))
 
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
             const result = await runtime.runTask(makeInput({
@@ -165,7 +165,7 @@ describe('P3: OrchestratedGatewayRuntime retry path', () => {
 
     describe('need_user_decision → developer + reviewer', () => {
         it('returns same step sequence as revision_required', async () => {
-            mockRetryGatewayRuns('dev-002', 'rev-002', 'approved\n\nPass.')
+            mockRetryGatewayRuns('dev-002', 'rev-002', JSON.stringify({ decision: 'approved', feedback: 'Pass.' }))
 
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
             const result = await runtime.runTask(makeInput({
@@ -183,7 +183,7 @@ describe('P3: OrchestratedGatewayRuntime retry path', () => {
 
     describe('failed → developer + reviewer', () => {
         it('in_progress step emits task_started (not revision_started)', async () => {
-            mockRetryGatewayRuns('dev-003', 'rev-003', 'approved\n\nPass.')
+            mockRetryGatewayRuns('dev-003', 'rev-003', JSON.stringify({ decision: 'approved', feedback: 'Pass.' }))
 
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
             const result = await runtime.runTask(makeInput({
@@ -212,7 +212,7 @@ describe('P3: OrchestratedGatewayRuntime retry path', () => {
 
     describe('reviewer rejects: revision_required decision', () => {
         it('returns review_rejected → revision_required steps', async () => {
-            mockRetryGatewayRuns('dev-004', 'rev-004', 'revision_required\n\nNeed more error handling.')
+            mockRetryGatewayRuns('dev-004', 'rev-004', JSON.stringify({ decision: 'revision_required', feedback: 'Need more error handling.' }))
 
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
             const result = await runtime.runTask(makeInput({
@@ -230,7 +230,7 @@ describe('P3: OrchestratedGatewayRuntime retry path', () => {
 
     describe('reviewer rejects: need_user_decision decision', () => {
         it('returns review_rejected → need_user_decision steps', async () => {
-            mockRetryGatewayRuns('dev-005', 'rev-005', 'need_user_decision\n\nThis requires user input.')
+            mockRetryGatewayRuns('dev-005', 'rev-005', JSON.stringify({ decision: 'need_user_decision', feedback: 'This requires user input.' }))
 
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
             const result = await runtime.runTask(makeInput({
@@ -246,7 +246,7 @@ describe('P3: OrchestratedGatewayRuntime retry path', () => {
 
     describe('metadata consistency', () => {
         it('includes developer and reviewer metadata (no planner)', async () => {
-            mockRetryGatewayRuns('dev-meta-001', 'rev-meta-001', 'approved\n\nOK.')
+            mockRetryGatewayRuns('dev-meta-001', 'rev-meta-001', JSON.stringify({ decision: 'approved', feedback: 'OK.' }))
 
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
             const result = await runtime.runTask(makeInput({
@@ -265,7 +265,7 @@ describe('P3: OrchestratedGatewayRuntime retry path', () => {
         })
 
         it('artifacts include revision round in name', async () => {
-            mockRetryGatewayRuns('dev-006', 'rev-006', 'approved\n\nLGTM.')
+            mockRetryGatewayRuns('dev-006', 'rev-006', JSON.stringify({ decision: 'approved', feedback: 'LGTM.' }))
 
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
             const result = await runtime.runTask(makeInput({

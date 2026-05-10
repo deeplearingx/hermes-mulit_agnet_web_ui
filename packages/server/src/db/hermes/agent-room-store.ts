@@ -56,6 +56,7 @@ export interface AgentRoomReview {
     reviewerAgentId: string
     status: 'passed' | 'rejected'
     comment: string
+    metadata?: Record<string, unknown>
     createdAt: string
 }
 
@@ -196,6 +197,7 @@ function mapReviewRow(row: Record<string, unknown>): AgentRoomReview {
         reviewerAgentId: String(row.reviewer_agent_id),
         status: String(row.status) as 'passed' | 'rejected',
         comment: String(row.comment ?? ''),
+        metadata: decodeJson<Record<string, unknown>>(row.metadata),
         createdAt: String(row.created_at),
     }
 }
@@ -337,8 +339,8 @@ export function updateTask(task: AgentRoomTask): void {
 export function createReview(review: AgentRoomReview): void {
     const db = requireDb()
     db.prepare(
-        `INSERT INTO ${AR_REVIEWS_TABLE} (id, session_id, task_id, reviewer_agent_id, status, comment, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(review.id, review.sessionId, review.taskId, review.reviewerAgentId, review.status, review.comment, review.createdAt)
+        `INSERT INTO ${AR_REVIEWS_TABLE} (id, session_id, task_id, reviewer_agent_id, status, comment, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(review.id, review.sessionId, review.taskId, review.reviewerAgentId, review.status, review.comment, encodeJson(review.metadata), review.createdAt)
 }
 
 export function listReviewsByTask(taskId: string): AgentRoomReview[] {
@@ -549,6 +551,18 @@ export function listRunsByTask(taskId: string): AgentRoomRun[] {
     return rows.map(mapRunRow)
 }
 
+/**
+ * Check whether a task has any active (queued or running) run in the database.
+ * Used as a DB-level guard against concurrent workflow starts.
+ */
+export function hasActiveRunForTask(taskId: string): boolean {
+    const db = requireDb()
+    const row = db.prepare(
+        `SELECT 1 FROM ${AR_RUNS_TABLE} WHERE task_id = ? AND status IN ('queued', 'running') LIMIT 1`
+    ).get(taskId)
+    return !!row
+}
+
 export function findByUpstreamRunId(upstreamRunId: string): AgentRoomRun | null {
     const db = requireDb()
     const row = db.prepare(`SELECT * FROM ${AR_RUNS_TABLE} WHERE upstream_run_id = ?`).get(upstreamRunId) as Record<string, unknown> | undefined
@@ -563,6 +577,31 @@ export function deleteRunsBySession(sessionId: string): void {
 export function deleteRunsByTask(taskId: string): void {
     const db = requireDb()
     db.prepare(`DELETE FROM ${AR_RUNS_TABLE} WHERE task_id = ?`).run(taskId)
+}
+
+/**
+ * Recover stale runs left in queued/running state from a previous server session.
+ * Called once at bootstrap to ensure no orphaned active runs block new workflows.
+ */
+export function recoverStaleRuns(): number {
+    const db = requireDb()
+    const now = new Date().toISOString()
+    const result = db.prepare(
+        `UPDATE ${AR_RUNS_TABLE} SET status = 'failed', error_message = 'Server restarted — stale run recovered', finished_at = ?, updated_at = ? WHERE status IN ('queued', 'running')`
+    ).run(now, now)
+    return result.changes
+}
+
+/**
+ * Recover stale role runs left in queued/running state from a previous server session.
+ */
+export function recoverStaleRoleRuns(): number {
+    const db = requireDb()
+    const now = new Date().toISOString()
+    const result = db.prepare(
+        `UPDATE ${AR_ROLE_RUNS_TABLE} SET status = 'failed', error_message = 'Server restarted — stale role run recovered', finished_at = ?, updated_at = ? WHERE status IN ('queued', 'running')`
+    ).run(now, now)
+    return result.changes
 }
 
 // ─── Role Run CRUD (P3.2) ──────────────────────────────────────

@@ -265,6 +265,7 @@ export const AR_REVIEWS_SCHEMA: Record<string, string> = {
     reviewer_agent_id: 'TEXT NOT NULL',
     status: "TEXT NOT NULL DEFAULT 'passed'",
     comment: "TEXT NOT NULL DEFAULT ''",
+    metadata: 'TEXT',
     created_at: 'TEXT NOT NULL',
 }
 

@@ -38,6 +38,8 @@ import type {
     HermesAgentRuntimeOutput,
     HermesAgentRuntimeHooks,
     HermesAgentRuntimeMetadata,
+    ReviewerDecision,
+    ReviewerOutput,
 } from './types'
 import type { GatewayProfileResolver, GatewayRuntimeTarget } from './gateway-profile-resolver'
 import { createDefaultGatewayProfileResolver } from './gateway-profile-resolver'
@@ -195,6 +197,7 @@ function resolveReviewerBinding(input: HermesAgentRuntimeInput): string {
 /**
  * Build reviewer-specific input text for the Gateway run.
  * Includes developer output as the artifact to review.
+ * P5.2: Enforces JSON-only output protocol.
  */
 function buildReviewerInput(input: HermesAgentRuntimeInput, developerOutput: string): string {
     const parts = [
@@ -207,12 +210,22 @@ function buildReviewerInput(input: HermesAgentRuntimeInput, developerOutput: str
         developerOutput,
         '--- 输出结束 ---',
         '',
-        '请审核上述开发输出，给出审核结论和反馈。',
-        '审核结论必须是以下之一：',
-        '- approved（通过）',
-        '- revision_required（需要修改）',
-        '- need_user_decision（需要用户决策）',
-        '请用中文返回审核结论和详细反馈。',
+        '请审核上述开发输出。你必须且只能返回以下 JSON 格式，不要添加任何其他文本：',
+        '',
+        '```json',
+        '{',
+        '  "decision": "approved | revision_required | need_user_decision",',
+        '  "feedback": "审核反馈",',
+        '  "issues": ["问题1", "问题2"],',
+        '  "confidence": 0.0',
+        '}',
+        '```',
+        '',
+        '字段说明：',
+        '- decision: 必须是 "approved"、"revision_required" 或 "need_user_decision" 之一',
+        '- feedback: 必须非空，描述审核意见',
+        '- issues: 可选，列出具体问题',
+        '- confidence: 可选，0.0-1.0 的置信度',
     ]
     return parts.join('\n')
 }
@@ -220,12 +233,20 @@ function buildReviewerInput(input: HermesAgentRuntimeInput, developerOutput: str
 /**
  * Build reviewer-specific system instructions for the Gateway agent.
  * Constrains the agent to review only — no implementation.
+ * P5.2: Enforces JSON-only output protocol.
  */
 function buildReviewerInstructions(input: HermesAgentRuntimeInput): string {
     return [
         '你是 AgentRoom 中的审核 Agent。',
         '你只需要审核开发 Agent 的输出质量，不要执行代码实现。',
-        '请给出审核结论（approved / revision_required / need_user_decision）和详细反馈。',
+        '',
+        '【输出协议 — 严格遵守】',
+        '你必须且只能输出一个合法的 JSON 对象，不得包含任何其他文本、markdown 标记或解释。',
+        'JSON schema：',
+        '{ "decision": "approved|revision_required|need_user_decision", "feedback": "非空字符串", "issues": ["可选问题列表"], "confidence": 0.0 }',
+        '',
+        '如果你对实现有疑虑，请使用 revision_required 而非 approved。',
+        '宁可误报也不要漏报——安全优先。',
         `当前任务：${input.taskTitle}`,
     ].join('\n')
 }
@@ -283,35 +304,93 @@ function buildRevisionDeveloperInstructions(input: HermesAgentRuntimeInput): str
 }
 
 /**
- * Parse reviewer output to extract a review decision and feedback.
- * Falls back to a default heuristic when structured output is absent.
+ * Valid decision values for validation.
  */
-function parseReviewerDecision(
-    output: string,
-    fallbackDecision: 'approved' | 'revision_required' | 'need_user_decision',
-): { decision: 'approved' | 'revision_required' | 'need_user_decision'; feedback: string } {
+const VALID_DECISIONS: ReadonlySet<string> = new Set<ReviewerDecision>([
+    'approved', 'revision_required', 'need_user_decision',
+])
+
+/**
+ * P5.2: Parse reviewer output using JSON-first strategy with safe fallback.
+ *
+ * Strategy:
+ *   1. Try to parse as JSON — if valid and decision is legal, use it directly
+ *   2. If JSON is valid but decision is missing or invalid → default revision_required
+ *   3. If JSON is invalid → default revision_required, NEVER approved
+ *   4. If feedback is empty in JSON → fill with raw output
+ *
+ * Design principle: safety-first. A real model may output ambiguous text like
+ * "这个实现未通过，需要修改" which contains "通过" but is clearly revision_required.
+ * JSON protocol eliminates this class of false positives.
+ */
+export function parseReviewerOutput(output: string): ReviewerOutput {
     const trimmed = output.trim()
 
-    // Try to extract explicit decision keywords
-    const lower = trimmed.toLowerCase()
-    if (lower.includes('approved') || lower.includes('通过')) {
-        return { decision: 'approved', feedback: trimmed }
-    }
-    if (lower.includes('need_user_decision') || lower.includes('需要用户决策')) {
-        return { decision: 'need_user_decision', feedback: trimmed }
-    }
-    if (lower.includes('revision_required') || lower.includes('需要修改') || lower.includes('要求修改')) {
-        return { decision: 'revision_required', feedback: trimmed }
+    // ── Step 1: Try JSON parse ────────────────────────────────────
+    let parsed: Record<string, unknown> | null = null
+    try {
+        // Handle markdown-wrapped JSON: ```json\n{...}\n```
+        const jsonMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/)
+        const jsonStr = jsonMatch ? jsonMatch[1].trim() : trimmed
+        parsed = JSON.parse(jsonStr) as Record<string, unknown>
+    } catch {
+        // Not valid JSON — will fall through to text fallback
+        parsed = null
     }
 
-    // Fallback: use caller-supplied default
-    return { decision: fallbackDecision, feedback: trimmed }
+    // ── Step 2: Valid JSON path ───────────────────────────────────
+    if (parsed && typeof parsed === 'object') {
+        const rawDecision = parsed.decision
+        const rawFeedback = parsed.feedback
+        const rawIssues = parsed.issues
+        const rawConfidence = parsed.confidence
+
+        // Validate decision
+        const decision: ReviewerDecision =
+            (typeof rawDecision === 'string' && VALID_DECISIONS.has(rawDecision))
+                ? rawDecision as ReviewerDecision
+                : 'revision_required'  // missing or invalid decision → safe default
+
+        // Validate feedback — empty feedback gets filled with raw output
+        const feedback: string =
+            (typeof rawFeedback === 'string' && rawFeedback.trim().length > 0)
+                ? rawFeedback.trim()
+                : trimmed
+
+        // Validate issues (optional) — empty array → undefined
+        const filteredIssues =
+            (Array.isArray(rawIssues) && rawIssues.every(i => typeof i === 'string'))
+                ? rawIssues.filter(i => i.trim().length > 0)
+                : undefined
+        const issues: string[] | undefined =
+            (filteredIssues && filteredIssues.length > 0) ? filteredIssues : undefined
+
+        // Validate confidence (optional)
+        const confidence: number | undefined =
+            (typeof rawConfidence === 'number' && Number.isFinite(rawConfidence))
+                ? Math.max(0, Math.min(1, rawConfidence))
+                : undefined
+
+        return { decision, feedback, issues, confidence }
+    }
+
+    // ── Step 3: Non-JSON fallback → revision_required (NEVER approved) ─
+    // Safety: even if raw text contains "approved" or "通过", we cannot trust
+    // a model that didn't follow the JSON protocol.
+    return {
+        decision: 'revision_required',
+        feedback: trimmed,
+    }
 }
 
 /**
  * Create role-tagged hook wrappers for observability.
  *
- * - onUpstreamRunCreated: forwarded as-is (caller handles upstreamRunId binding)
+ * P5.1: onUpstreamRunCreated now injects role context so the service layer
+ * can bind the upstream run_id to the correct role_run by role name
+ * instead of relying on sequential index.
+ *
+ * - onUpstreamRunCreated: wraps call with { role } context
  * - onRawEvent: wraps event with _agentRole dimension before forwarding
  *
  * This ensures both planner and developer SSE events are persisted as gateway_sse
@@ -323,13 +402,21 @@ function createRoleTaggedHooks(
 ): HermesAgentRuntimeHooks | undefined {
     if (!baseHooks) return undefined
     return {
-        onUpstreamRunCreated: baseHooks.onUpstreamRunCreated,
+        // P5.1: Inject role context into onUpstreamRunCreated so the service layer
+        // can bind upstream_run_id to the correct role_run by role name.
+        onUpstreamRunCreated: baseHooks.onUpstreamRunCreated
+            ? (upstreamRunId: string) => {
+                baseHooks.onUpstreamRunCreated!(upstreamRunId, { role })
+            }
+            : undefined,
         onRawEvent: baseHooks.onRawEvent
             ? (event: Record<string, unknown>) => {
                 // Attach role dimension to the raw event payload
                 baseHooks.onRawEvent!({ ...event, _agentRole: role })
             }
             : undefined,
+        // P5.3: Forward onReviewerDecision to base hooks (service layer implementation)
+        onReviewerDecision: baseHooks.onReviewerDecision,
     }
 }
 
@@ -497,9 +584,24 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         // ── Build output ──────────────────────────────────────────
 
-        // Step 10: Parse reviewer decision from reviewer output
-        const { decision: reviewDecision, feedback: reviewFeedback } =
-            parseReviewerDecision(reviewerResult.output, 'approved')
+        // Step 10: P5.2 — Parse reviewer output using JSON protocol
+        const reviewerParsed = parseReviewerOutput(reviewerResult.output)
+        const reviewDecision = reviewerParsed.decision
+        const reviewFeedback = reviewerParsed.feedback
+
+        // P5.3: Notify service layer to write review record to agent_room_reviews
+        try {
+            input.hooks?.onReviewerDecision?.({
+                sessionId: input.sessionId,
+                taskId: input.taskId,
+                reviewerProfileName,
+                reviewDecision,
+                reviewFeedback,
+                reviewerRunId: reviewerResult.runId,
+                reviewIssues: reviewerParsed.issues,
+                reviewConfidence: reviewerParsed.confidence,
+            })
+        } catch { /* swallow — non-critical observability hook */ }
 
         // Step 11: Build dual-run metadata
         const plannerMetadata: HermesAgentRuntimeMetadata = {
@@ -526,11 +628,14 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
         }
 
         // Unified reviewer metadata — compatible with manual submitReview path
+        // P5.2: includes issues and confidence from structured JSON output
         const reviewerMetadata: HermesAgentRuntimeMetadata = {
             reviewerRunId: reviewerResult.runId,
             reviewerProfileName,
             reviewDecision,
             reviewFeedback,
+            reviewIssues: reviewerParsed.issues,
+            reviewConfidence: reviewerParsed.confidence,
             reviewerSource: 'orchestrated-reviewer',
         }
         if (reviewerTarget.model) reviewerMetadata.reviewerModel = reviewerTarget.model
@@ -552,11 +657,11 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         // Step 12: Map reviewer decision to AgentRoom final status and event type
         type ReviewFinalStatus = 'review_passed' | 'revision_required' | 'need_user_decision'
-        type ReviewEventType = 'review_passed' | 'review_rejected' | 'need_user_decision'
+        type ReviewEventType = 'review_passed' | 'review_rejected' | 'revision_started' | 'need_user_decision'
 
         const decisionStatusMap: Record<typeof reviewDecision, { status: ReviewFinalStatus; eventType: ReviewEventType }> = {
             approved: { status: 'review_passed', eventType: 'review_passed' },
-            revision_required: { status: 'revision_required', eventType: 'review_rejected' },
+            revision_required: { status: 'revision_required', eventType: 'revision_started' },
             need_user_decision: { status: 'need_user_decision', eventType: 'need_user_decision' },
         }
 
@@ -803,8 +908,24 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         // ── Build output ──────────────────────────────────────────
 
-        const { decision: reviewDecision, feedback: reviewFeedback } =
-            parseReviewerDecision(reviewerResult.output, 'approved')
+        // P5.2 — Parse reviewer output using JSON protocol
+        const reviewerParsed = parseReviewerOutput(reviewerResult.output)
+        const reviewDecision = reviewerParsed.decision
+        const reviewFeedback = reviewerParsed.feedback
+
+        // P5.3: Notify service layer to write review record to agent_room_reviews
+        try {
+            input.hooks?.onReviewerDecision?.({
+                sessionId: input.sessionId,
+                taskId: input.taskId,
+                reviewerProfileName,
+                reviewDecision,
+                reviewFeedback,
+                reviewerRunId: reviewerResult.runId,
+                reviewIssues: reviewerParsed.issues,
+                reviewConfidence: reviewerParsed.confidence,
+            })
+        } catch { /* swallow — non-critical observability hook */ }
 
         const developerMetadata: HermesAgentRuntimeMetadata = {
             developerRunId: developerResult.runId,
@@ -822,6 +943,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
             reviewerProfileName,
             reviewDecision,
             reviewFeedback,
+            reviewIssues: reviewerParsed.issues,
+            reviewConfidence: reviewerParsed.confidence,
             reviewerSource: 'orchestrated-reviewer-revision',
         }
         if (reviewerTarget.model) reviewerMetadata.reviewerModel = reviewerTarget.model
@@ -837,11 +960,11 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
         const safeName = safeTitle(title)
 
         type ReviewFinalStatus = 'review_passed' | 'revision_required' | 'need_user_decision'
-        type ReviewEventType = 'review_passed' | 'review_rejected' | 'need_user_decision'
+        type ReviewEventType = 'review_passed' | 'review_rejected' | 'revision_started' | 'need_user_decision'
 
         const decisionStatusMap: Record<typeof reviewDecision, { status: ReviewFinalStatus; eventType: ReviewEventType }> = {
             approved: { status: 'review_passed', eventType: 'review_passed' },
-            revision_required: { status: 'revision_required', eventType: 'review_rejected' },
+            revision_required: { status: 'revision_required', eventType: 'revision_started' },
             need_user_decision: { status: 'need_user_decision', eventType: 'need_user_decision' },
         }
 

@@ -81,6 +81,7 @@ export interface AgentRoomReview {
     reviewerAgentId: string
     status: 'passed' | 'rejected'
     comment: string
+    metadata?: Record<string, unknown>
     createdAt: string
 }
 
@@ -761,37 +762,80 @@ function finalizeRoleRuns(
  * @param run       The workflow-level run record
  * @param roleRuns  Optional role run records for role-level observability (P3.3)
  */
+/**
+ * Build runtime hooks for a run record.
+ *
+ * P5.1: Role-aware binding — uses `context.role` from onUpstreamRunCreated
+ * to bind upstream run_id to the correct role_run by role name.
+ * Falls back to sequential index for backward compatibility with single-role
+ * runtimes (GatewayHermesRuntime) that don't pass role context.
+ *
+ * onRawEvent: uses `payload._agentRole` to resolve role_run_id for gateway_sse events.
+ * Falls back to most-recently-bound role_run when _agentRole is absent.
+ *
+ * @param run       The workflow-level run record
+ * @param roleRuns  Optional role run records for role-level observability (P3.3)
+ */
 function buildRunHooks(run: store.AgentRoomRun, roleRuns?: store.AgentRoomRoleRun[]): HermesAgentRuntimeHooks {
-    // Track which role run is "active" — advances sequentially as
-    // the orchestrated runtime calls onUpstreamRunCreated for each phase.
+    // P5.1: Build role → roleRun map for O(1) role-aware lookup
+    const roleRunMap = new Map<string, store.AgentRoomRoleRun>()
+    for (const rr of roleRuns ?? []) {
+        roleRunMap.set(rr.role, rr)
+    }
+
+    // Track which role run was most recently bound (for fallback paths)
+    let lastBoundRoleRun: store.AgentRoomRoleRun | undefined
+
+    // Legacy sequential index for callers without role context
     let activeRoleRunIndex = 0
 
     return {
-        onUpstreamRunCreated: (upstreamRunId: string) => {
+        onUpstreamRunCreated: (upstreamRunId: string, context?: { role?: string }) => {
             try {
                 updateRunUpstreamId(run.id, upstreamRunId)
                 // Also update in-memory object so the final store.updateRun() preserves it
                 run.upstreamRunId = upstreamRunId
 
-                // P3.3: Advance the next unbound role run to 'running' with upstream_run_id
-                if (roleRuns && activeRoleRunIndex < roleRuns.length) {
-                    const roleRun = roleRuns[activeRoleRunIndex]
-                    roleRun.upstreamRunId = upstreamRunId
-                    roleRun.status = 'running'
-                    roleRun.startedAt = new Date().toISOString()
-                    roleRun.updatedAt = roleRun.startedAt
-                    store.updateRoleRun(roleRun)
-                    activeRoleRunIndex++
+                // P5.1: Role-aware binding — resolve by role name if context is provided
+                let targetRoleRun: store.AgentRoomRoleRun | undefined
+                if (context?.role) {
+                    targetRoleRun = roleRunMap.get(context.role)
+                } else {
+                    // Fallback: sequential index for legacy callers
+                    targetRoleRun = roleRuns?.[activeRoleRunIndex]
+                }
+
+                if (targetRoleRun && targetRoleRun.status === 'queued') {
+                    targetRoleRun.upstreamRunId = upstreamRunId
+                    targetRoleRun.status = 'running'
+                    targetRoleRun.startedAt = new Date().toISOString()
+                    targetRoleRun.updatedAt = targetRoleRun.startedAt
+                    store.updateRoleRun(targetRoleRun)
+                    lastBoundRoleRun = targetRoleRun
+                    // Only advance legacy index for non-role-aware callers
+                    if (!context?.role) {
+                        activeRoleRunIndex++
+                    }
                 }
             } catch { /* swallow — non-critical */ }
         },
         onRawEvent: (event: Record<string, unknown>) => {
             try {
                 const eventType = typeof event.event === 'string' ? event.event : 'unknown'
-                // P3.3/P3.4: Tag run_event with the active role_run_id for correlation
-                const activeRoleRunId = (roleRuns && activeRoleRunIndex > 0)
-                    ? roleRuns[activeRoleRunIndex - 1].id
-                    : undefined
+
+                // P5.1: Resolve role_run_id from event payload _agentRole
+                // (set by createRoleTaggedHooks in orchestrated runtime)
+                // Falls back to most-recently-bound role_run for backward compat.
+                const eventRole = typeof event._agentRole === 'string' ? event._agentRole : undefined
+                let activeRoleRunId: string | undefined
+                if (eventRole) {
+                    activeRoleRunId = roleRunMap.get(eventRole)?.id
+                }
+                // Fallback: use most recently bound role_run
+                if (!activeRoleRunId) {
+                    activeRoleRunId = lastBoundRoleRun?.id
+                }
+
                 const runEvent: store.AgentRoomRunEvent = {
                     id: randomUUID(),
                     runId: run.id,
@@ -805,6 +849,39 @@ function buildRunHooks(run: store.AgentRoomRun, roleRuns?: store.AgentRoomRoleRu
                     createdAt: new Date().toISOString(),
                 }
                 store.createRunEvent(runEvent)
+            } catch { /* swallow — non-critical */ }
+        },
+        // P5.3: Write auto reviewer decision to agent_room_reviews table
+        // Unifies audit/retry-feedback data source between manual submitReview()
+        // and automated reviewer decisions.
+        onReviewerDecision: (decision) => {
+            try {
+                // Map reviewDecision → review status
+                const reviewStatus: 'passed' | 'rejected' =
+                    decision.reviewDecision === 'approved' ? 'passed' : 'rejected'
+
+                // Build metadata JSON for observability
+                const reviewMetadata: Record<string, unknown> = {
+                    source: 'orchestrated-reviewer',
+                    reviewerRunId: decision.reviewerRunId,
+                    reviewerProfileName: decision.reviewerProfileName,
+                    reviewDecision: decision.reviewDecision,
+                    reviewFeedback: decision.reviewFeedback,
+                    reviewIssues: decision.reviewIssues,
+                    reviewConfidence: decision.reviewConfidence,
+                }
+
+                const review: store.AgentRoomReview = {
+                    id: randomUUID(),
+                    sessionId: decision.sessionId,
+                    taskId: decision.taskId,
+                    reviewerAgentId: decision.reviewerProfileName,
+                    status: reviewStatus,
+                    comment: decision.reviewFeedback,
+                    metadata: reviewMetadata,
+                    createdAt: new Date().toISOString(),
+                }
+                store.createReview(review)
             } catch { /* swallow — non-critical */ }
         },
     }
@@ -948,8 +1025,13 @@ async function executeRun(
 function assertWorkflowStartable(sessionId: string, taskId: string): AgentRoomTask {
     const task = assertTaskInSession(taskId, sessionId)
 
-    // Guard: prevent duplicate workflow runs on the same task
+    // Guard: prevent duplicate workflow runs on the same task (in-memory fast path)
     if (runningWorkflows.has(taskId)) {
+        throw new Error('Workflow is already running')
+    }
+
+    // DB-level guard: check for active runs in persisted storage (belt-and-suspenders)
+    if (store.hasActiveRunForTask(taskId)) {
         throw new Error('Workflow is already running')
     }
 

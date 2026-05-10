@@ -11,6 +11,24 @@ import type {
     AgentRoomMessageType,
 } from '../../index'
 
+// ─── P5.2: Reviewer JSON Output Protocol ─────────────────────────
+// Structured output contract for the reviewer agent.
+
+/** Valid reviewer decisions. */
+export type ReviewerDecision = 'approved' | 'revision_required' | 'need_user_decision'
+
+/** Structured reviewer output from JSON protocol. */
+export interface ReviewerOutput {
+    /** Review decision. */
+    decision: ReviewerDecision
+    /** Review feedback text. */
+    feedback: string
+    /** Optional list of issues raised. */
+    issues?: string[]
+    /** Optional confidence score (0.0 - 1.0). */
+    confidence?: number
+}
+
 /**
  * Role binding entry for multi-role profile resolution in the runtime.
  * Mirrors RunnerRoleBinding from runner/types.ts without circular import.
@@ -43,9 +61,13 @@ export interface HermesAgentRuntimeMetadata {
     /** Resolved profile name used for the reviewer role. */
     reviewerProfileName?: string
     /** Reviewer decision: approved | revision_required | need_user_decision. */
-    reviewDecision?: 'approved' | 'revision_required' | 'need_user_decision'
+    reviewDecision?: ReviewerDecision
     /** Structured or free-form reviewer feedback. */
     reviewFeedback?: string
+    /** Issues raised by the reviewer (structured JSON output). */
+    reviewIssues?: string[]
+    /** Reviewer confidence score (0.0 - 1.0). */
+    reviewConfidence?: number
     /** Extensible bag for future metadata without interface changes. */
     [key: string]: unknown
 }
@@ -178,14 +200,43 @@ export interface HermesAgentRuntimeHooks {
     /**
      * Called when the upstream Gateway returns a run_id from POST /v1/runs.
      * Enables the caller to bind the upstream run_id to the local run record in real time.
+     *
+     * P5.1: Optional `context` carries role attribution for role-aware binding.
+     * When present, the service layer uses `context.role` to bind the upstream run_id
+     * to the correct role_run, eliminating order-dependent (index-based) binding.
+     * When absent, the service layer falls back to sequential index binding
+     * for backward compatibility with single-role runtimes (GatewayHermesRuntime).
      */
-    onUpstreamRunCreated?: (upstreamRunId: string) => void
+    onUpstreamRunCreated?: (upstreamRunId: string, context?: { role: AgentRoomRole }) => void
 
     /**
      * Called for every parsed SSE event from the upstream Gateway.
      * Enables real-time event persistence and observability.
      */
     onRawEvent?: (event: Record<string, unknown>) => void
+
+    /**
+     * P5.3: Called when the auto reviewer produces a decision.
+     * Enables the service layer to write a review record to agent_room_reviews,
+     * unifying the audit/retry-feedback data source between manual submitReview()
+     * and automated reviewer decisions.
+     *
+     * The service layer stores full metadata JSON (source, reviewerRunId,
+     * reviewerProfileName, reviewDecision, reviewFeedback, reviewIssues,
+     * reviewConfidence) in the review comment field for maximum observability.
+     *
+     * Fire-and-forget — errors are swallowed to avoid breaking the main flow.
+     */
+    onReviewerDecision?: (decision: {
+        sessionId: string
+        taskId: string
+        reviewerProfileName: string
+        reviewDecision: ReviewerDecision
+        reviewFeedback: string
+        reviewerRunId?: string
+        reviewIssues?: string[]
+        reviewConfidence?: number
+    }) => void
 }
 
 /**

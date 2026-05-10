@@ -51,6 +51,28 @@ function makeInput(overrides: Partial<HermesAgentRuntimeInput> = {}): HermesAgen
  * Mock three sequential runHermesGatewayTask calls (planner → developer → reviewer).
  * Returns the mock values for assertion.
  */
+// P5.2: JSON reviewer output protocol constants for tests
+const APPROVED_REVIEWER_JSON = JSON.stringify({
+    decision: 'approved',
+    feedback: 'Implementation meets requirements',
+    issues: [],
+    confidence: 0.95,
+})
+
+const REVISION_REQUIRED_REVIEWER_JSON = JSON.stringify({
+    decision: 'revision_required',
+    feedback: 'Implementation needs changes',
+    issues: ['Missing error handling'],
+    confidence: 0.8,
+})
+
+const NEED_USER_DECISION_REVIEWER_JSON = JSON.stringify({
+    decision: 'need_user_decision',
+    feedback: 'Cannot determine correctness',
+    issues: ['Ambiguous requirements'],
+    confidence: 0.3,
+})
+
 function mockDualGatewayRuns(plannerRunId = 'run-planner-001', developerRunId = 'run-dev-001', reviewerRunId = 'run-reviewer-001') {
     const plannerResult = {
         output: 'Plan: step 1, step 2, step 3',
@@ -63,7 +85,7 @@ function mockDualGatewayRuns(plannerRunId = 'run-planner-001', developerRunId = 
         sessionId: 'agent-room-developer-sess-1-task-1',
     }
     const reviewerResult = {
-        output: 'Approved: implementation meets requirements',
+        output: APPROVED_REVIEWER_JSON,
         runId: reviewerRunId,
         sessionId: 'agent-room-reviewer-sess-1-task-1',
     }
@@ -437,7 +459,7 @@ describe('OrchestratedGatewayRuntime dual-run (P4.11-A4)', () => {
     })
 
     describe('hooks forwarding and role tagging (P4.11-A5)', () => {
-        it('forwards onUpstreamRunCreated hook to planner, developer, and reviewer runs', async () => {
+        it('forwards onUpstreamRunCreated hook to planner, developer, and reviewer runs (P5.1: wrapped with role context)', async () => {
             mockDualGatewayRuns()
 
             const onUpstreamRunCreated = vi.fn()
@@ -445,13 +467,25 @@ describe('OrchestratedGatewayRuntime dual-run (P4.11-A4)', () => {
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
             await runtime.runTask(makeInput({ hooks: { onUpstreamRunCreated, onRawEvent } }))
 
-            // All three calls should have onUpstreamRunCreated forwarded
+            // All three calls should have onUpstreamRunCreated forwarded (P5.1: wrapped with role context)
             const plannerCall = vi.mocked(runHermesGatewayTask).mock.calls[0][0]
             const devCall = vi.mocked(runHermesGatewayTask).mock.calls[1][0]
             const reviewerCall = vi.mocked(runHermesGatewayTask).mock.calls[2][0]
-            expect(plannerCall.onUpstreamRunCreated).toBe(onUpstreamRunCreated)
-            expect(devCall.onUpstreamRunCreated).toBe(onUpstreamRunCreated)
-            expect(reviewerCall.onUpstreamRunCreated).toBe(onUpstreamRunCreated)
+
+            // P5.1: Hooks are now wrapped (not the same reference), but still functional
+            expect(plannerCall.onUpstreamRunCreated).toBeTypeOf('function')
+            expect(devCall.onUpstreamRunCreated).toBeTypeOf('function')
+            expect(reviewerCall.onUpstreamRunCreated).toBeTypeOf('function')
+
+            // Verify the wrapper injects role context when called
+            plannerCall.onUpstreamRunCreated?.('run-planner-001')
+            expect(onUpstreamRunCreated).toHaveBeenCalledWith('run-planner-001', { role: 'planner' })
+
+            devCall.onUpstreamRunCreated?.('run-dev-001')
+            expect(onUpstreamRunCreated).toHaveBeenCalledWith('run-dev-001', { role: 'developer' })
+
+            reviewerCall.onUpstreamRunCreated?.('run-reviewer-001')
+            expect(onUpstreamRunCreated).toHaveBeenCalledWith('run-reviewer-001', { role: 'reviewer' })
         })
 
         it('planner onRawEvent tags events with _agentRole: "planner"', async () => {
@@ -799,7 +833,7 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
                 params.onRawEvent({ event: 'run.completed', data: { id: reviewerRunId } })
             }
             return {
-                output: 'Approved: implementation meets requirements',
+                output: APPROVED_REVIEWER_JSON,
                 runId: reviewerRunId,
                 sessionId: `agent-room-reviewer-${params.sessionId}`,
             }
@@ -913,7 +947,7 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
                 }
             }
             return {
-                output: 'Approved: looks good',
+                output: APPROVED_REVIEWER_JSON,
                 runId: 'run-r-seq',
                 sessionId: 'sess-r',
             }
@@ -1143,7 +1177,7 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
             if (callCount === 2) {
                 return { output: 'Dev output', runId: 'run-fb-2-d', sessionId: 'sess-fb-2-d' }
             }
-            return { output: 'Approved', runId: 'run-fb-2-r', sessionId: 'sess-fb-2-r' }
+            return { output: APPROVED_REVIEWER_JSON, runId: 'run-fb-2-r', sessionId: 'sess-fb-2-r' }
         })
 
         const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
@@ -1191,7 +1225,7 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
             if (callCount === 2) {
                 return { output: 'Dev output', runId: 'run-fb-3-d', sessionId: 'sess-fb-3-d' }
             }
-            return { output: 'Approved', runId: 'run-fb-3-r', sessionId: 'sess-fb-3-r' }
+            return { output: APPROVED_REVIEWER_JSON, runId: 'run-fb-3-r', sessionId: 'sess-fb-3-r' }
         })
 
         const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
@@ -1241,7 +1275,7 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
             if (developerCallParams.length === 2) {
                 return { output: 'Dev output', runId: 'run-p1-3c-d', sessionId: 'sess-p1-3c-d' }
             }
-            return { output: 'Approved', runId: 'run-p1-3c-r', sessionId: 'sess-p1-3c-r' }
+            return { output: APPROVED_REVIEWER_JSON, runId: 'run-p1-3c-r', sessionId: 'sess-p1-3c-r' }
         })
 
         const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
@@ -1349,7 +1383,7 @@ describe('P0.2: Full-chain smoke — real Gateway orchestrated path with deliver
                 params.onRawEvent({ event: 'run.completed', data: { id: reviewerRunId } })
             }
             return {
-                output: 'Approved: implementation meets all requirements, code quality is excellent',
+                output: APPROVED_REVIEWER_JSON,
                 runId: reviewerRunId,
                 sessionId: `agent-room-reviewer-${params.sessionId}`,
             }
@@ -1458,7 +1492,7 @@ describe('P0.2: Full-chain smoke — real Gateway orchestrated path with deliver
         expect(codeArtifact).toBeDefined()
         expect(codeArtifact!.content).toContain('Implementation complete')
         expect(reviewArtifact).toBeDefined()
-        expect(reviewArtifact!.content).toContain('Approved')
+        expect(reviewArtifact!.content).toContain('Implementation meets requirements')
 
         // Verify artifact metadata contains orchestrated triple-run source
         const codeMeta = codeArtifact!.metadata as Record<string, unknown>
@@ -1616,7 +1650,7 @@ describe('P1.1-P1.5: autoDelivery unified semantic — orchestrated runner', () 
                 params.onRawEvent({ event: 'run.completed', data: { id: reviewerRunId } })
             }
             return {
-                output: 'Approved: code quality is excellent',
+                output: APPROVED_REVIEWER_JSON,
                 runId: reviewerRunId,
                 sessionId: `agent-room-reviewer-${params.sessionId}`,
             }
@@ -1771,5 +1805,241 @@ describe('createHermesAgentRuntime — existing modes unchanged', () => {
 
     it('unknown mode falls back to DeterministicHermesRuntime', () => {
         expect(createHermesAgentRuntime('unknown-mode')).toBeInstanceOf(DeterministicHermesRuntime)
+    })
+})
+
+// ─── P5.3: Auto reviewer writes to agent_room_reviews ──────────
+
+describe('P5.3: Auto reviewer writes to agent_room_reviews', () => {
+    function ensureTableForTest(db: any, tableName: string, schema: Record<string, string>): void {
+        const cols = Object.entries(schema).map(([col, type]) => `${col} ${type}`).join(', ')
+        db.exec(`CREATE TABLE IF NOT EXISTS ${tableName} (${cols})`)
+    }
+
+    let mockDb: any
+
+    beforeEach(async () => {
+        vi.resetModules()
+        const { DatabaseSync } = await import('node:sqlite')
+        mockDb = new DatabaseSync(':memory:')
+        vi.doMock('../../packages/server/src/db/index', () => ({
+            getDb: () => mockDb,
+            ensureTable: ensureTableForTest.bind(null, mockDb),
+        }))
+
+        const { initAllHermesTables } = await import('../../packages/server/src/db/hermes/schemas')
+        initAllHermesTables()
+    })
+
+    afterEach(() => {
+        if (mockDb) mockDb.close()
+        vi.restoreAllMocks()
+    })
+
+    /**
+     * Helper: mock 3 gateway runs with a given reviewer JSON output.
+     * Returns the service module and session/task for assertions.
+     */
+    async function setupWithReviewerJson(reviewerJson: string) {
+        const { runHermesGatewayTask } = await import('../../packages/server/src/services/hermes/gateway-run-client')
+
+        let callCount = 0
+        vi.mocked(runHermesGatewayTask).mockImplementation(async (params: any) => {
+            callCount++
+            if (callCount === 1) {
+                return { output: 'Plan output', runId: 'run-p53-p', sessionId: 'sess-p' }
+            }
+            if (callCount === 2) {
+                return { output: 'Dev output', runId: 'run-p53-d', sessionId: 'sess-d' }
+            }
+            return { output: reviewerJson, runId: 'run-p53-r', sessionId: 'sess-r' }
+        })
+
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+        setActiveRunnerForTest(new RealAgentRunner(runtime))
+
+        const session = svc.createSession('P5.3 Review Test')
+        const task = svc.createTask(session.id, 'P5.3 Task', 'Test auto reviewer reviews table')
+        svc.setRoleBinding(session.id, 'planner', 'gpt-4o')
+        svc.setRoleBinding(session.id, 'developer', 'claude-3.5-sonnet')
+        svc.setRoleBinding(session.id, 'reviewer', 'reviewer-profile')
+
+        const run = svc.startWorkflow(session.id, task.id)
+
+        await vi.waitFor(() => {
+            const updatedRun = svc.getRun(run.id)!
+            expect(updatedRun.status).toBe('completed')
+        }, { timeout: 10000 })
+
+        return { svc, session, task, resetActiveRunnerForTest }
+    }
+
+    it('auto reviewer approved → reviews table has status="passed"', async () => {
+        const { svc, session, task, resetActiveRunnerForTest } = await setupWithReviewerJson(APPROVED_REVIEWER_JSON)
+
+        const reviews = svc.listReviews(session.id)
+        const taskReviews = reviews.filter(r => r.taskId === task.id)
+        expect(taskReviews).toHaveLength(1)
+        expect(taskReviews[0].status).toBe('passed')
+
+        resetActiveRunnerForTest()
+    })
+
+    it('auto reviewer revision_required → reviews table has status="rejected"', async () => {
+        const { svc, session, task, resetActiveRunnerForTest } = await setupWithReviewerJson(REVISION_REQUIRED_REVIEWER_JSON)
+
+        const reviews = svc.listReviews(session.id)
+        const taskReviews = reviews.filter(r => r.taskId === task.id)
+        expect(taskReviews).toHaveLength(1)
+        expect(taskReviews[0].status).toBe('rejected')
+
+        resetActiveRunnerForTest()
+    })
+
+    it('auto reviewer need_user_decision → reviews table has status="rejected"', async () => {
+        const { svc, session, task, resetActiveRunnerForTest } = await setupWithReviewerJson(NEED_USER_DECISION_REVIEWER_JSON)
+
+        const reviews = svc.listReviews(session.id)
+        const taskReviews = reviews.filter(r => r.taskId === task.id)
+        expect(taskReviews).toHaveLength(1)
+        expect(taskReviews[0].status).toBe('rejected')
+
+        resetActiveRunnerForTest()
+    })
+
+    it('auto reviewer record reviewerAgentId is reviewer profileName', async () => {
+        const { svc, session, task, resetActiveRunnerForTest } = await setupWithReviewerJson(APPROVED_REVIEWER_JSON)
+
+        const reviews = svc.listReviews(session.id)
+        const taskReviews = reviews.filter(r => r.taskId === task.id)
+        expect(taskReviews[0].reviewerAgentId).toBe('reviewer-profile')
+
+        resetActiveRunnerForTest()
+    })
+
+    it('auto reviewer record comment is reviewFeedback', async () => {
+        const { svc, session, task, resetActiveRunnerForTest } = await setupWithReviewerJson(REVISION_REQUIRED_REVIEWER_JSON)
+
+        const reviews = svc.listReviews(session.id)
+        const taskReviews = reviews.filter(r => r.taskId === task.id)
+        expect(taskReviews[0].comment).toBe('Implementation needs changes')
+
+        resetActiveRunnerForTest()
+    })
+
+    it('auto reviewer record metadata contains expected fields', async () => {
+        const { svc, session, task, resetActiveRunnerForTest } = await setupWithReviewerJson(REVISION_REQUIRED_REVIEWER_JSON)
+
+        const reviews = svc.listReviews(session.id)
+        const taskReviews = reviews.filter(r => r.taskId === task.id)
+        const meta = taskReviews[0].metadata
+
+        expect(meta).toBeDefined()
+        expect(meta!.source).toBe('orchestrated-reviewer')
+        expect(meta!.reviewerRunId).toBe('run-p53-r')
+        expect(meta!.reviewerProfileName).toBe('reviewer-profile')
+        expect(meta!.reviewDecision).toBe('revision_required')
+        expect(meta!.reviewFeedback).toBe('Implementation needs changes')
+        expect(meta!.reviewIssues).toEqual(['Missing error handling'])
+        expect(meta!.reviewConfidence).toBe(0.8)
+
+        resetActiveRunnerForTest()
+    })
+
+    it('retry path reads auto reviewer rejected feedback from reviews table', async () => {
+        const { svc, session, task, resetActiveRunnerForTest } = await setupWithReviewerJson(REVISION_REQUIRED_REVIEWER_JSON)
+
+        // Verify the review was written
+        const reviews = svc.listReviews(session.id)
+        const taskReviews = reviews.filter(r => r.taskId === task.id)
+        expect(taskReviews).toHaveLength(1)
+        expect(taskReviews[0].status).toBe('rejected')
+        expect(taskReviews[0].comment).toBe('Implementation needs changes')
+
+        // The task should be in revision_required state
+        const updatedTask = svc.getTask(task.id)!
+        expect(updatedTask.status).toBe('revision_required')
+
+        // Verify the store has the rejected review readable for retry
+        const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+        const storeReviews = store.listReviewsByTask(task.id)
+        const rejected = storeReviews.filter(r => r.status === 'rejected')
+        expect(rejected).toHaveLength(1)
+        expect(rejected[0].comment).toBe('Implementation needs changes')
+
+        resetActiveRunnerForTest()
+    })
+
+    it('manual submitReview and auto reviewer share same reviews table, no conflict', async () => {
+        const { runHermesGatewayTask } = await import('../../packages/server/src/services/hermes/gateway-run-client')
+
+        let callCount = 0
+        vi.mocked(runHermesGatewayTask).mockImplementation(async (_params: any) => {
+            callCount++
+            if (callCount === 1) {
+                return { output: 'Plan output', runId: 'run-conflict-p', sessionId: 'sess-p' }
+            }
+            if (callCount === 2) {
+                return { output: 'Dev output', runId: 'run-conflict-d', sessionId: 'sess-d' }
+            }
+            return { output: REVISION_REQUIRED_REVIEWER_JSON, runId: 'run-conflict-r', sessionId: 'sess-r' }
+        })
+
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+        setActiveRunnerForTest(new RealAgentRunner(runtime))
+
+        const session = svc.createSession('Conflict Test')
+        const task = svc.createTask(session.id, 'Conflict Task', 'Test coexistence')
+        svc.setRoleBinding(session.id, 'planner', 'gpt-4o')
+        svc.setRoleBinding(session.id, 'developer', 'claude-3.5-sonnet')
+        svc.setRoleBinding(session.id, 'reviewer', 'auto-reviewer')
+
+        const run = svc.startWorkflow(session.id, task.id)
+
+        await vi.waitFor(() => {
+            const updatedRun = svc.getRun(run.id)!
+            expect(updatedRun.status).toBe('completed')
+        }, { timeout: 10000 })
+
+        // Auto reviewer wrote a rejected review
+        let reviews = svc.listReviews(session.id)
+        let taskReviews = reviews.filter(r => r.taskId === task.id)
+        expect(taskReviews).toHaveLength(1)
+        expect(taskReviews[0].status).toBe('rejected')
+        expect(taskReviews[0].reviewerAgentId).toBe('auto-reviewer')
+
+        // Task is in revision_required — do retry + submit for review again
+        svc.retryTask(session.id, task.id)
+        // Move to submitted_for_review
+        svc.updateTaskStatusInSession(session.id, task.id, 'submitted_for_review')
+
+        // Manual submitReview (human reviewer)
+        svc.submitReview(session.id, task.id, 'human-reviewer', 'passed', 'LGTM')
+
+        reviews = svc.listReviews(session.id)
+        taskReviews = reviews.filter(r => r.taskId === task.id)
+        expect(taskReviews).toHaveLength(2)
+
+        // First review is auto reviewer (rejected)
+        expect(taskReviews[0].reviewerAgentId).toBe('auto-reviewer')
+        expect(taskReviews[0].status).toBe('rejected')
+        expect(taskReviews[0].metadata).toBeDefined()
+        expect(taskReviews[0].metadata!.source).toBe('orchestrated-reviewer')
+
+        // Second review is human reviewer (passed)
+        expect(taskReviews[1].reviewerAgentId).toBe('human-reviewer')
+        expect(taskReviews[1].status).toBe('passed')
+
+        resetActiveRunnerForTest()
     })
 })

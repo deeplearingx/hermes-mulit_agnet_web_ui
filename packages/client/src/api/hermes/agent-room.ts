@@ -55,6 +55,8 @@ export interface AgentRoomReview {
     reviewerProfileName?: string
     reviewDecision?: 'approved' | 'revision_required' | 'need_user_decision'
     reviewFeedback?: string
+    /** P5.3: Additional review metadata from backend. */
+    metadata?: Record<string, unknown>
     createdAt: string
 }
 
@@ -163,6 +165,8 @@ export interface AgentRoomRunEvent {
     sessionId: string
     taskId: string
     upstreamRunId?: string
+    /** P5.6: Associated role run ID for filtering events by role. */
+    roleRunId?: string
     source: string
     sequence: number
     eventType: string
@@ -191,6 +195,8 @@ export interface AgentRoomArtifact {
     name: string
     type: AgentRoomArtifactType
     content?: string
+    /** P5.6: External storage URL for artifact download/link. */
+    storageUrl?: string
     metadata?: Record<string, unknown>
     createdAt: string
 }
