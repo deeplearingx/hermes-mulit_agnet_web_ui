@@ -1617,4 +1617,150 @@ describe('Agent Room Service', () => {
       expect(autoArtifact.content).toContain('自动')
     })
   })
+
+  describe('P7.1: Delivery Role Run', () => {
+    it('manual deliverTask creates delivery role_run attached to latest workflow run', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+
+      const session = svc.createSession('P7.1 Test')
+      const task = svc.createTask(session.id, 'Delivery Role Run', '')
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+
+      svc.deliverTask(session.id, task.id, 'manual')
+
+      // Verify task completed
+      const updatedTask = svc.getTask(task.id)!
+      expect(updatedTask.status).toBe('completed')
+
+      // Verify delivery role_run exists
+      const roleRuns = store.listRoleRunsByTask(task.id)
+      const deliveryRun = roleRuns.find(r => r.role === 'delivery')
+      expect(deliveryRun).toBeDefined()
+      expect(deliveryRun!.status).toBe('completed')
+      expect(deliveryRun!.phase).toBe('delivery')
+      expect(deliveryRun!.profileName).toBe('manual')
+      expect(deliveryRun!.metadata!.source).toBe('manual-delivery-runtime')
+      expect(deliveryRun!.metadata!.deliveryMode).toBe('manual')
+
+      // Verify delivery role_run is attached to the latest workflow run
+      const latestRun = store.listRunsByTask(task.id)[0]
+      expect(latestRun).toBeDefined()
+      expect(deliveryRun!.runId).toBe(latestRun.id)
+    })
+
+    it('final_delivery artifact metadata includes deliveryRoleRunId and deliveryRunId', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+
+      const session = svc.createSession('P7.1 Link Test')
+      const task = svc.createTask(session.id, 'Artifact Link', '')
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+
+      svc.deliverTask(session.id, task.id, 'manual')
+
+      // Verify artifact metadata
+      const artifacts = svc.listTaskArtifacts(session.id, task.id)
+      expect(artifacts).toHaveLength(1)
+      expect(artifacts[0].type).toBe('final_delivery')
+      expect(artifacts[0].metadata).toBeDefined()
+
+      // Verify delivery role_run linkage in artifact
+      const deliveryRoleRun = store.listRoleRunsByTask(task.id).find(r => r.role === 'delivery')
+      expect(deliveryRoleRun).toBeDefined()
+      expect(artifacts[0].metadata!.deliveryRoleRunId).toBe(deliveryRoleRun!.id)
+      expect(artifacts[0].metadata!.deliveryRunId).toBe(deliveryRoleRun!.runId)
+    })
+
+    it('delivery_started and delivery_completed events contain deliveryRoleRunId in payload', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+
+      const session = svc.createSession('P7.1 Event Test')
+      const task = svc.createTask(session.id, 'Event Payload', '')
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+
+      svc.deliverTask(session.id, task.id, 'manual')
+
+      const deliveryRoleRun = store.listRoleRunsByTask(task.id).find(r => r.role === 'delivery')
+      expect(deliveryRoleRun).toBeDefined()
+
+      const events = svc.listWorkflowEvents(session.id)
+      const deliveryStarted = events.find(e => e.type === 'delivery_started')
+      const deliveryCompleted = events.find(e => e.type === 'delivery_completed')
+
+      expect(deliveryStarted).toBeDefined()
+      expect(deliveryCompleted).toBeDefined()
+
+      // Both events should have deliveryRoleRunId in payload
+      expect(deliveryStarted!.payload).toBeDefined()
+      expect(deliveryStarted!.payload!.deliveryRoleRunId).toBe(deliveryRoleRun!.id)
+      expect(deliveryCompleted!.payload).toBeDefined()
+      expect(deliveryCompleted!.payload!.deliveryRoleRunId).toBe(deliveryRoleRun!.id)
+    })
+
+    it('delivery role_run is NOT created when no workflow run exists (legacy/manual status changes)', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+
+      const session = svc.createSession('P7.1 NoRun')
+      const task = svc.createTask(session.id, 'No Run', '')
+      // Reach review_passed via normal workflow path
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+
+      // Delete all runs to simulate no-workflow-run scenario
+      const runs = store.listRunsByTask(task.id)
+      for (const run of runs) {
+        store.deleteRoleRunsByRun(run.id)
+      }
+      store.deleteRunsByTask(task.id)
+
+      svc.deliverTask(session.id, task.id, 'manual')
+
+      // Verify delivery completed despite no run
+      const updatedTask = svc.getTask(task.id)!
+      expect(updatedTask.status).toBe('completed')
+
+      // No delivery role_run should exist (no workflow run to attach to)
+      const deliveryRun = store.listRoleRunsByTask(task.id).find(r => r.role === 'delivery')
+      expect(deliveryRun).toBeUndefined()
+
+      // Artifact should still exist but without role run linkage
+      const artifacts = svc.listTaskArtifacts(session.id, task.id)
+      expect(artifacts).toHaveLength(1)
+      expect(artifacts[0].metadata!.deliveryRoleRunId).toBeUndefined()
+      expect(artifacts[0].metadata!.deliveryRunId).toBeUndefined()
+    })
+
+    it('auto delivery also creates delivery role_run with auto metadata', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+
+      const session = svc.createSession('P7.1 Auto')
+      svc.updateSessionConfig(session.id, { autoDeliveryEnabled: true })
+      const task = svc.createTask(session.id, 'Auto Role Run', '')
+      await svc.runWorkflow(session.id, task.id)
+      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+
+      // Auto-delivery should have triggered
+      const updatedTask = svc.getTask(task.id)!
+      expect(updatedTask.status).toBe('completed')
+
+      // Verify auto delivery role_run
+      const autoDeliveryRun = store.listRoleRunsByTask(task.id).find(r => r.role === 'delivery')
+      expect(autoDeliveryRun).toBeDefined()
+      expect(autoDeliveryRun!.status).toBe('completed')
+      expect(autoDeliveryRun!.profileName).toBe('auto')
+      expect(autoDeliveryRun!.metadata!.source).toBe('auto-delivery-runtime')
+      expect(autoDeliveryRun!.metadata!.deliveryMode).toBe('auto')
+
+      // Verify artifact linkage
+      const artifacts = svc.listTaskArtifacts(session.id, task.id)
+      expect(artifacts[0].metadata!.deliveryRoleRunId).toBe(autoDeliveryRun!.id)
+    })
+  })
 })

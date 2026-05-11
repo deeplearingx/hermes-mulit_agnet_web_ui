@@ -127,6 +127,22 @@ export interface AgentRoomRunnerStep {
 }
 
 /**
+ * P6.3: Reviewer decision data carried by runner result.
+ * Defined here to avoid circular imports with runtime types.
+ * Structurally identical to HermesAgentRuntimeReviewDecision.
+ */
+export interface AgentRoomRunnerReviewDecision {
+    sessionId: string
+    taskId: string
+    reviewerProfileName: string
+    reviewDecision: 'approved' | 'revision_required' | 'need_user_decision'
+    reviewFeedback: string
+    reviewerRunId?: string
+    reviewIssues?: string[]
+    reviewConfidence?: number
+}
+
+/**
  * Structured result returned by a runner.
  * Supports two modes:
  *
@@ -139,6 +155,9 @@ export interface AgentRoomRunnerStep {
  *
  * `artifacts` are always created after all steps/status transitions complete.
  * Runners that use ctx helpers directly (MockAgentRoomRunner) may return void.
+ *
+ * P6.3: `reviewerDecision` carries auto-reviewer data for transactional
+ * review creation inside applyRunnerResult().
  */
 export interface AgentRoomRunnerResult {
     /**
@@ -150,6 +169,9 @@ export interface AgentRoomRunnerResult {
 
     /** Artifacts to create for this task (applied after all steps). */
     artifacts?: AgentRoomRunnerArtifact[]
+
+    /** P6.3: Auto reviewer decision data for transactional review creation. */
+    reviewerDecision?: AgentRoomRunnerReviewDecision
 
     // ── Legacy flat fields (deprecated for new runners) ──────────
 

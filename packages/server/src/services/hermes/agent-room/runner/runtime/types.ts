@@ -180,8 +180,25 @@ export interface HermesAgentRuntimeArtifact {
 }
 
 /**
+ * P6.3: Reviewer decision data carried by runtime output.
+ * Moved from onReviewerDecision hook → runtime output so the runner result
+ * can carry it through to applyRunnerResult() transaction.
+ */
+export interface HermesAgentRuntimeReviewDecision {
+    sessionId: string
+    taskId: string
+    reviewerProfileName: string
+    reviewDecision: ReviewerDecision
+    reviewFeedback: string
+    reviewerRunId?: string
+    reviewIssues?: string[]
+    reviewConfidence?: number
+}
+
+/**
  * Output from the Hermes agent runtime.
  * Contains ordered steps that the runner translates to AgentRoomRunnerResult.
+ * P6.3: reviewerDecision carries auto-reviewer data for transactional write.
  */
 export interface HermesAgentRuntimeOutput {
     /** Ordered steps to execute. */
@@ -189,6 +206,9 @@ export interface HermesAgentRuntimeOutput {
 
     /** Optional artifacts produced by the runtime. */
     artifacts?: HermesAgentRuntimeArtifact[]
+
+    /** P6.3: Auto reviewer decision data for transactional review creation. */
+    reviewerDecision?: HermesAgentRuntimeReviewDecision
 }
 
 /**

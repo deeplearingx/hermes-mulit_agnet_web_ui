@@ -235,9 +235,13 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
                                 class="rr-status"
                                 :style="{ color: getRoleRunStatusConfig(rr.status).color }"
                             >{{ getRoleRunStatusConfig(rr.status).icon }} {{ getRoleRunStatusConfig(rr.status).label }}</span>
-                            <!-- Reviewer decision highlight -->
-                            <span v-if="rr.role === 'reviewer' && getReviewsForTask(run.taskId).length > 0" class="rr-decision">
-                                {{ getReviewsForTask(run.taskId)[0].status === 'passed' ? '✅ Approved' : '❌ Rejected' }}
+                            <!-- Reviewer decision highlight: prefer reviewDecision, fall back to status -->
+                            <span
+                                v-if="rr.role === 'reviewer' && getReviewsForTask(run.taskId).length > 0"
+                                class="rr-decision"
+                                :title="`decision: ${getReviewsForTask(run.taskId)[0].reviewDecision ?? getReviewsForTask(run.taskId)[0].status}`"
+                            >
+                                {{ (getReviewsForTask(run.taskId)[0].reviewDecision === 'approved' || getReviewsForTask(run.taskId)[0].status === 'passed') ? '✅ Approved' : '❌ Rejected' }}
                             </span>
                             <span class="rr-upstream" v-if="rr.upstreamRunId" :title="rr.upstreamRunId">↑{{ rr.upstreamRunId.slice(0, 8) }}</span>
                             <span class="rr-duration">{{ formatDuration(rr.startedAt, rr.finishedAt) }}</span>

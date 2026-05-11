@@ -1951,6 +1951,52 @@ describe('P5.3: Auto reviewer writes to agent_room_reviews', () => {
         resetActiveRunnerForTest()
     })
 
+    it('auto reviewer top-level flattened fields are readable (P6.2)', async () => {
+        const { svc, session, task, resetActiveRunnerForTest } = await setupWithReviewerJson(REVISION_REQUIRED_REVIEWER_JSON)
+
+        const reviews = svc.listReviews(session.id)
+        const taskReviews = reviews.filter(r => r.taskId === task.id)
+        const review = taskReviews[0]
+
+        // Top-level flattened fields
+        expect(review.reviewerRunId).toBe('run-p53-r')
+        expect(review.reviewerProfileName).toBe('reviewer-profile')
+        expect(review.reviewDecision).toBe('revision_required')
+        expect(review.reviewFeedback).toBe('Implementation needs changes')
+
+        // Metadata still preserved
+        expect(review.metadata).toBeDefined()
+        expect(review.metadata!.reviewerRunId).toBe('run-p53-r')
+        expect(review.metadata!.reviewDecision).toBe('revision_required')
+
+        resetActiveRunnerForTest()
+    })
+
+    it('auto reviewer approved → top-level reviewDecision is "approved"', async () => {
+        const { svc, session, task, resetActiveRunnerForTest } = await setupWithReviewerJson(APPROVED_REVIEWER_JSON)
+
+        const reviews = svc.listReviews(session.id)
+        const taskReviews = reviews.filter(r => r.taskId === task.id)
+
+        expect(taskReviews[0].reviewDecision).toBe('approved')
+        expect(taskReviews[0].reviewerRunId).toBe('run-p53-r')
+        expect(taskReviews[0].reviewFeedback).toBe('Implementation meets requirements')
+
+        resetActiveRunnerForTest()
+    })
+
+    it('auto reviewer need_user_decision → top-level reviewDecision is "need_user_decision"', async () => {
+        const { svc, session, task, resetActiveRunnerForTest } = await setupWithReviewerJson(NEED_USER_DECISION_REVIEWER_JSON)
+
+        const reviews = svc.listReviews(session.id)
+        const taskReviews = reviews.filter(r => r.taskId === task.id)
+
+        expect(taskReviews[0].reviewDecision).toBe('need_user_decision')
+        expect(taskReviews[0].reviewerRunId).toBe('run-p53-r')
+
+        resetActiveRunnerForTest()
+    })
+
     it('retry path reads auto reviewer rejected feedback from reviews table', async () => {
         const { svc, session, task, resetActiveRunnerForTest } = await setupWithReviewerJson(REVISION_REQUIRED_REVIEWER_JSON)
 

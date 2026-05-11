@@ -16,6 +16,7 @@ export type {
     HermesAgentRuntimeMessage,
     HermesAgentRuntimeArtifact,
     HermesAgentRuntimeMetadata,
+    HermesAgentRuntimeReviewDecision,
     ReviewerDecision,
     ReviewerOutput,
 } from './types'

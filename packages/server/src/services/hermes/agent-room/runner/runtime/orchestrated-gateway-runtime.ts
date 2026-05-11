@@ -415,8 +415,7 @@ function createRoleTaggedHooks(
                 baseHooks.onRawEvent!({ ...event, _agentRole: role })
             }
             : undefined,
-        // P5.3: Forward onReviewerDecision to base hooks (service layer implementation)
-        onReviewerDecision: baseHooks.onReviewerDecision,
+        // P6.3: onReviewerDecision no longer forwarded — reviewerDecision is returned in output
     }
 }
 
@@ -589,19 +588,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
         const reviewDecision = reviewerParsed.decision
         const reviewFeedback = reviewerParsed.feedback
 
-        // P5.3: Notify service layer to write review record to agent_room_reviews
-        try {
-            input.hooks?.onReviewerDecision?.({
-                sessionId: input.sessionId,
-                taskId: input.taskId,
-                reviewerProfileName,
-                reviewDecision,
-                reviewFeedback,
-                reviewerRunId: reviewerResult.runId,
-                reviewIssues: reviewerParsed.issues,
-                reviewConfidence: reviewerParsed.confidence,
-            })
-        } catch { /* swallow — non-critical observability hook */ }
+        // P6.3: reviewerDecision is returned in the output instead of hook call.
+        // applyRunnerResult() will write the review record in the same transaction.
 
         // Step 11: Build dual-run metadata
         const plannerMetadata: HermesAgentRuntimeMetadata = {
@@ -838,6 +826,17 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                     },
                 },
             ],
+            // P6.3: Carry reviewer decision data for transactional review creation
+            reviewerDecision: {
+                sessionId: input.sessionId,
+                taskId: input.taskId,
+                reviewerProfileName,
+                reviewDecision,
+                reviewFeedback,
+                reviewerRunId: reviewerResult.runId,
+                reviewIssues: reviewerParsed.issues,
+                reviewConfidence: reviewerParsed.confidence,
+            },
         }
     }
 
@@ -913,19 +912,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
         const reviewDecision = reviewerParsed.decision
         const reviewFeedback = reviewerParsed.feedback
 
-        // P5.3: Notify service layer to write review record to agent_room_reviews
-        try {
-            input.hooks?.onReviewerDecision?.({
-                sessionId: input.sessionId,
-                taskId: input.taskId,
-                reviewerProfileName,
-                reviewDecision,
-                reviewFeedback,
-                reviewerRunId: reviewerResult.runId,
-                reviewIssues: reviewerParsed.issues,
-                reviewConfidence: reviewerParsed.confidence,
-            })
-        } catch { /* swallow — non-critical observability hook */ }
+        // P6.3: reviewerDecision is returned in the output instead of hook call.
+        // applyRunnerResult() will write the review record in the same transaction.
 
         const developerMetadata: HermesAgentRuntimeMetadata = {
             developerRunId: developerResult.runId,
@@ -1111,6 +1099,17 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                     },
                 },
             ],
+            // P6.3: Carry reviewer decision data for transactional review creation
+            reviewerDecision: {
+                sessionId: input.sessionId,
+                taskId: input.taskId,
+                reviewerProfileName,
+                reviewDecision,
+                reviewFeedback,
+                reviewerRunId: reviewerResult.runId,
+                reviewIssues: reviewerParsed.issues,
+                reviewConfidence: reviewerParsed.confidence,
+            },
         }
     }
 }

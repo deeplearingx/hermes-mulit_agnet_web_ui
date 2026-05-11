@@ -91,6 +91,15 @@ function formatTime(iso: string): string {
                 <div class="artifact-row" @click="toggleArtifact(artifact.id)">
                     <span class="artifact-icon">{{ artifactTypeIcon(artifact.type) }}</span>
                     <span class="artifact-name">{{ artifact.name }}</span>
+                    <a
+                        v-if="artifact.storageUrl"
+                        :href="artifact.storageUrl"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="artifact-link"
+                        title="Download artifact"
+                        @click.stop
+                    >⬇</a>
                     <span class="artifact-task">{{ getTaskTitle(artifact.taskId) }}</span>
                     <span class="artifact-type">{{ artifact.type }}</span>
                     <span class="artifact-time">{{ formatTime(artifact.createdAt) }}</span>
@@ -222,6 +231,18 @@ function formatTime(iso: string): string {
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
+}
+
+.artifact-link {
+    flex-shrink: 0;
+    color: #3b82f6;
+    font-size: 11px;
+    text-decoration: none;
+    cursor: pointer;
+
+    &:hover {
+        color: #60a5fa;
+    }
 }
 
 .artifact-task {

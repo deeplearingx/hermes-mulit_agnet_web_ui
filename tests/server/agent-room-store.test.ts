@@ -124,6 +124,103 @@ describe('Agent Room Store', () => {
     expect(store.listReviewsBySession('s1')).toHaveLength(1)
   })
 
+  it('mapReviewRow flattens metadata fields to top-level (P6.2)', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({
+      id: 't1', sessionId: 's1', title: 'Task', description: '',
+      status: 'submitted_for_review', revisionRound: 0, maxRevisionRounds: 3,
+      createdAt: now, updatedAt: now,
+    })
+
+    store.createReview({
+      id: 'r1', sessionId: 's1', taskId: 't1', reviewerAgentId: 'reviewer-profile',
+      status: 'rejected', comment: 'Needs changes',
+      metadata: {
+        source: 'orchestrated-reviewer',
+        reviewerRunId: 'run-abc-001',
+        reviewerProfileName: 'reviewer-profile',
+        reviewDecision: 'revision_required',
+        reviewFeedback: 'Needs changes',
+        reviewIssues: ['Missing tests'],
+        reviewConfidence: 0.8,
+      },
+      createdAt: now,
+    })
+
+    // listReviewsByTask returns flattened top-level fields
+    const taskReviews = store.listReviewsByTask('t1')
+    expect(taskReviews).toHaveLength(1)
+    const review = taskReviews[0]
+    expect(review.reviewerRunId).toBe('run-abc-001')
+    expect(review.reviewerProfileName).toBe('reviewer-profile')
+    expect(review.reviewDecision).toBe('revision_required')
+    expect(review.reviewFeedback).toBe('Needs changes')
+    // metadata still preserved
+    expect(review.metadata).toBeDefined()
+    expect(review.metadata!.source).toBe('orchestrated-reviewer')
+    expect(review.metadata!.reviewerRunId).toBe('run-abc-001')
+
+    // listReviewsBySession also returns flattened fields
+    const sessionReviews = store.listReviewsBySession('s1')
+    expect(sessionReviews[0].reviewerRunId).toBe('run-abc-001')
+    expect(sessionReviews[0].reviewDecision).toBe('revision_required')
+  })
+
+  it('mapReviewRow handles missing metadata gracefully (P6.2)', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({
+      id: 't1', sessionId: 's1', title: 'Task', description: '',
+      status: 'submitted_for_review', revisionRound: 0, maxRevisionRounds: 3,
+      createdAt: now, updatedAt: now,
+    })
+
+    store.createReview({
+      id: 'r2', sessionId: 's1', taskId: 't1', reviewerAgentId: 'human',
+      status: 'passed', comment: 'LGTM', createdAt: now,
+    })
+
+    const review = store.listReviewsByTask('t1')[0]
+    expect(review.reviewerRunId).toBeUndefined()
+    expect(review.reviewerProfileName).toBeUndefined()
+    expect(review.reviewDecision).toBeUndefined()
+    expect(review.reviewFeedback).toBeUndefined()
+    expect(review.metadata).toBeUndefined()
+  })
+
+  it('mapReviewRow validates reviewDecision values (P6.2)', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({
+      id: 't1', sessionId: 's1', title: 'Task', description: '',
+      status: 'submitted_for_review', revisionRound: 0, maxRevisionRounds: 3,
+      createdAt: now, updatedAt: now,
+    })
+
+    // Invalid reviewDecision should be filtered to undefined
+    store.createReview({
+      id: 'r3', sessionId: 's1', taskId: 't1', reviewerAgentId: 'reviewer',
+      status: 'rejected', comment: 'bad',
+      metadata: {
+        reviewDecision: 'invalid_value',
+        reviewerRunId: 12345,  // non-string, should be filtered
+        reviewerProfileName: 'valid-profile',
+        reviewFeedback: 42,    // non-string, should be filtered
+      },
+      createdAt: now,
+    })
+
+    const review = store.listReviewsByTask('t1')[0]
+    expect(review.reviewDecision).toBeUndefined()   // invalid value rejected
+    expect(review.reviewerRunId).toBeUndefined()     // non-string rejected
+    expect(review.reviewerProfileName).toBe('valid-profile')  // string accepted
+    expect(review.reviewFeedback).toBeUndefined()    // non-string rejected
+  })
+
   it('createMessage / listMessagesBySession with metadata JSON decode', async () => {
     const store = await import('../../packages/server/src/db/hermes/agent-room-store')
     const now = new Date().toISOString()
@@ -283,6 +380,81 @@ describe('Agent Room Store', () => {
 
     store.deleteSessionCascade('s1')
     expect(store.getArtifact('a1')).toBeNull()
+  })
+
+  // ─── Artifact storageUrl flatten (P6.4) ─────────────────────────
+
+  it('mapArtifactRow flattens metadata.storageUrl to top-level (P6.4)', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+
+    store.createArtifact({
+      id: 'a1', sessionId: 's1', taskId: 't1', name: 'Deliverable', type: 'final_delivery',
+      metadata: { storageUrl: 'https://example.com/a.zip', format: 'zip', size: 1024 },
+      createdAt: now,
+    })
+
+    // getArtifact returns flattened storageUrl
+    const artifact = store.getArtifact('a1')!
+    expect(artifact.storageUrl).toBe('https://example.com/a.zip')
+    // metadata still preserved
+    expect(artifact.metadata).toBeDefined()
+    expect(artifact.metadata!.storageUrl).toBe('https://example.com/a.zip')
+    expect(artifact.metadata!.format).toBe('zip')
+
+    // listArtifactsBySession also returns flattened storageUrl
+    const sessionArtifacts = store.listArtifactsBySession('s1')
+    expect(sessionArtifacts[0].storageUrl).toBe('https://example.com/a.zip')
+
+    // listArtifactsByTask also returns flattened storageUrl
+    const taskArtifacts = store.listArtifactsByTask('t1')
+    expect(taskArtifacts[0].storageUrl).toBe('https://example.com/a.zip')
+  })
+
+  it('mapArtifactRow handles missing metadata.storageUrl gracefully (P6.4)', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+
+    store.createArtifact({ id: 'a1', sessionId: 's1', taskId: 't1', name: 'X', type: 'log', createdAt: now })
+
+    const artifact = store.getArtifact('a1')!
+    expect(artifact.storageUrl).toBeUndefined()
+    expect(artifact.metadata).toBeUndefined()
+  })
+
+  it('mapArtifactRow does not map non-string metadata.storageUrl (P6.4)', async () => {
+    const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    const now = new Date().toISOString()
+    store.createSession({ id: 's1', name: 'Test', createdAt: now, updatedAt: now })
+    store.createTask({ id: 't1', sessionId: 's1', title: 'Task', description: '', status: 'created', assignedAgentId: undefined, revisionRound: 0, maxRevisionRounds: 3, createdAt: now, updatedAt: now })
+
+    // numeric storageUrl should not be flattened
+    store.createArtifact({
+      id: 'a1', sessionId: 's1', taskId: 't1', name: 'X', type: 'code_output',
+      metadata: { storageUrl: 12345 },
+      createdAt: now,
+    })
+    expect(store.getArtifact('a1')!.storageUrl).toBeUndefined()
+
+    // boolean storageUrl should not be flattened
+    store.createArtifact({
+      id: 'a2', sessionId: 's1', taskId: 't1', name: 'Y', type: 'code_output',
+      metadata: { storageUrl: true },
+      createdAt: now,
+    })
+    expect(store.getArtifact('a2')!.storageUrl).toBeUndefined()
+
+    // object storageUrl should not be flattened
+    store.createArtifact({
+      id: 'a3', sessionId: 's1', taskId: 't1', name: 'Z', type: 'code_output',
+      metadata: { storageUrl: { url: 'https://example.com' } },
+      createdAt: now,
+    })
+    expect(store.getArtifact('a3')!.storageUrl).toBeUndefined()
   })
 
   // ─── Role Run CRUD (P3.2) ──────────────────────────────────────

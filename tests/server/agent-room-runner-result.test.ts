@@ -388,6 +388,136 @@ describe('Agent Room RunnerResult Protocol', () => {
         resetActiveRunnerForTest()
     })
 
+    // ── P6.3: ReviewerDecision rollback tests ───────────────────
+
+    it('P6.3: illegal step with reviewerDecision and artifact rolls back all including reviews', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const session = svc.createSession('P6.3 Rollback Test')
+        const task = svc.createTask(session.id, 'P6.3 Task', '')
+
+        // Fake runner: step 1 valid (created→planned), step 2 invalid (planned→submitted_for_review without intermediate steps)
+        // Includes reviewerDecision and artifacts to verify full rollback
+        setActiveRunnerForTest({
+            name: 'real',
+            run: async () => ({
+                steps: [
+                    {
+                        status: 'planned' as const,
+                        events: [{ type: 'task_planned' as const, agentRole: 'planner' as const }],
+                        messages: [{ senderRole: 'planner', content: 'should rollback message' }],
+                    },
+                    {
+                        status: 'submitted_for_review' as const,
+                        events: [{ type: 'task_submitted' as const, agentRole: 'developer' as const }],
+                    },
+                ],
+                artifacts: [
+                    { name: 'Should Not Exist', type: 'log' as const, content: 'rollback artifact' },
+                ],
+                reviewerDecision: {
+                    sessionId: session.id,
+                    taskId: task.id,
+                    reviewerProfileName: 'gpt-4o',
+                    reviewDecision: 'approved' as const,
+                    reviewFeedback: 'LGTM',
+                    reviewerRunId: 'run-rollback-001',
+                    reviewIssues: [],
+                    reviewConfidence: 0.95,
+                },
+            }),
+        })
+
+        await expect(svc.runWorkflow(session.id, task.id)).rejects.toThrow(/Invalid step transition/)
+
+        // Verify rollback: task should remain at 'created' (no partial state)
+        const updatedTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(updatedTask.status).toBe('created')
+
+        // Verify rollback: only the initial task_created event from createTask() should exist
+        const events = svc.listWorkflowEvents(session.id)
+        const taskEvents = events.filter(e => e.taskId === task.id)
+        expect(taskEvents.length).toBe(1)
+        expect(taskEvents[0].type).toBe('task_created')
+
+        // Verify rollback: no step messages persisted
+        const messages = svc.listMessages(session.id)
+        expect(messages.some(m => m.content.includes('should rollback message'))).toBe(false)
+
+        // Verify rollback: no artifacts persisted
+        const artifacts = svc.listTaskArtifacts(session.id, task.id)
+        expect(artifacts).toHaveLength(0)
+
+        // P6.3: Verify rollback: no reviews persisted (reviewerDecision should NOT be written)
+        const reviews = svc.listReviews(session.id)
+        const taskReviews = reviews.filter(r => r.taskId === task.id)
+        expect(taskReviews).toHaveLength(0)
+
+        resetActiveRunnerForTest()
+    })
+
+    it('P6.3: valid steps with reviewerDecision creates review in same transaction', async () => {
+        const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+        const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
+            '../../packages/server/src/services/hermes/agent-room/runner'
+        )
+
+        const session = svc.createSession('P6.3 Success Test')
+        const task = svc.createTask(session.id, 'P6.3 Task', '')
+
+        // Fake runner: valid steps + reviewerDecision — all should be persisted atomically
+        setActiveRunnerForTest({
+            name: 'real',
+            run: async () => ({
+                steps: [
+                    { status: 'planned' as const, events: [{ type: 'task_planned' as const, agentRole: 'planner' as const }] },
+                    { status: 'assigned' as const, events: [{ type: 'task_assigned' as const, agentRole: 'developer' as const }] },
+                    { status: 'in_progress' as const, events: [{ type: 'task_started' as const, agentRole: 'developer' as const }] },
+                    { status: 'submitted_for_review' as const, events: [{ type: 'task_submitted' as const, agentRole: 'developer' as const }] },
+                    { status: 'review_passed' as const, events: [{ type: 'review_passed' as const, agentRole: 'reviewer' as const }] },
+                ],
+                artifacts: [
+                    { name: 'Output.md', type: 'code_output' as const, content: 'done' },
+                ],
+                reviewerDecision: {
+                    sessionId: session.id,
+                    taskId: task.id,
+                    reviewerProfileName: 'auto-reviewer',
+                    reviewDecision: 'approved' as const,
+                    reviewFeedback: 'Implementation meets requirements',
+                    reviewerRunId: 'run-p63-001',
+                    reviewIssues: [],
+                    reviewConfidence: 0.95,
+                },
+            }),
+        })
+
+        await svc.runWorkflow(session.id, task.id)
+
+        // Verify task reached review_passed
+        const updatedTask = svc.listTasks(session.id).find(t => t.id === task.id)!
+        expect(updatedTask.status).toBe('review_passed')
+
+        // Verify review was created with correct status and metadata
+        const reviews = svc.listReviews(session.id)
+        const taskReviews = reviews.filter(r => r.taskId === task.id)
+        expect(taskReviews).toHaveLength(1)
+        expect(taskReviews[0].status).toBe('passed')
+        expect(taskReviews[0].reviewerAgentId).toBe('auto-reviewer')
+        expect(taskReviews[0].comment).toBe('Implementation meets requirements')
+        expect(taskReviews[0].metadata!.source).toBe('orchestrated-reviewer')
+        expect(taskReviews[0].metadata!.reviewDecision).toBe('approved')
+
+        // Verify artifacts also persisted
+        const artifacts = svc.listTaskArtifacts(session.id, task.id)
+        expect(artifacts).toHaveLength(1)
+
+        resetActiveRunnerForTest()
+    })
+
     it('RealAgentRunner adapter returns deterministic ordered steps', async () => {
         const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
         const { RealAgentRunner, DeterministicHermesRuntime, setActiveRunnerForTest, resetActiveRunnerForTest } = await import(

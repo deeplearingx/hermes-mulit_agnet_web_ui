@@ -57,6 +57,11 @@ export interface AgentRoomReview {
     status: 'passed' | 'rejected'
     comment: string
     metadata?: Record<string, unknown>
+    /** Flattened from metadata — top-level convenience fields for DTO consumers. */
+    reviewerRunId?: string
+    reviewerProfileName?: string
+    reviewDecision?: 'approved' | 'revision_required' | 'need_user_decision'
+    reviewFeedback?: string
     createdAt: string
 }
 
@@ -90,6 +95,8 @@ export interface AgentRoomArtifact {
     name: string
     type: string
     content?: string
+    /** P6.4: Flattened from metadata — top-level convenience field for DTO consumers. */
+    storageUrl?: string
     metadata?: Record<string, unknown>
     createdAt: string
 }
@@ -153,6 +160,19 @@ function decodeJson<T>(value: unknown): T | undefined {
     try { return JSON.parse(String(value)) as T } catch { return undefined }
 }
 
+// ─── Metadata Flatten Helpers ──────────────────────────────────
+// Type-safe extraction of well-known fields from review metadata.
+
+function asString(value: unknown): string | undefined {
+    return typeof value === 'string' ? value : undefined
+}
+
+function asReviewDecision(value: unknown): AgentRoomReview['reviewDecision'] {
+    return value === 'approved' || value === 'revision_required' || value === 'need_user_decision'
+        ? value
+        : undefined
+}
+
 // ─── DB Accessor ───────────────────────────────────────────────
 
 function requireDb() {
@@ -190,6 +210,7 @@ function mapTaskRow(row: Record<string, unknown>): AgentRoomTask {
 }
 
 function mapReviewRow(row: Record<string, unknown>): AgentRoomReview {
+    const metadata = decodeJson<Record<string, unknown>>(row.metadata)
     return {
         id: String(row.id),
         sessionId: String(row.session_id),
@@ -197,7 +218,11 @@ function mapReviewRow(row: Record<string, unknown>): AgentRoomReview {
         reviewerAgentId: String(row.reviewer_agent_id),
         status: String(row.status) as 'passed' | 'rejected',
         comment: String(row.comment ?? ''),
-        metadata: decodeJson<Record<string, unknown>>(row.metadata),
+        metadata,
+        reviewerRunId: metadata ? asString(metadata.reviewerRunId) : undefined,
+        reviewerProfileName: metadata ? asString(metadata.reviewerProfileName) : undefined,
+        reviewDecision: metadata ? asReviewDecision(metadata.reviewDecision) : undefined,
+        reviewFeedback: metadata ? asString(metadata.reviewFeedback) : undefined,
         createdAt: String(row.created_at),
     }
 }
@@ -230,6 +255,8 @@ function mapEventRow(row: Record<string, unknown>): AgentRoomWorkflowEvent {
 }
 
 function mapArtifactRow(row: Record<string, unknown>): AgentRoomArtifact {
+    const metadata = decodeJson<Record<string, unknown>>(row.metadata)
+    const storageUrl = typeof metadata?.storageUrl === 'string' ? metadata.storageUrl : undefined
     return {
         id: String(row.id),
         sessionId: String(row.session_id),
@@ -237,7 +264,8 @@ function mapArtifactRow(row: Record<string, unknown>): AgentRoomArtifact {
         name: String(row.name),
         type: String(row.type),
         content: row.content != null ? String(row.content) : undefined,
-        metadata: decodeJson<Record<string, unknown>>(row.metadata),
+        storageUrl,
+        metadata,
         createdAt: String(row.created_at),
     }
 }
@@ -589,7 +617,7 @@ export function recoverStaleRuns(): number {
     const result = db.prepare(
         `UPDATE ${AR_RUNS_TABLE} SET status = 'failed', error_message = 'Server restarted — stale run recovered', finished_at = ?, updated_at = ? WHERE status IN ('queued', 'running')`
     ).run(now, now)
-    return result.changes
+    return Number(result.changes)
 }
 
 /**
@@ -601,7 +629,7 @@ export function recoverStaleRoleRuns(): number {
     const result = db.prepare(
         `UPDATE ${AR_ROLE_RUNS_TABLE} SET status = 'failed', error_message = 'Server restarted — stale role run recovered', finished_at = ?, updated_at = ? WHERE status IN ('queued', 'running')`
     ).run(now, now)
-    return result.changes
+    return Number(result.changes)
 }
 
 // ─── Role Run CRUD (P3.2) ──────────────────────────────────────

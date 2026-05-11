@@ -82,6 +82,11 @@ export interface AgentRoomReview {
     status: 'passed' | 'rejected'
     comment: string
     metadata?: Record<string, unknown>
+    /** Flattened from metadata — top-level convenience fields for DTO consumers. */
+    reviewerRunId?: string
+    reviewerProfileName?: string
+    reviewDecision?: 'approved' | 'revision_required' | 'need_user_decision'
+    reviewFeedback?: string
     createdAt: string
 }
 
@@ -123,6 +128,8 @@ export interface AgentRoomArtifact {
     name: string
     type: AgentRoomArtifactType
     content?: string
+    /** P6.4: Flattened from metadata — top-level convenience field for DTO consumers. */
+    storageUrl?: string
     metadata?: Record<string, unknown>
     createdAt: string
 }
@@ -632,6 +639,37 @@ function applyRunnerResult(
             store.createArtifact(artifact as store.AgentRoomArtifact)
         }
 
+        // P6.3: Create auto-reviewer review record in the same transaction.
+        // Previously written via onReviewerDecision hook outside the transaction.
+        // Now the runner result carries reviewerDecision and we write it here.
+        if (result.reviewerDecision) {
+            const decision = result.reviewerDecision
+            const reviewStatus: 'passed' | 'rejected' =
+                decision.reviewDecision === 'approved' ? 'passed' : 'rejected'
+
+            const reviewMetadata: Record<string, unknown> = {
+                source: 'orchestrated-reviewer',
+                reviewerRunId: decision.reviewerRunId,
+                reviewerProfileName: decision.reviewerProfileName,
+                reviewDecision: decision.reviewDecision,
+                reviewFeedback: decision.reviewFeedback,
+                reviewIssues: decision.reviewIssues,
+                reviewConfidence: decision.reviewConfidence,
+            }
+
+            const review: store.AgentRoomReview = {
+                id: randomUUID(),
+                sessionId: decision.sessionId,
+                taskId: decision.taskId,
+                reviewerAgentId: decision.reviewerProfileName,
+                status: reviewStatus,
+                comment: decision.reviewFeedback,
+                metadata: reviewMetadata,
+                createdAt: new Date().toISOString(),
+            }
+            store.createReview(review)
+        }
+
         store.updateSessionTimestamp(sessionId)
     })
 }
@@ -851,39 +889,7 @@ function buildRunHooks(run: store.AgentRoomRun, roleRuns?: store.AgentRoomRoleRu
                 store.createRunEvent(runEvent)
             } catch { /* swallow — non-critical */ }
         },
-        // P5.3: Write auto reviewer decision to agent_room_reviews table
-        // Unifies audit/retry-feedback data source between manual submitReview()
-        // and automated reviewer decisions.
-        onReviewerDecision: (decision) => {
-            try {
-                // Map reviewDecision → review status
-                const reviewStatus: 'passed' | 'rejected' =
-                    decision.reviewDecision === 'approved' ? 'passed' : 'rejected'
-
-                // Build metadata JSON for observability
-                const reviewMetadata: Record<string, unknown> = {
-                    source: 'orchestrated-reviewer',
-                    reviewerRunId: decision.reviewerRunId,
-                    reviewerProfileName: decision.reviewerProfileName,
-                    reviewDecision: decision.reviewDecision,
-                    reviewFeedback: decision.reviewFeedback,
-                    reviewIssues: decision.reviewIssues,
-                    reviewConfidence: decision.reviewConfidence,
-                }
-
-                const review: store.AgentRoomReview = {
-                    id: randomUUID(),
-                    sessionId: decision.sessionId,
-                    taskId: decision.taskId,
-                    reviewerAgentId: decision.reviewerProfileName,
-                    status: reviewStatus,
-                    comment: decision.reviewFeedback,
-                    metadata: reviewMetadata,
-                    createdAt: new Date().toISOString(),
-                }
-                store.createReview(review)
-            } catch { /* swallow — non-critical */ }
-        },
+        // P6.3: onReviewerDecision handler removed — review creation moved to applyRunnerResult() transaction
     }
 }
 
@@ -1209,6 +1215,44 @@ export function deleteTask(sessionId: string, taskId: string): void {
 }
 
 /**
+ * P7.1: Create a delivery role_run attached to the latest workflow run of the task.
+ * Returns null when no workflow run exists (compatibility with legacy/manual status changes).
+ */
+function createDeliveryRoleRunIfPossible(
+    sessionId: string,
+    taskId: string,
+    task: AgentRoomTask,
+    deliveryMode: 'manual' | 'auto',
+    deliveredAt: string,
+): store.AgentRoomRoleRun | null {
+    const latestRun = store.listRunsByTask(taskId)[0]
+    if (!latestRun) return null
+    const roleRun: store.AgentRoomRoleRun = {
+        id: randomUUID(),
+        runId: latestRun.id,
+        sessionId,
+        taskId,
+        role: 'delivery',
+        phase: 'delivery',
+        profileName: deliveryMode,
+        upstreamRunId: undefined,
+        status: 'completed',
+        startedAt: deliveredAt,
+        finishedAt: deliveredAt,
+        errorMessage: undefined,
+        metadata: {
+            source: deliveryMode === 'manual' ? 'manual-delivery-runtime' : 'auto-delivery-runtime',
+            deliveryMode,
+            taskStatusBeforeDelivery: task.status,
+        },
+        createdAt: deliveredAt,
+        updatedAt: deliveredAt,
+    }
+    store.createRoleRun(roleRun)
+    return roleRun
+}
+
+/**
  * Core delivery logic — does NOT open its own transaction.
  * Callers that are already inside runInTransaction() should call this directly.
  * External callers should use deliverTask() which wraps in a transaction.
@@ -1224,17 +1268,24 @@ function deliverTaskCore(sessionId: string, taskId: string, task: AgentRoomTask,
     const developerRunId = roleRuns.find(r => r.role === 'developer')?.runId
     const reviewerRunId = roleRuns.find(r => r.role === 'reviewer')?.runId
 
+    // P7.1: Create delivery role_run attached to the latest workflow run
+    const deliveryRoleRun = createDeliveryRoleRunIfPossible(sessionId, taskId, task, deliveryMode, deliveredAt)
+
+    // Build delivery event payload with role run linkage
+    const deliveryPayload: Record<string, unknown> = {
+        deliveryMode,
+    }
+    if (deliveryRoleRun) {
+        deliveryPayload.deliveryRoleRunId = deliveryRoleRun.id
+    }
+
     // Transition to delivering via state machine
     updateTaskStatus(taskId, 'delivering')
-    emitEventAndMessage(sessionId, taskId, 'delivery_started', 'delivery', task.title, {
-        deliveryMode,
-    })
+    emitEventAndMessage(sessionId, taskId, 'delivery_started', 'delivery', task.title, deliveryPayload)
 
     // Complete via state machine
     updateTaskStatus(taskId, 'completed')
-    emitEventAndMessage(sessionId, taskId, 'delivery_completed', 'delivery', task.title, {
-        deliveryMode,
-    })
+    emitEventAndMessage(sessionId, taskId, 'delivery_completed', 'delivery', task.title, deliveryPayload)
 
     // Build enriched delivery summary
     const summaryLines = [
@@ -1263,6 +1314,12 @@ function deliverTaskCore(sessionId: string, taskId: string, task: AgentRoomTask,
     if (plannerRunId) metadata.plannerRunId = plannerRunId
     if (developerRunId) metadata.developerRunId = developerRunId
     if (reviewerRunId) metadata.reviewerRunId = reviewerRunId
+
+    // P7.1: Link delivery role_run in artifact metadata
+    if (deliveryRoleRun) {
+        metadata.deliveryRoleRunId = deliveryRoleRun.id
+        metadata.deliveryRunId = deliveryRoleRun.runId
+    }
 
     // Create final_delivery artifact with enriched metadata
     const artifact: AgentRoomArtifact = {

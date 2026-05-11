@@ -59,6 +59,8 @@ export class RealAgentRunner implements AgentRoomRunner {
                 messages: step.messages,
             })),
             artifacts: output.artifacts,
+            // P6.3: Pass through reviewerDecision for transactional review creation
+            reviewerDecision: output.reviewerDecision,
         }
     }
 }
