@@ -4,9 +4,18 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { getDb, ensureTable } from '../../packages/server/src/db/index'
 import { syncAllHermesSessionsOnStartup } from '../../packages/server/src/services/hermes/session-sync'
+import { MESSAGES_INDEX, MESSAGES_SCHEMA, MESSAGES_TABLE, SESSIONS_SCHEMA, SESSIONS_TABLE } from '../../packages/server/src/db/hermes/schemas'
 
 describe('session-sync', () => {
+  function ensureSessionTables() {
+    ensureTable(SESSIONS_TABLE, SESSIONS_SCHEMA)
+    ensureTable(MESSAGES_TABLE, MESSAGES_SCHEMA)
+    const db = getDb()
+    db?.exec(MESSAGES_INDEX)
+  }
+
   beforeEach(() => {
+    ensureSessionTables()
     // Reset database before each test
     const db = getDb()
     if (db) {

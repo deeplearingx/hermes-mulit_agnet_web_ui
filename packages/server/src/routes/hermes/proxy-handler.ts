@@ -122,7 +122,14 @@ function normalizeAndPersistSSEEvent(
   if (!upstreamRunId) return
 
   // Resolve local run association
-  const localRun = findByUpstreamRunId(upstreamRunId)
+  let localRun: ReturnType<typeof findByUpstreamRunId> = null
+  try {
+    localRun = findByUpstreamRunId(upstreamRunId)
+  } catch {
+    // Agent Room persistence is best-effort; usage tracking below must remain
+    // backward compatible even when run tables are unavailable in isolated tests
+    // or during partial bootstrap.
+  }
 
   // Still handle run.completed usage tracking (backward compatible)
   if (data.event === 'run.completed' && data.usage) {

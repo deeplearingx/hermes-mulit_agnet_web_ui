@@ -16,8 +16,10 @@ const TILE = 16
 const C = {
     floor:       0x0f1729,
     floorGrid:   0x1a2744,
+    floorAccent: 0x22365f,
     wall:        0x1e293b,
     wallTop:     0x334155,
+    wallTrim:    0x64748b,
     zoneBg:      0x1e3a5f,
     zoneBorder:  0x3b82f6,
     labelBg:     0x000000,
@@ -29,6 +31,7 @@ const C = {
     monitor:     0x0f1729,
     monitorFrame:0x475569,
     chair:       0x374151,
+    progressBg:  0x334155,
 }
 
 // ─── Agent role → color ──────────────────────────────────────
@@ -63,6 +66,21 @@ const STATUS_COLORS: Record<string, number> = {
     completed:            0x22c55e,
     failed:               0xef4444,
     need_user_decision:   0xeab308,
+}
+
+const STATUS_PROGRESS: Record<string, number> = {
+    created:              0.08,
+    planned:              0.18,
+    assigned:             0.28,
+    in_progress:          0.52,
+    submitted_for_review: 0.68,
+    review_passed:        0.78,
+    review_rejected:      0.6,
+    revision_required:    0.58,
+    delivering:           0.88,
+    completed:            1,
+    failed:               1,
+    need_user_decision:   0.66,
 }
 
 // ─── Zone definitions ────────────────────────────────────────
@@ -100,6 +118,10 @@ interface TaskDisplayState {
     assignedAgentRole: string | null
 }
 
+export function shouldApplyAgentRoomStateUpdate(sceneInstanceId: string | undefined, eventInstanceId: string | undefined): boolean {
+    return !!sceneInstanceId && !!eventInstanceId && eventInstanceId === sceneInstanceId
+}
+
 // ─── Scene ───────────────────────────────────────────────────
 export class AgentRoomOfficeScene extends Phaser.Scene {
     private agentSprites: Map<string, Phaser.GameObjects.Container> = new Map()
@@ -111,6 +133,7 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
     private taskTitleText: Phaser.GameObjects.Text | null = null
     private taskStatusText: Phaser.GameObjects.Text | null = null
     private taskStatusDot: Phaser.GameObjects.Graphics | null = null
+    private taskProgress: Phaser.GameObjects.Graphics | null = null
 
     private instanceId: string
     private tilemapLoaded = false
@@ -182,6 +205,13 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
             for (let y = 0; y <= SCENE_H; y += TILE * 4) {
                 g.lineBetween(0, y, SCENE_W, y)
             }
+
+            g.lineStyle(1, C.floorAccent, 0.18)
+            for (let x = TILE * 2; x < SCENE_W; x += TILE * 8) {
+                for (let y = TILE * 3; y < SCENE_H; y += TILE * 8) {
+                    g.strokeRect(x, y, TILE * 2, TILE * 2)
+                }
+            }
         }
     }
 
@@ -199,16 +229,34 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
         // Bottom wall
         g.fillStyle(C.wall)
         g.fillRect(0, SCENE_H - TILE, SCENE_W, TILE)
+        g.lineStyle(1, C.wallTrim, 0.4)
+        g.lineBetween(TILE, TILE, SCENE_W - TILE, TILE)
+        g.lineBetween(TILE, SCENE_H - TILE - 1, SCENE_W - TILE, SCENE_H - TILE - 1)
+
+        for (let x = 72; x < SCENE_W - 72; x += 128) {
+            g.fillStyle(0x0ea5e9, 0.16)
+            g.fillRoundedRect(x, 6, 46, 14, 2)
+            g.lineStyle(1, 0x38bdf8, 0.24)
+            g.strokeRoundedRect(x, 6, 46, 14, 2)
+        }
     }
 
     private drawZones() {
         for (const zone of ZONES) {
             const g = this.add.graphics()
+            const color = AGENT_COLORS[zone.id] ?? 0x94a3b8
             // Zone background
             g.fillStyle(C.zoneBg, 0.12)
             g.fillRoundedRect(zone.x, zone.y, zone.w, zone.h, 6)
-            g.lineStyle(1, C.zoneBorder, 0.2)
+            g.lineStyle(1, color, 0.22)
             g.strokeRoundedRect(zone.x, zone.y, zone.w, zone.h, 6)
+
+            g.fillStyle(color, 0.06)
+            g.fillRoundedRect(zone.x + 8, zone.y + zone.h - 30, zone.w - 16, 18, 4)
+            g.lineStyle(1, color, 0.12)
+            for (let x = zone.x + 18; x < zone.x + zone.w - 18; x += 18) {
+                g.lineBetween(x, zone.y + 36, x + 8, zone.y + 44)
+            }
 
             // Zone label background
             const labelBg = this.add.graphics()
@@ -217,7 +265,6 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
 
             // Zone label text
             const label = AGENT_LABELS[zone.id] ?? zone.id
-            const color = AGENT_COLORS[zone.id] ?? 0x94a3b8
             this.add.text(zone.x + 12, zone.y + 9, label, {
                 fontSize: '12px',
                 fontFamily: 'monospace',
@@ -248,12 +295,42 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
             g.fillStyle(C.monitorFrame, 0.5)
             g.fillRect(zone.deskX - 2, zone.deskY - 2, 4, 4)
 
+            this.drawRoleDeskProps(g, zone)
+
             // Chair (below desk)
             g.fillStyle(C.chair, 0.5)
             g.fillRoundedRect(zone.deskX - 10, zone.deskY + 22, 20, 8, 3)
             // Chair back
             g.fillStyle(C.chair, 0.4)
             g.fillRoundedRect(zone.deskX - 8, zone.deskY + 18, 16, 6, 2)
+        }
+    }
+
+    private drawRoleDeskProps(g: Phaser.GameObjects.Graphics, zone: ZoneDef) {
+        const color = AGENT_COLORS[zone.id] ?? 0x94a3b8
+        g.fillStyle(color, 0.75)
+        switch (zone.id) {
+            case 'conversation':
+                g.fillCircle(zone.deskX + 22, zone.deskY - 8, 4)
+                g.lineStyle(1, color, 0.5)
+                g.strokeCircle(zone.deskX + 22, zone.deskY - 8, 7)
+                break
+            case 'planner':
+                for (let i = 0; i < 3; i++) g.fillRect(zone.deskX + 18 + i * 6, zone.deskY - 13 + i * 3, 4, 10 - i * 2)
+                break
+            case 'developer':
+                g.fillRect(zone.deskX + 18, zone.deskY - 13, 4, 4)
+                g.fillRect(zone.deskX + 24, zone.deskY - 13, 4, 4)
+                g.fillRect(zone.deskX + 21, zone.deskY - 8, 4, 4)
+                break
+            case 'reviewer':
+                g.lineStyle(2, color, 0.7)
+                g.lineBetween(zone.deskX + 17, zone.deskY - 8, zone.deskX + 22, zone.deskY - 3)
+                g.lineBetween(zone.deskX + 22, zone.deskY - 3, zone.deskX + 32, zone.deskY - 15)
+                break
+            case 'delivery':
+                g.fillTriangle(zone.deskX + 18, zone.deskY - 14, zone.deskX + 32, zone.deskY - 8, zone.deskX + 18, zone.deskY - 2)
+                break
         }
     }
 
@@ -356,6 +433,9 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
             fontFamily: 'monospace',
             color: '#94a3b8',
         })
+
+        this.taskProgress = this.add.graphics()
+        this.drawTaskProgress(0x6b7280, 0)
     }
 
     private drawStatusDot(color: number) {
@@ -363,6 +443,17 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
         this.taskStatusDot.clear()
         this.taskStatusDot.fillStyle(color, 1)
         this.taskStatusDot.fillCircle(SCENE_W / 2 - 210, 58, 5)
+    }
+
+    private drawTaskProgress(color: number, progress: number) {
+        if (!this.taskProgress) return
+        const width = 380
+        const pct = Phaser.Math.Clamp(progress, 0, 1)
+        this.taskProgress.clear()
+        this.taskProgress.fillStyle(C.progressBg, 0.7)
+        this.taskProgress.fillRoundedRect(SCENE_W / 2 - 190, 78, width, 4, 2)
+        this.taskProgress.fillStyle(color, 0.95)
+        this.taskProgress.fillRoundedRect(SCENE_W / 2 - 190, 78, Math.max(4, width * pct), 4, 2)
     }
 
     // ─── State Update Handler ────────────────────────────────
@@ -375,9 +466,7 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
         }
 
         // Guard: ignore events if this scene has no instanceId yet (not initialized)
-        if (!this.instanceId) return
-        // Only process events from our own instance
-        if (!detail.instanceId || detail.instanceId !== this.instanceId) return
+        if (!shouldApplyAgentRoomStateUpdate(this.instanceId, detail.instanceId)) return
 
         // Update agents
         for (const agent of detail.agents) {
@@ -391,6 +480,7 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
             this.taskTitleText?.setText('等待任务...')
             this.taskStatusText?.setText('idle')
             this.drawStatusDot(0x6b7280)
+            this.drawTaskProgress(0x6b7280, 0)
         }
     }
 
@@ -490,5 +580,19 @@ export class AgentRoomOfficeScene extends Phaser.Scene {
         this.taskStatusText?.setText(task.status)
         const color = STATUS_COLORS[task.status] ?? 0x6b7280
         this.drawStatusDot(color)
+        this.drawTaskProgress(color, STATUS_PROGRESS[task.status] ?? 0.12)
+
+        if (task.assignedAgentRole) {
+            const glow = this.agentGlows.get(task.assignedAgentRole)
+            if (glow) {
+                this.tweens.add({
+                    targets: glow,
+                    alpha: { from: glow.alpha, to: 0.8 },
+                    duration: 260,
+                    yoyo: true,
+                    ease: 'Sine.easeInOut',
+                })
+            }
+        }
     }
 }

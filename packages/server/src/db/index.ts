@@ -4,13 +4,25 @@ import { resolve } from 'path'
 import { homedir } from 'os'
 
 const isDev = process.env.NODE_ENV !== 'production'
+const isTest = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)
+
+function getVitestWorkerId(): string {
+  return process.env.VITEST_POOL_ID
+    ?? process.env.VITEST_WORKER_ID
+    ?? process.env.TEST_WORKER_ID
+    ?? process.pid.toString()
+}
 
 // In WSL, always use home directory to avoid cross-filesystem issues
 const DB_DIR = isDev
   ? resolve(process.cwd(), 'packages/server/data')
   : resolve(homedir(), '.hermes-web-ui')
-const DB_PATH = resolve(DB_DIR, 'hermes-web-ui.db')
-const JSON_PATH = resolve(DB_DIR, 'hermes-web-ui.json')
+const DB_PATH = isTest
+  ? resolve(DB_DIR, `hermes-web-ui-vitest-${getVitestWorkerId()}.db`)
+  : resolve(DB_DIR, 'hermes-web-ui.db')
+const JSON_PATH = isTest
+  ? resolve(DB_DIR, `hermes-web-ui-vitest-${getVitestWorkerId()}.json`)
+  : resolve(DB_DIR, 'hermes-web-ui.json')
 
 // --- SQLite availability check ---
 
@@ -32,14 +44,14 @@ export function getDb(): DatabaseSync | null {
   if (!_db) {
     mkdirSync(DB_DIR, { recursive: true })
     _db = new DatabaseSync(DB_PATH)
+    _db.exec('PRAGMA busy_timeout=5000')
+    _db.exec('PRAGMA foreign_keys=ON')
     // Use WAL mode for better concurrency and WSL compatibility
     if (isDev) {
       _db.exec('PRAGMA journal_mode=DELETE')
     } else {
       _db.exec('PRAGMA journal_mode=WAL')
       _db.exec('PRAGMA synchronous=NORMAL')
-      _db.exec('PRAGMA busy_timeout=5000')
-      _db.exec('PRAGMA foreign_keys=ON')
     }
   }
   return _db
