@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { AgentRoomTask, AgentRoomReview, AgentRoomWorkflowEvent, AgentRoomTaskStatus, AgentRoomAgent, AgentRoomArtifact, AgentRoomRoleBinding } from '@/api/hermes/agent-room'
+import type { AgentRoomTask, AgentRoomReview, AgentRoomWorkflowEvent, AgentRoomTaskStatus, AgentRoomAgent, AgentRoomArtifact, AgentRoomRoleBinding, AgentRoomRun } from '@/api/hermes/agent-room'
 
 const props = defineProps<{
     tasks: AgentRoomTask[]
@@ -9,6 +9,7 @@ const props = defineProps<{
     agents: AgentRoomAgent[]
     artifacts: AgentRoomArtifact[]
     roleBindings?: AgentRoomRoleBinding[]
+    runs?: AgentRoomRun[]
     activeTaskId?: string | null
     actionLoadingTaskId?: string | null
 }>()
@@ -51,11 +52,132 @@ interface TaskAction {
     color: string
 }
 
+interface RoleBindingHint {
+    role: string
+    label: string
+    status: 'blocking' | 'warning' | 'info' | 'ok'
+    message: string
+}
+
+// ─── Active Task ───────────────────────────────────────────────
+const activeTask = computed(() => {
+    if (props.activeTaskId) {
+        const found = props.tasks.find(t => t.id === props.activeTaskId)
+        if (found) return found
+    }
+    return props.tasks.find(t => !['completed', 'failed'].includes(t.status)) ?? null
+})
+
+/** Latest failed run error message for the active task */
+const latestRunError = computed(() => {
+    if (!activeTask.value) return null
+    const taskRuns = (props.runs ?? [])
+        .filter(r => r.taskId === activeTask.value!.id)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    const lastRun = taskRuns[0]
+    return lastRun?.errorMessage ?? null
+})
+
+const roleBindingValidation = computed<RoleBindingHint[]>(() => {
+    const bindings = props.roleBindings ?? []
+    const bindingMap = new Map(bindings.map(binding => [binding.role, binding]))
+    const hints: RoleBindingHint[] = []
+
+    // Planner — required for orchestrated runtime
+    if (!bindingMap.has('planner')) {
+        hints.push({
+            role: 'planner',
+            label: '规划 Agent',
+            status: 'blocking',
+            message: '缺少规划 Agent profile 绑定，工作流将无法启动',
+        })
+    } else {
+        hints.push({
+            role: 'planner',
+            label: '规划 Agent',
+            status: 'ok',
+            message: `已绑定: ${bindingMap.get('planner')!.profileName}`,
+        })
+    }
+
+    // Reviewer — required for orchestrated runtime
+    if (!bindingMap.has('reviewer')) {
+        hints.push({
+            role: 'reviewer',
+            label: '审核 Agent',
+            status: 'blocking',
+            message: '缺少审核 Agent profile 绑定，工作流将无法启动',
+        })
+    } else {
+        hints.push({
+            role: 'reviewer',
+            label: '审核 Agent',
+            status: 'ok',
+            message: `已绑定: ${bindingMap.get('reviewer')!.profileName}`,
+        })
+    }
+
+    // Developer — has binding/assignedAgentId/default fallback
+    if (!bindingMap.has('developer')) {
+        if (activeTask.value?.assignedAgentId) {
+            hints.push({
+                role: 'developer',
+                label: '开发 Agent',
+                status: 'warning',
+                message: `未绑定，将使用任务分配的 Agent: ${activeTask.value.assignedAgentId}`,
+            })
+        } else {
+            hints.push({
+                role: 'developer',
+                label: '开发 Agent',
+                status: 'warning',
+                message: '未绑定，将使用默认 profile',
+            })
+        }
+    } else {
+        hints.push({
+            role: 'developer',
+            label: '开发 Agent',
+            status: 'ok',
+            message: `已绑定: ${bindingMap.get('developer')!.profileName}`,
+        })
+    }
+
+    // Delivery — optional, falls back to system delivery
+    if (!bindingMap.has('delivery')) {
+        hints.push({
+            role: 'delivery',
+            label: '交付 Agent',
+            status: 'info',
+            message: '未绑定，将使用系统交付模式',
+        })
+    } else {
+        hints.push({
+            role: 'delivery',
+            label: '交付 Agent',
+            status: 'ok',
+            message: `已绑定: ${bindingMap.get('delivery')!.profileName}（交付 Agent 模式）`,
+        })
+    }
+
+    return hints
+})
+
+/** Whether workflow can start — no blocking issues */
+const canStartWorkflow = computed(() =>
+    !roleBindingValidation.value.some(hint => hint.status === 'blocking')
+)
+
 function getTaskActions(task: AgentRoomTask): TaskAction[] {
     const actions: TaskAction[] = []
     switch (task.status) {
         case 'created':
-            actions.push({ label: '启动工作流', icon: '🚀', action: 'run-workflow', color: '#0e639c' })
+            actions.push({
+                label: canStartWorkflow.value ? '启动工作流' : '⚠️ 配置未完成',
+                icon: canStartWorkflow.value ? '🚀' : '⛔',
+                action: 'run-workflow',
+                color: canStartWorkflow.value ? '#0e639c' : '#ef4444',
+            })
             break
         case 'submitted_for_review':
             actions.push({ label: '审核', icon: '🔍', action: 'open-review', color: '#ffb74d' })
@@ -64,10 +186,10 @@ function getTaskActions(task: AgentRoomTask): TaskAction[] {
             actions.push({ label: '开始交付', icon: '📦', action: 'deliver', color: '#0e639c' })
             break
         case 'revision_required':
-            actions.push({ label: '重新开发', icon: '🔄', action: 'run-workflow', color: '#f57c00' })
+            actions.push({ label: `重新开发 (第${task.revisionRound}轮)`, icon: '🔄', action: 'run-workflow', color: '#f57c00' })
             break
         case 'need_user_decision':
-            actions.push({ label: '继续修改', icon: '🔄', action: 'run-workflow', color: '#f57c00' })
+            actions.push({ label: `继续修改 (第${task.revisionRound}/${task.maxRevisionRounds}轮已用尽)`, icon: '🔄', action: 'run-workflow', color: '#f57c00' })
             break
         case 'failed':
             actions.push({ label: '重新开始', icon: '🔄', action: 'run-workflow', color: '#f57c00' })
@@ -80,6 +202,10 @@ function handleAction(task: AgentRoomTask, action: TaskAction) {
     if (props.actionLoadingTaskId === task.id) return
     switch (action.action) {
         case 'run-workflow':
+            if (!canStartWorkflow.value) {
+                // Don't emit if blocking — user should fix bindings first
+                return
+            }
             emit('run-workflow', task.id)
             break
         case 'open-review':
@@ -90,15 +216,6 @@ function handleAction(task: AgentRoomTask, action: TaskAction) {
             break
     }
 }
-
-// ─── Active Task ───────────────────────────────────────────────
-const activeTask = computed(() => {
-    if (props.activeTaskId) {
-        const found = props.tasks.find(t => t.id === props.activeTaskId)
-        if (found) return found
-    }
-    return props.tasks.find(t => !['completed', 'failed'].includes(t.status)) ?? null
-})
 
 // ─── Agent Status (derived from task status) ───────────────────
 const STATUS_TO_ACTIVE_ROLE: Partial<Record<AgentRoomTaskStatus, string>> = {
@@ -249,7 +366,24 @@ defineExpose({
                         {{ activeTask.revisionRound }}/{{ activeTask.maxRevisionRounds }}
                     </span>
                 </div>
+                <div v-if="activeTask && ['failed', 'revision_required'].includes(activeTask.status) && latestRunError" class="run-error-hint">
+                    💥 {{ latestRunError }}
+                </div>
                 <div v-if="activeTask.description" class="task-desc">{{ activeTask.description }}</div>
+                <!-- Pre-flight role binding validation -->
+                <div v-if="activeTask && activeTask.status === 'created'" class="role-validation">
+                    <div class="rv-header">启动前校验</div>
+                    <div
+                        v-for="hint in roleBindingValidation"
+                        :key="hint.role"
+                        class="rv-item"
+                        :class="`rv-${hint.status}`"
+                    >
+                        <span class="rv-icon">{{ hint.status === 'blocking' ? '⛔' : hint.status === 'warning' ? '⚠️' : hint.status === 'ok' ? '✅' : 'ℹ️' }}</span>
+                        <span class="rv-label">{{ hint.label }}</span>
+                        <span class="rv-message">{{ hint.message }}</span>
+                    </div>
+                </div>
                 <div class="task-actions">
                     <button
                         v-for="action in getTaskActions(activeTask)"
@@ -492,6 +626,16 @@ defineExpose({
     color: #64748b;
 }
 
+.run-error-hint {
+    padding: 4px 8px;
+    margin-bottom: 4px;
+    border-left: 3px solid #ef4444;
+    background: rgba(239, 68, 68, 0.08);
+    color: #fca5a5;
+    font-size: 10px;
+    line-height: 1.4;
+}
+
 .task-desc {
     font-size: 11px;
     color: #64748b;
@@ -500,6 +644,59 @@ defineExpose({
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+.role-validation {
+    padding: 6px 8px;
+    border-top: 1px solid #1e293b;
+    border-bottom: 1px solid #1e293b;
+    margin-bottom: 4px;
+}
+
+.rv-header {
+    font-size: 10px;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.rv-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 0;
+    font-size: 10px;
+}
+
+.rv-icon {
+    flex-shrink: 0;
+    font-size: 10px;
+}
+
+.rv-label {
+    flex-shrink: 0;
+    font-weight: 600;
+    min-width: 60px;
+}
+
+.rv-message {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rv-blocking .rv-label { color: #ef4444; }
+.rv-blocking .rv-message { color: #fca5a5; }
+
+.rv-warning .rv-label { color: #f59e0b; }
+.rv-warning .rv-message { color: #fcd34d; }
+
+.rv-info .rv-label { color: #3b82f6; }
+.rv-info .rv-message { color: #93c5fd; }
+
+.rv-ok .rv-label { color: #22c55e; }
+.rv-ok .rv-message { color: #86efac; }
 
 .task-actions {
     display: flex;

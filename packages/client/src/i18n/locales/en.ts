@@ -177,6 +177,7 @@ export default {
     copyBubble: 'Copy message',
     copiedBubble: 'Message copied',
     copyFailed: 'Copy failed',
+    sessionNotFound: 'Session not found',
   },
 
   // Jobs
@@ -770,6 +771,7 @@ export default {
     new_0_5_4_4: 'Add workspace dialog i18n translations for title and improve session persistence',
     new_0_5_4_5: 'Support code block copy feedback with user notifications',
     new_0_5_4_6: 'Align usage analytics with Hermes state DB schema',
+    new_0_5_4_7: 'Align usage analytics with Hermes state DB schema',
     new_0_5_3_1: 'Improve reasoning process display with persistence across page refreshes',
     new_0_5_3_2: 'Optimize stringified array format parsing to extract thinking/text/tool_calls',
     new_0_5_3_3: 'Improve log display by removing ellipsis and showing full content',

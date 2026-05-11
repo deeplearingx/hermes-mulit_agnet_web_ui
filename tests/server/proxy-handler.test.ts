@@ -311,9 +311,9 @@ describe('SSE stream interception — run.completed', () => {
     expect(mockUpdateUsage).toHaveBeenCalledWith(sessionId, {
       inputTokens: 13949,
       outputTokens: 45,
-      cacheReadTokens: undefined,
-      cacheWriteTokens: undefined,
-      reasoningTokens: undefined,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
       model: '',
       profile: 'default',
     })
@@ -396,9 +396,9 @@ describe('SSE stream interception — run.completed', () => {
     expect(mockUpdateUsage).toHaveBeenCalledWith('session-multi', {
       inputTokens: 500,
       outputTokens: 100,
-      cacheReadTokens: undefined,
-      cacheWriteTokens: undefined,
-      reasoningTokens: undefined,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
       model: '',
       profile: 'default',
     })
@@ -431,9 +431,9 @@ describe('SSE stream interception — run.completed', () => {
     expect(mockUpdateUsage).toHaveBeenCalledWith('session-split', {
       inputTokens: 200,
       outputTokens: 50,
-      cacheReadTokens: undefined,
-      cacheWriteTokens: undefined,
-      reasoningTokens: undefined,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
       model: '',
       profile: 'default',
     })

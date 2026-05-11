@@ -38,6 +38,8 @@ import type {
     HermesAgentRuntimeOutput,
     HermesAgentRuntimeHooks,
     HermesAgentRuntimeMetadata,
+    HermesAgentRuntimeStep,
+    HermesAgentRuntimeArtifact,
     ReviewerDecision,
     ReviewerOutput,
 } from './types'
@@ -252,6 +254,49 @@ function buildReviewerInstructions(input: HermesAgentRuntimeInput): string {
 }
 
 /**
+ * P2: Resolve the delivery profileName from roleBindings.
+ * Returns null if no delivery binding exists — delivery Agent is optional.
+ */
+function resolveDeliveryBinding(input: HermesAgentRuntimeInput): string | null {
+    const binding = input.roleBindings?.get('delivery')
+    return binding?.profileName ?? null
+}
+
+/**
+ * P2: Build delivery-specific input text for the Gateway run.
+ * Provides the delivery Agent with planner plan, developer output, and reviewer feedback.
+ */
+function buildDeliveryInput(
+    input: HermesAgentRuntimeInput,
+    plannerOutput: string,
+    developerOutput: string,
+    reviewerFeedback: string,
+): string {
+    const lines = [
+        `任务需求: ${input.taskDescription}`,
+        '',
+        '规划 Agent 输出:',
+        plannerOutput,
+        '',
+        '开发 Agent 输出:',
+        developerOutput,
+        '',
+        '审核 Agent 反馈:',
+        reviewerFeedback,
+        '',
+        '请基于以上信息生成最终交付汇报。',
+    ]
+    return lines.join('\n')
+}
+
+/**
+ * P2: Build delivery-specific system instructions for the Gateway agent.
+ */
+function buildDeliveryInstructions(_input: HermesAgentRuntimeInput): string {
+    return '你是一个交付 Agent。请基于规划方案、开发输出和审核反馈，输出一份完整的最终交付文档。'
+}
+
+/**
  * Build developer-specific input text for a revision retry.
  * Includes task context, revision round, and previous review feedback
  * so the developer can address specific reviewer concerns.
@@ -398,7 +443,7 @@ export function parseReviewerOutput(output: string): ReviewerOutput {
  */
 function createRoleTaggedHooks(
     baseHooks: HermesAgentRuntimeHooks | undefined,
-    role: 'planner' | 'developer' | 'reviewer',
+    role: 'planner' | 'developer' | 'reviewer' | 'delivery',
 ): HermesAgentRuntimeHooks | undefined {
     if (!baseHooks) return undefined
     return {
@@ -581,7 +626,7 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
             )
         }
 
-        // ── Build output ──────────────────────────────────────────
+        // ── Phase 4: Delivery run (P2 — optional, only when approved + delivery binding) ──
 
         // Step 10: P5.2 — Parse reviewer output using JSON protocol
         const reviewerParsed = parseReviewerOutput(reviewerResult.output)
@@ -590,6 +635,54 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         // P6.3: reviewerDecision is returned in the output instead of hook call.
         // applyRunnerResult() will write the review record in the same transaction.
+
+        // P2: Run delivery Gateway if approved and delivery binding exists
+        let deliveryRunId: string | undefined
+        let deliveryOutput: string | undefined
+        let deliveryProfile: string | null = null
+
+        if (reviewDecision === 'approved') {
+            deliveryProfile = resolveDeliveryBinding(input)
+            if (deliveryProfile) {
+                const deliveryTarget = this.profileResolver(
+                    deliveryProfile,
+                    this.upstream,
+                    this.apiKey,
+                )
+                const deliverySessionId = `agent-room-delivery-${input.sessionId}-${input.taskId}`
+                const deliveryHooks = createRoleTaggedHooks(input.hooks, 'delivery')
+
+                try {
+                    const deliveryResult = await runHermesGatewayTask({
+                        upstream: deliveryTarget.upstream,
+                        apiKey: deliveryTarget.apiKey,
+                        input: buildDeliveryInput(input, plannerResult.output, developerResult.output, reviewFeedback),
+                        instructions: buildDeliveryInstructions(input),
+                        sessionId: deliverySessionId,
+                        timeoutMs: this.timeoutMs,
+                        model: deliveryTarget.model,
+                        provider: deliveryTarget.provider,
+                        onUpstreamRunCreated: deliveryHooks?.onUpstreamRunCreated,
+                        onRawEvent: deliveryHooks?.onRawEvent,
+                    })
+                    deliveryRunId = deliveryResult.runId
+                    deliveryOutput = deliveryResult.output
+
+                    // Notify hooks for observability
+                    input.hooks?.onUpstreamRunCreated?.(deliveryResult.runId, { role: 'delivery' })
+                } catch (err: any) {
+                    console.error(
+                        `[orchestrated-runtime] Delivery phase failed (profile=${deliveryProfile}, task=${input.taskId}):`,
+                        err?.message ?? err,
+                    )
+                    throw new Error(
+                        `Orchestrated delivery phase failed: ${err?.message ?? err}`,
+                    )
+                }
+            }
+        }
+
+        // ── Build output ──────────────────────────────────────────
 
         // Step 11: Build dual-run metadata
         const plannerMetadata: HermesAgentRuntimeMetadata = {
@@ -632,12 +725,21 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
             reviewerMetadata.reviewerTransportSource = reviewerTarget.transportSource
         }
 
+        // P2: Delivery metadata when delivery Agent was executed
+        const deliveryMetadata: HermesAgentRuntimeMetadata = {}
+        if (deliveryRunId) {
+            deliveryMetadata.deliveryRunId = deliveryRunId
+            deliveryMetadata.deliveryProfileName = deliveryProfile ?? undefined
+            deliveryMetadata.deliverySource = 'orchestrated-delivery'
+        }
+
         // Combined metadata for observability
         const combinedMetadata: Record<string, unknown> = {
             ...plannerMetadata,
             ...developerMetadata,
             ...reviewerMetadata,
-            source: 'orchestrated-triple-run',
+            ...deliveryMetadata,
+            source: deliveryRunId ? 'orchestrated-quadruple-run' : 'orchestrated-triple-run',
         }
 
         const title = input.taskTitle
@@ -655,7 +757,38 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         const finalStatus = decisionStatusMap[reviewDecision]
 
-        // Step 13: Return ordered steps: planned → assigned → in_progress → submitted_for_review → review_final
+        // P2: Build delivery steps when delivery Agent executed
+        const hasDelivery = !!deliveryRunId
+        const deliverySteps: HermesAgentRuntimeStep[] = hasDelivery ? [
+            {
+                status: 'delivering' as const,
+                activeRole: 'delivery' as const,
+                events: [{
+                    type: 'delivery_started' as const,
+                    agentRole: 'delivery' as const,
+                    payload: { deliveryRunId, deliveryProfile },
+                }],
+            },
+            {
+                status: 'completed' as const,
+                activeRole: 'delivery' as const,
+                events: [{
+                    type: 'delivery_completed' as const,
+                    agentRole: 'delivery' as const,
+                    payload: { deliveryRunId, deliveryProfile },
+                }],
+                messages: [{
+                    senderRole: 'delivery' as const,
+                    senderId: 'delivery',
+                    senderName: '交付 Agent',
+                    type: 'final_delivery' as const,
+                    content: deliveryOutput ?? '',
+                    metadata: { deliveryRunId, deliveryProfile },
+                }],
+            },
+        ] : []
+
+        // Step 13: Return ordered steps: planned → assigned → in_progress → submitted_for_review → review_final → (delivery)
         return {
             steps: [
                 {
@@ -807,6 +940,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                             }],
                         },
                     ]),
+                // P2: Delivery steps when delivery Agent executed
+                ...deliverySteps,
             ],
             artifacts: [
                 {
@@ -825,6 +960,17 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                         reviewDecision,
                     },
                 },
+                // P2: final_delivery artifact when delivery Agent executed
+                ...(hasDelivery ? [{
+                    name: `${safeName} — 交付结果`,
+                    type: 'final_delivery' as const,
+                    content: deliveryOutput ?? '',
+                    metadata: {
+                        deliveryRunId,
+                        deliveryProfile,
+                        source: 'orchestrated-delivery',
+                    } as Record<string, unknown>,
+                } as HermesAgentRuntimeArtifact] : []),
             ],
             // P6.3: Carry reviewer decision data for transactional review creation
             reviewerDecision: {

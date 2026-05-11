@@ -177,6 +177,7 @@ export default {
     copyBubble: '复制消息',
     copiedBubble: '已复制',
     copyFailed: '复制失败',
+    sessionNotFound: 'TODO: session not found',
   },
 
   // 定时任务

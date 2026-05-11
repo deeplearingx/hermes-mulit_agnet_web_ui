@@ -142,6 +142,7 @@ export default {
     copyBubble: 'Copiar mensaje',
     copiedBubble: 'Mensaje copiado',
     copyFailed: 'Error al copiar',
+    sessionNotFound: 'TODO: session not found',
   },
 
   // Jobs

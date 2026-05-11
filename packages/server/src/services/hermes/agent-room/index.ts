@@ -942,7 +942,24 @@ async function executeRun(
     for (const b of bindings) {
         roleBindings.set(b.role as AgentRoomRole, { role: b.role as AgentRoomRole, profileName: b.profileName })
     }
-    const roleRuns = createRoleRunsForRun(run, roleBindings)
+
+    // P1: Compute effective role bindings ensuring role_runs match what the runtime will actually execute.
+    // The runtime (resolveDeveloperBinding) has its own resolution, but this map is for ROLE_RUN CREATION ONLY —
+    // it ensures the observability layer doesn't miss a role that will execute.
+    // Planner/reviewer are already covered by the binding map; if they are missing the runtime throws,
+    // so we do NOT auto-create planner/reviewer role_runs (no false records).
+    const effectiveRoleBindings = new Map(roleBindings)
+    if (!effectiveRoleBindings.has('developer')) {
+        // Developer: if not explicitly bound, use assignedAgentId or 'default' profile.
+        // This mirrors resolveDeveloperBinding() behavior but always produces a concrete
+        // profileName so the role_run record is meaningful.
+        const devProfile = task.assignedAgentId || 'default'
+        effectiveRoleBindings.set('developer', { role: 'developer' as AgentRoomRole, profileName: devProfile })
+    }
+
+    // effectiveRoleBindings is used ONLY for role_run creation.
+    // The original roleBindings is passed to the runner context — runtime resolution remains independent.
+    const roleRuns = createRoleRunsForRun(run, effectiveRoleBindings)
 
     try {
         // Build hooks for real-time observability (P3.3: with role run tracking)
@@ -977,18 +994,24 @@ async function executeRun(
             emitRunEventsFromWorkflowEvents(run.id, sessionId, taskId)
         }
 
-        // ─── Unified autoDelivery hook ──────────────────────────────
+        // ─── P2: Unified autoDelivery hook ───────────────────────────
         // After runner completes, check if the task reached review_passed
         // and the session has autoDelivery enabled. This unifies the
         // autoDelivery logic between manual submitReview() and runner-produced
         // review_passed status (e.g. orchestrated reviewer approval).
+        // Only service-deliver if the task is still review_passed
+        // (Delivery Agent mode may have already transitioned to completed).
         const taskAfterRun = store.getTask(taskId) as AgentRoomTask | null
         if (taskAfterRun?.status === 'review_passed') {
             const session = store.getSession(sessionId)
             if (session?.autoDeliveryEnabled) {
-                store.runInTransaction(() => {
-                    deliverTaskCore(sessionId, taskId, taskAfterRun, 'auto')
-                })
+                // Re-read task status to avoid race with runtime delivery
+                const currentTask = store.getTask(taskId) as AgentRoomTask | null
+                if (currentTask?.status === 'review_passed') {
+                    store.runInTransaction(() => {
+                        deliverTaskCore(sessionId, taskId, currentTask, 'auto')
+                    })
+                }
             }
         }
 
@@ -1258,6 +1281,17 @@ function createDeliveryRoleRunIfPossible(
  * External callers should use deliverTask() which wraps in a transaction.
  */
 function deliverTaskCore(sessionId: string, taskId: string, task: AgentRoomTask, deliveryMode: 'manual' | 'auto'): void {
+    // P2: Guard — ensure each task has at most one final_delivery artifact
+    // If the runtime (Delivery Agent mode) already produced a final_delivery artifact,
+    // skip the service-level delivery to avoid duplicate final_delivery.
+    const existingArtifacts = store.listArtifactsByTask(taskId)
+    const hasDeliveryArtifact = existingArtifacts.some(a => a.type === 'final_delivery')
+    if (hasDeliveryArtifact) {
+        // Delivery already produced by the runtime (Delivery Agent mode).
+        // Skip the service-level delivery to avoid duplicate final_delivery.
+        return
+    }
+
     // Gather enrichment data
     const reviewFeedback = getLatestReviewFeedback(taskId)
     const deliveredAt = new Date().toISOString()

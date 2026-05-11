@@ -14,6 +14,8 @@ const usageBatchMock = vi.fn(async (ctx: any) => { ctx.body = {} })
 const usageSingleMock = vi.fn(async (ctx: any) => { ctx.body = { input_tokens: 0, output_tokens: 0 } })
 const usageStatsMock = vi.fn(async (ctx: any) => { ctx.body = { total_input_tokens: 0, total_output_tokens: 0 } })
 const contextLengthMock = vi.fn(async (ctx: any) => { ctx.body = { context_length: 200000 } })
+const listHermesSessionsMock = vi.fn(async (ctx: any) => { ctx.body = { sessions: [] } })
+const getHermesSessionMock = vi.fn(async (ctx: any) => { ctx.body = { session: { id: ctx.params.id } } })
 
 vi.mock('../../packages/server/src/controllers/hermes/sessions', () => ({
   listConversations: listConversationsMock,
@@ -30,6 +32,8 @@ vi.mock('../../packages/server/src/controllers/hermes/sessions', () => ({
   usageSingle: usageSingleMock,
   usageStats: usageStatsMock,
   contextLength: contextLengthMock,
+  listHermesSessions: listHermesSessionsMock,
+  getHermesSession: getHermesSessionMock,
 }))
 
 describe('session routes', () => {
@@ -43,6 +47,8 @@ describe('session routes', () => {
     getMock.mockClear()
     removeMock.mockClear()
     renameMock.mockClear()
+    listHermesSessionsMock.mockClear()
+    getHermesSessionMock.mockClear()
   })
 
   it('registers conversations, session list, and search routes', async () => {

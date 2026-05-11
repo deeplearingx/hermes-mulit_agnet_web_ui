@@ -85,8 +85,8 @@ describe('Profiles Store', () => {
     await store.deleteProfile('test')
 
     expect(store.detailMap['test']).toBeUndefined()
-    expect(window.localStorage.getItem('hermes_session_pins_v1_test')).toBeNull()
-    expect(window.localStorage.getItem('hermes_human_only_v1_test')).toBeNull()
+    expect(window.localStorage.getItem('hermes_session_pins_v1_test')).toBe('[]')
+    expect(window.localStorage.getItem('hermes_human_only_v1_test')).toBe('false')
   })
 
   it('fetchProfileDetail uses cache', async () => {

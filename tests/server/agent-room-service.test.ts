@@ -1618,6 +1618,122 @@ describe('Agent Room Service', () => {
     })
   })
 
+  // ─── P1.1: Developer role_run effective binding ───────────────
+
+  describe('P1.1: Developer role_run effective binding', () => {
+    it('developer role_run is created from assignedAgentId when developer binding is missing', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+
+      const session = svc.createSession('P1.1 AssignedAgent')
+      // Only bind planner and reviewer — no developer binding
+      svc.setRoleBinding(session.id, 'planner', 'gpt-4o')
+      svc.setRoleBinding(session.id, 'reviewer', 'gpt-4o')
+      // Task with assignedAgentId for fallback
+      const task = svc.createTask(session.id, 'Dev Fallback', 'Description', 'assigned-dev-profile')
+
+      await svc.runWorkflow(session.id, task.id)
+
+      // Verify developer role_run exists with profileName from assignedAgentId
+      const roleRuns = store.listRoleRunsByTask(task.id)
+      const devRun = roleRuns.find(r => r.role === 'developer')
+      expect(devRun).toBeDefined()
+      expect(devRun!.profileName).toBe('assigned-dev-profile')
+      expect(devRun!.phase).toBe('development')
+    })
+
+    it('developer role_run is created with "default" profile when neither binding nor assignedAgentId', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+
+      const session = svc.createSession('P1.1 Default')
+      // Only bind planner and reviewer — no developer binding
+      svc.setRoleBinding(session.id, 'planner', 'gpt-4o')
+      svc.setRoleBinding(session.id, 'reviewer', 'gpt-4o')
+      // Task without assignedAgentId
+      const task = svc.createTask(session.id, 'Dev Default', 'Description')
+
+      await svc.runWorkflow(session.id, task.id)
+
+      // Verify developer role_run exists with profileName 'default'
+      const roleRuns = store.listRoleRunsByTask(task.id)
+      const devRun = roleRuns.find(r => r.role === 'developer')
+      expect(devRun).toBeDefined()
+      expect(devRun!.profileName).toBe('default')
+      expect(devRun!.phase).toBe('development')
+    })
+
+    it('explicit developer binding overrides assignedAgentId for role_run', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+
+      const session = svc.createSession('P1.1 Explicit')
+      // Bind all three roles
+      svc.setRoleBinding(session.id, 'planner', 'gpt-4o')
+      svc.setRoleBinding(session.id, 'developer', 'explicit-dev-profile')
+      svc.setRoleBinding(session.id, 'reviewer', 'gpt-4o')
+      // Task also has assignedAgentId — but binding should take priority
+      const task = svc.createTask(session.id, 'Explicit Dev', 'Description', 'assigned-dev-profile')
+
+      await svc.runWorkflow(session.id, task.id)
+
+      // Verify developer role_run uses explicit binding, not assignedAgentId
+      const roleRuns = store.listRoleRunsByTask(task.id)
+      const devRun = roleRuns.find(r => r.role === 'developer')
+      expect(devRun).toBeDefined()
+      expect(devRun!.profileName).toBe('explicit-dev-profile')
+    })
+
+    it('planner role_run is NOT auto-created when planner binding is missing', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+
+      const session = svc.createSession('P1.1 NoPlanner')
+      // Only bind reviewer — no planner, no developer
+      svc.setRoleBinding(session.id, 'reviewer', 'gpt-4o')
+      const task = svc.createTask(session.id, 'No Planner', 'Description', 'dev-agent')
+
+      // runWorkflow will fail because the mock runner doesn't require planner,
+      // but the role_runs are created before the runner runs.
+      // The runtime will throw when it can't resolve planner, but role_runs
+      // should already reflect the correct state.
+      await svc.runWorkflow(session.id, task.id)
+
+      // Verify: no planner role_run was auto-created
+      const roleRuns = store.listRoleRunsByTask(task.id)
+      const plannerRun = roleRuns.find(r => r.role === 'planner')
+      expect(plannerRun).toBeUndefined()
+
+      // Verify: developer role_run WAS auto-created (effective fallback)
+      const devRun = roleRuns.find(r => r.role === 'developer')
+      expect(devRun).toBeDefined()
+      expect(devRun!.profileName).toBe('dev-agent')
+
+      // Verify: reviewer role_run WAS created (explicitly bound)
+      const reviewerRun = roleRuns.find(r => r.role === 'reviewer')
+      expect(reviewerRun).toBeDefined()
+    })
+
+    it('all bound roles plus auto-added developer produce correct role_run count', async () => {
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+
+      const session = svc.createSession('P1.1 Count')
+      // Bind planner + reviewer, no developer
+      svc.setRoleBinding(session.id, 'planner', 'gpt-4o')
+      svc.setRoleBinding(session.id, 'reviewer', 'gpt-4o')
+      const task = svc.createTask(session.id, 'Count', 'Description', 'dev-agent')
+
+      await svc.runWorkflow(session.id, task.id)
+
+      // Should have 3 role_runs: planner + reviewer (explicit) + developer (auto-added)
+      const roleRuns = store.listRoleRunsByTask(task.id)
+      expect(roleRuns).toHaveLength(3)
+      const roles = roleRuns.map(r => r.role).sort()
+      expect(roles).toEqual(['developer', 'planner', 'reviewer'])
+    })
+  })
+
   describe('P7.1: Delivery Role Run', () => {
     it('manual deliverTask creates delivery role_run attached to latest workflow run', async () => {
       const svc = await import('../../packages/server/src/services/hermes/agent-room/index')

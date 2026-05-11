@@ -2089,3 +2089,319 @@ describe('P5.3: Auto reviewer writes to agent_room_reviews', () => {
         resetActiveRunnerForTest()
     })
 })
+
+// ─── P2: Delivery Agent mode tests ───────────────────────────────
+
+describe('P2: Delivery Agent mode (orchestrated pipeline)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks()
+    })
+
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    /**
+     * Mock four sequential runHermesGatewayTask calls (planner → developer → reviewer → delivery).
+     * Returns the mock values for assertion.
+     */
+    function mockQuadGatewayRuns(
+        plannerRunId = 'run-planner-001',
+        developerRunId = 'run-dev-001',
+        reviewerRunId = 'run-reviewer-001',
+        deliveryRunId = 'run-delivery-001',
+    ) {
+        const plannerResult = {
+            output: 'Plan: step 1, step 2, step 3',
+            runId: plannerRunId,
+            sessionId: 'agent-room-planner-sess-1-task-1',
+        }
+        const developerResult = {
+            output: 'Implementation complete: login page created with email/password fields',
+            runId: developerRunId,
+            sessionId: 'agent-room-developer-sess-1-task-1',
+        }
+        const reviewerResult = {
+            output: APPROVED_REVIEWER_JSON,
+            runId: reviewerRunId,
+            sessionId: 'agent-room-reviewer-sess-1-task-1',
+        }
+        const deliveryResult = {
+            output: 'Final delivery report: all tasks completed successfully.',
+            runId: deliveryRunId,
+            sessionId: 'agent-room-delivery-sess-1-task-1',
+        }
+        vi.mocked(runHermesGatewayTask)
+            .mockResolvedValueOnce(plannerResult)
+            .mockResolvedValueOnce(developerResult)
+            .mockResolvedValueOnce(reviewerResult)
+            .mockResolvedValueOnce(deliveryResult)
+        return { plannerResult, developerResult, reviewerResult, deliveryResult }
+    }
+
+    describe('delivery binding + approved reviewer', () => {
+        it('executes delivery Gateway run when delivery binding exists and reviewer approves', async () => {
+            mockQuadGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            const result = await runtime.runTask(makeInput({
+                roleBindings: new Map([
+                    ['planner', { role: 'planner', profileName: 'gpt-4o' }],
+                    ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet' }],
+                    ['reviewer', { role: 'reviewer', profileName: 'gpt-4o' }],
+                    ['delivery', { role: 'delivery', profileName: 'delivery-agent' }],
+                ]),
+            }))
+
+            // Should call runHermesGatewayTask 4 times (planner + developer + reviewer + delivery)
+            expect(runHermesGatewayTask).toHaveBeenCalledTimes(4)
+
+            // Fourth call should be delivery
+            const deliveryCall = vi.mocked(runHermesGatewayTask).mock.calls[3][0]
+            expect(deliveryCall.sessionId).toBe('agent-room-delivery-sess-1-task-1')
+            expect(deliveryCall.instructions).toContain('交付 Agent')
+            expect(deliveryCall.input).toContain('规划 Agent 输出')
+            expect(deliveryCall.input).toContain('开发 Agent 输出')
+            expect(deliveryCall.input).toContain('审核 Agent 反馈')
+        })
+
+        it('returns final_delivery artifact type when delivery binding exists', async () => {
+            mockQuadGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            const result = await runtime.runTask(makeInput({
+                roleBindings: new Map([
+                    ['planner', { role: 'planner', profileName: 'gpt-4o' }],
+                    ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet' }],
+                    ['reviewer', { role: 'reviewer', profileName: 'gpt-4o' }],
+                    ['delivery', { role: 'delivery', profileName: 'delivery-agent' }],
+                ]),
+            }))
+
+            // Should have 3 artifacts: code_output, review_report, final_delivery
+            expect(result.artifacts).toHaveLength(3)
+            const deliveryArtifact = result.artifacts!.find(a => a.type === 'final_delivery')
+            expect(deliveryArtifact).toBeDefined()
+            expect(deliveryArtifact!.name).toBe('Implement_login_page — 交付结果')
+            expect(deliveryArtifact!.content).toBe('Final delivery report: all tasks completed successfully.')
+            expect(deliveryArtifact!.metadata).toMatchObject({
+                deliveryRunId: 'run-delivery-001',
+                deliveryProfile: 'delivery-agent',
+                source: 'orchestrated-delivery',
+            })
+        })
+
+        it('returns delivering and completed steps when delivery binding exists', async () => {
+            mockQuadGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            const result = await runtime.runTask(makeInput({
+                roleBindings: new Map([
+                    ['planner', { role: 'planner', profileName: 'gpt-4o' }],
+                    ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet' }],
+                    ['reviewer', { role: 'reviewer', profileName: 'gpt-4o' }],
+                    ['delivery', { role: 'delivery', profileName: 'delivery-agent' }],
+                ]),
+            }))
+
+            // Should have 7 steps: planned, assigned, in_progress, submitted_for_review, review_passed, delivering, completed
+            expect(result.steps).toHaveLength(7)
+            expect(result.steps[4].status).toBe('review_passed')
+            expect(result.steps[5].status).toBe('delivering')
+            expect(result.steps[5].activeRole).toBe('delivery')
+            expect(result.steps[5].events[0].type).toBe('delivery_started')
+            expect(result.steps[6].status).toBe('completed')
+            expect(result.steps[6].activeRole).toBe('delivery')
+            expect(result.steps[6].events[0].type).toBe('delivery_completed')
+            expect(result.steps[6].messages![0].type).toBe('final_delivery')
+            expect(result.steps[6].messages![0].senderRole).toBe('delivery')
+        })
+
+        it('combined metadata includes quadruple-run source when delivery executed', async () => {
+            mockQuadGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            const result = await runtime.runTask(makeInput({
+                roleBindings: new Map([
+                    ['planner', { role: 'planner', profileName: 'gpt-4o' }],
+                    ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet' }],
+                    ['reviewer', { role: 'reviewer', profileName: 'gpt-4o' }],
+                    ['delivery', { role: 'delivery', profileName: 'delivery-agent' }],
+                ]),
+            }))
+
+            const submittedStep = result.steps[3] // submitted_for_review
+            const metadata = submittedStep.events[0].payload as Record<string, unknown>
+            expect(metadata.source).toBe('orchestrated-quadruple-run')
+            expect(metadata.deliveryRunId).toBe('run-delivery-001')
+            expect(metadata.deliveryProfileName).toBe('delivery-agent')
+            expect(metadata.deliverySource).toBe('orchestrated-delivery')
+        })
+
+        it('hooks forward onUpstreamRunCreated for delivery role when delivery binding exists', async () => {
+            mockQuadGatewayRuns()
+
+            const onUpstreamRunCreated = vi.fn()
+            const onRawEvent = vi.fn()
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await runtime.runTask(makeInput({
+                roleBindings: new Map([
+                    ['planner', { role: 'planner', profileName: 'gpt-4o' }],
+                    ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet' }],
+                    ['reviewer', { role: 'reviewer', profileName: 'gpt-4o' }],
+                    ['delivery', { role: 'delivery', profileName: 'delivery-agent' }],
+                ]),
+                hooks: { onUpstreamRunCreated, onRawEvent },
+            }))
+
+            // Delivery call should have role-tagged hooks
+            const deliveryCall = vi.mocked(runHermesGatewayTask).mock.calls[3][0]
+            expect(deliveryCall.onUpstreamRunCreated).toBeTypeOf('function')
+
+            deliveryCall.onUpstreamRunCreated?.('run-delivery-001')
+            expect(onUpstreamRunCreated).toHaveBeenCalledWith('run-delivery-001', { role: 'delivery' })
+        })
+    })
+
+    describe('no delivery binding + approved reviewer (regression)', () => {
+        it('does NOT execute delivery Gateway run when no delivery binding', async () => {
+            mockDualGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            const result = await runtime.runTask(makeInput())
+
+            // Should only call runHermesGatewayTask 3 times (no delivery)
+            expect(runHermesGatewayTask).toHaveBeenCalledTimes(3)
+
+            // Should have 2 artifacts (code_output + review_report), no final_delivery
+            expect(result.artifacts).toHaveLength(2)
+            const deliveryArtifact = result.artifacts!.find(a => a.type === 'final_delivery')
+            expect(deliveryArtifact).toBeUndefined()
+
+            // Should have 5 steps (no delivering/completed)
+            expect(result.steps).toHaveLength(5)
+            const stepStatuses = result.steps.map(s => s.status)
+            expect(stepStatuses).not.toContain('delivering')
+            expect(stepStatuses).not.toContain('completed')
+        })
+
+        it('combined metadata shows triple-run source when no delivery binding', async () => {
+            mockDualGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            const result = await runtime.runTask(makeInput())
+
+            const submittedStep = result.steps[3]
+            const metadata = submittedStep.events[0].payload as Record<string, unknown>
+            expect(metadata.source).toBe('orchestrated-triple-run')
+            expect(metadata).not.toHaveProperty('deliveryRunId')
+        })
+    })
+
+    describe('delivery binding exists but reviewer rejects', () => {
+        it('does NOT execute delivery Gateway run when reviewer rejects', async () => {
+            const plannerResult = {
+                output: 'Plan: step 1, step 2',
+                runId: 'run-planner-rej',
+                sessionId: 'agent-room-planner-sess-1-task-1',
+            }
+            const developerResult = {
+                output: 'Implementation done',
+                runId: 'run-dev-rej',
+                sessionId: 'agent-room-developer-sess-1-task-1',
+            }
+            const reviewerResult = {
+                output: REVISION_REQUIRED_REVIEWER_JSON,
+                runId: 'run-reviewer-rej',
+                sessionId: 'agent-room-reviewer-sess-1-task-1',
+            }
+            vi.mocked(runHermesGatewayTask)
+                .mockResolvedValueOnce(plannerResult)
+                .mockResolvedValueOnce(developerResult)
+                .mockResolvedValueOnce(reviewerResult)
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            const result = await runtime.runTask(makeInput({
+                roleBindings: new Map([
+                    ['planner', { role: 'planner', profileName: 'gpt-4o' }],
+                    ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet' }],
+                    ['reviewer', { role: 'reviewer', profileName: 'gpt-4o' }],
+                    ['delivery', { role: 'delivery', profileName: 'delivery-agent' }],
+                ]),
+            }))
+
+            // Should only call 3 times (no delivery call)
+            expect(runHermesGatewayTask).toHaveBeenCalledTimes(3)
+
+            // No final_delivery artifact
+            const deliveryArtifact = result.artifacts!.find(a => a.type === 'final_delivery')
+            expect(deliveryArtifact).toBeUndefined()
+        })
+    })
+
+    describe('delivery phase failure handling', () => {
+        it('throws with "delivery phase failed" when delivery Gateway rejects', async () => {
+            vi.mocked(runHermesGatewayTask)
+                .mockResolvedValueOnce({
+                    output: 'Plan output',
+                    runId: 'run-p',
+                    sessionId: 'sess-p',
+                })
+                .mockResolvedValueOnce({
+                    output: 'Dev output',
+                    runId: 'run-d',
+                    sessionId: 'sess-d',
+                })
+                .mockResolvedValueOnce({
+                    output: APPROVED_REVIEWER_JSON,
+                    runId: 'run-r',
+                    sessionId: 'sess-r',
+                })
+                .mockRejectedValueOnce(new Error('Delivery crashed'))
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await expect(runtime.runTask(makeInput({
+                roleBindings: new Map([
+                    ['planner', { role: 'planner', profileName: 'gpt-4o' }],
+                    ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet' }],
+                    ['reviewer', { role: 'reviewer', profileName: 'gpt-4o' }],
+                    ['delivery', { role: 'delivery', profileName: 'delivery-agent' }],
+                ]),
+            }))).rejects.toThrow(
+                /Orchestrated delivery phase failed:.*Delivery crashed/,
+            )
+        })
+
+        it('runHermesGatewayTask called exactly 4 times on delivery failure', async () => {
+            vi.mocked(runHermesGatewayTask)
+                .mockResolvedValueOnce({
+                    output: 'Plan',
+                    runId: 'run-p',
+                    sessionId: 'sess-p',
+                })
+                .mockResolvedValueOnce({
+                    output: 'Dev',
+                    runId: 'run-d',
+                    sessionId: 'sess-d',
+                })
+                .mockResolvedValueOnce({
+                    output: APPROVED_REVIEWER_JSON,
+                    runId: 'run-r',
+                    sessionId: 'sess-r',
+                })
+                .mockRejectedValueOnce(new Error('boom'))
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await expect(runtime.runTask(makeInput({
+                roleBindings: new Map([
+                    ['planner', { role: 'planner', profileName: 'gpt-4o' }],
+                    ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet' }],
+                    ['reviewer', { role: 'reviewer', profileName: 'gpt-4o' }],
+                    ['delivery', { role: 'delivery', profileName: 'delivery-agent' }],
+                ]),
+            }))).rejects.toThrow()
+
+            expect(runHermesGatewayTask).toHaveBeenCalledTimes(4)
+        })
+    })
+})

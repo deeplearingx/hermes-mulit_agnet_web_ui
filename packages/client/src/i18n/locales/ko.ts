@@ -142,6 +142,7 @@ export default {
     copyBubble: '메시지 복사',
     copiedBubble: '복사됨',
     copyFailed: '복사 실패',
+    sessionNotFound: 'TODO: session not found',
   },
 
   // 예약 작업

@@ -341,6 +341,7 @@ async function handleDeleteRoleBinding(role: AgentRoomRole) {
                         :agents="store.agents"
                         :artifacts="store.artifacts"
                         :role-bindings="store.roleBindings"
+                        :runs="store.runs"
                         :active-task-id="store.activeTaskId"
                         :action-loading-task-id="store.actionLoadingTaskId"
                         @create-task="showCreateTask = true"

@@ -142,6 +142,7 @@ export default {
     copyBubble: 'メッセージをコピー',
     copiedBubble: 'コピーしました',
     copyFailed: 'コピーに失敗しました',
+    sessionNotFound: 'TODO: session not found',
   },
 
   // スケジュールジョブ
