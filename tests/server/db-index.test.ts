@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
+import { dirname, resolve } from 'path'
+import { fileURLToPath } from 'url'
 
 // Force JSON fallback by mocking isSqliteAvailable
 vi.mock('../../packages/server/src/db/index', async (importOriginal) => {
@@ -28,6 +30,27 @@ describe('JSON fallback store', () => {
 
 // Test ensureTable with a real in-memory SQLite (Node 22+)
 describe('SQLite ensureTable', () => {
+  it('uses a stable dev storage path independent of process.cwd()', async () => {
+    vi.resetModules()
+
+    const originalCwd = process.cwd
+    const fakeCwd = vi.fn(() => '/tmp/not-the-repo-root')
+    Object.defineProperty(process, 'cwd', { value: fakeCwd })
+
+    try {
+      const dbModule = await import('../../packages/server/src/db/index')
+      const thisDir = dirname(fileURLToPath(import.meta.url))
+      const expectedDir = resolve(thisDir, '../../packages/server/data')
+      const actualPath = dbModule.getStoragePath()
+
+      expect(actualPath.startsWith(expectedDir)).toBe(true)
+      expect(actualPath.startsWith('/tmp/not-the-repo-root')).toBe(false)
+    } finally {
+      Object.defineProperty(process, 'cwd', { value: originalCwd })
+      vi.resetModules()
+    }
+  })
+
   it('creates table with correct columns and handles migration', () => {
     // This test requires Node 22.5+ for node:sqlite
     const nodeVersion = process.versions.node.split('.').map(Number)

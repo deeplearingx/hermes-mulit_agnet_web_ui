@@ -7,7 +7,7 @@
 // profileName → Gateway target via GatewayManager or constructor fallback.
 //
 // Resolution priority:
-//   1. GatewayManager: if available, resolve upstream/apiKey from profileName.
+//   1. GatewayManager: if available, resolve upstream/apiKey/model/provider from profileName.
 //   2. Constructor fallback: use constructor upstream/apiKey.
 
 import { getGatewayManagerInstance } from '../../../../gateway-bootstrap'
@@ -44,7 +44,7 @@ export type GatewayProfileResolver = (
  * Create the default profile resolver.
  *
  * Resolution priority:
- *   1. GatewayManager: if available, resolve upstream/apiKey from profileName.
+ *   1. GatewayManager: if available, resolve upstream/apiKey/model/provider from profileName.
  *   2. Constructor fallback: use constructor upstream/apiKey.
  */
 export function createDefaultGatewayProfileResolver(): GatewayProfileResolver {
@@ -55,6 +55,8 @@ export function createDefaultGatewayProfileResolver(): GatewayProfileResolver {
             return {
                 upstream: mgr.getUpstream(profileName),
                 apiKey: mgr.getApiKey(profileName) ?? fallbackApiKey ?? null,
+                model: mgr.getModel(profileName) ?? undefined,
+                provider: mgr.getProvider(profileName) ?? undefined,
                 transportSource: 'gateway-manager',
             }
         }
@@ -63,6 +65,8 @@ export function createDefaultGatewayProfileResolver(): GatewayProfileResolver {
             return {
                 upstream: mgr.getUpstream() || fallbackUpstream,
                 apiKey: mgr.getApiKey() ?? fallbackApiKey ?? null,
+                model: mgr.getModel() ?? undefined,
+                provider: mgr.getProvider() ?? undefined,
                 transportSource: 'gateway-manager',
             }
         }

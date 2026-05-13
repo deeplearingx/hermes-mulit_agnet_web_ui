@@ -2,6 +2,7 @@ import { io, Socket } from 'socket.io-client'
 import type { Server } from 'socket.io'
 import { EventSource } from 'eventsource'
 import { getToken } from '../../../services/auth'
+import { config } from '../../../config'
 import type { GatewayManager } from '../gateway-manager'
 import { deleteSession as hermesDeleteSession } from '../hermes-cli'
 import { getActiveProfileName } from '../hermes-profile'
@@ -117,7 +118,7 @@ class AgentClient {
         this.storage = storage
     }
 
-    async connect(port = 8648): Promise<void> {
+    async connect(port = config.port): Promise<void> {
         const token = await getToken()
 
         this.socket = io(`http://127.0.0.1:${port}/group-chat`, {

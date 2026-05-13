@@ -83,13 +83,13 @@ const roleBindingValidation = computed<RoleBindingHint[]>(() => {
     const bindingMap = new Map(bindings.map(binding => [binding.role, binding]))
     const hints: RoleBindingHint[] = []
 
-    // Planner — required for orchestrated runtime
+    // Planner — falls back to the current default Hermes profile
     if (!bindingMap.has('planner')) {
         hints.push({
             role: 'planner',
             label: '规划 Agent',
-            status: 'blocking',
-            message: '缺少规划 Agent profile 绑定，工作流将无法启动',
+            status: 'warning',
+            message: '未绑定，将使用当前默认 Hermes profile',
         })
     } else {
         hints.push({
@@ -100,13 +100,13 @@ const roleBindingValidation = computed<RoleBindingHint[]>(() => {
         })
     }
 
-    // Reviewer — required for orchestrated runtime
+    // Reviewer — falls back to the current default Hermes profile
     if (!bindingMap.has('reviewer')) {
         hints.push({
             role: 'reviewer',
             label: '审核 Agent',
-            status: 'blocking',
-            message: '缺少审核 Agent profile 绑定，工作流将无法启动',
+            status: 'warning',
+            message: '未绑定，将使用当前默认 Hermes profile',
         })
     } else {
         hints.push({
@@ -124,14 +124,14 @@ const roleBindingValidation = computed<RoleBindingHint[]>(() => {
                 role: 'developer',
                 label: '开发 Agent',
                 status: 'warning',
-                message: `未绑定，将使用任务分配的 Agent: ${activeTask.value.assignedAgentId}`,
+                message: `未绑定，将使用任务分配 profile: ${activeTask.value.assignedAgentId}`,
             })
         } else {
             hints.push({
                 role: 'developer',
                 label: '开发 Agent',
                 status: 'warning',
-                message: '未绑定，将使用默认 profile',
+                message: '未绑定，将使用当前默认 Hermes profile',
             })
         }
     } else {
@@ -149,7 +149,7 @@ const roleBindingValidation = computed<RoleBindingHint[]>(() => {
             role: 'delivery',
             label: '交付 Agent',
             status: 'info',
-            message: '未绑定，将使用系统交付模式',
+            message: '未绑定，将使用系统交付',
         })
     } else {
         hints.push({
@@ -163,10 +163,8 @@ const roleBindingValidation = computed<RoleBindingHint[]>(() => {
     return hints
 })
 
-/** Whether workflow can start — no blocking issues */
-const canStartWorkflow = computed(() =>
-    !roleBindingValidation.value.some(hint => hint.status === 'blocking')
-)
+/** Whether workflow can start — role binding fallbacks are non-blocking. */
+const canStartWorkflow = computed(() => true)
 
 function getTaskActions(task: AgentRoomTask): TaskAction[] {
     const actions: TaskAction[] = []
@@ -203,7 +201,7 @@ function handleAction(task: AgentRoomTask, action: TaskAction) {
     switch (action.action) {
         case 'run-workflow':
             if (!canStartWorkflow.value) {
-                // Don't emit if blocking — user should fix bindings first
+                // Keep guard for future blocking validations; role binding fallbacks are non-blocking.
                 return
             }
             emit('run-workflow', task.id)
@@ -366,7 +364,7 @@ defineExpose({
                         {{ activeTask.revisionRound }}/{{ activeTask.maxRevisionRounds }}
                     </span>
                 </div>
-                <div v-if="activeTask && ['failed', 'revision_required'].includes(activeTask.status) && latestRunError" class="run-error-hint">
+                <div v-if="activeTask && latestRunError" class="run-error-hint">
                     💥 {{ latestRunError }}
                 </div>
                 <div v-if="activeTask.description" class="task-desc">{{ activeTask.description }}</div>

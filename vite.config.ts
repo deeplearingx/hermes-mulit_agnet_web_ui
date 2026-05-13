@@ -4,7 +4,7 @@ import type { ProxyOptions } from 'vite'
 import { resolve } from 'path'
 import pkg from './package.json'
 
-const BACKEND = 'http://127.0.0.1:8648'
+const BACKEND = 'http://127.0.0.1:18648'
 
 function createProxyConfig(): ProxyOptions {
   return {

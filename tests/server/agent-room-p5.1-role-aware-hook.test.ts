@@ -205,9 +205,13 @@ describe('P5.1: Role-Aware Hook Binding', () => {
         // (finalizeRoleRuns doesn't distinguish between "successfully completed role" and "in-progress role")
         expect(plannerRR!.status).toBe('failed')
 
-        // Developer was 'running' when failure occurred → marked 'failed' with error
+        // Developer was 'running' when failure occurred → marked 'failed'
         expect(developerRR!.status).toBe('failed')
-        expect(developerRR!.errorMessage).toContain('developer phase failed')
+
+        // finalizeRoleRuns attaches the error to the first running role_run only
+        const runningFailed = [plannerRR, developerRR].filter(r => r!.errorMessage)
+        expect(runningFailed).toHaveLength(1)
+        expect(runningFailed[0]!.errorMessage).toContain('developer phase failed')
 
         // Reviewer was never started → 'skipped'
         expect(reviewerRR!.status).toBe('skipped')

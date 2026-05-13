@@ -63,7 +63,7 @@ function mountPanel(options: {
 }
 
 describe('AgentRoomTaskPanel actions', () => {
-    it('starts a created task only when required role bindings are present', async () => {
+    it('starts a created task with configured role bindings', async () => {
         const wrapper = mountPanel({ task: makeTask('created') })
 
         const action = wrapper.get('button.action-btn')
@@ -76,18 +76,35 @@ describe('AgentRoomTaskPanel actions', () => {
         expect(wrapper.emitted('deliver-task')).toBeUndefined()
     })
 
-    it('blocks created task start when planner or reviewer binding is missing', async () => {
+    it('allows created task start with warning fallbacks when planner or reviewer binding is missing', async () => {
         const wrapper = mountPanel({
             task: makeTask('created'),
             roleBindings: [requiredBindings[0]],
         })
 
         const action = wrapper.get('button.action-btn')
-        expect(action.text()).toContain('⛔ ⚠️ 配置未完成')
+        expect(action.text()).toContain('🚀 启动工作流')
+        expect(wrapper.text()).toContain('未绑定，将使用当前默认 Hermes profile')
 
         await action.trigger('click')
 
-        expect(wrapper.emitted('run-workflow')).toBeUndefined()
+        expect(wrapper.emitted('run-workflow')).toEqual([['task-1']])
+    })
+
+
+    it('shows developer assigned-profile fallback and system delivery fallback as non-blocking hints', async () => {
+        const wrapper = mountPanel({
+            task: makeTask('created', { assignedAgentId: 'kimi' }),
+            roleBindings: [],
+        })
+
+        expect(wrapper.text()).toContain('未绑定，将使用任务分配 profile: kimi')
+        expect(wrapper.text()).toContain('未绑定，将使用系统交付')
+
+        const action = wrapper.get('button.action-btn')
+        await action.trigger('click')
+
+        expect(wrapper.emitted('run-workflow')).toEqual([['task-1']])
     })
 
     it('emits review, delivery, retry, and decision-continuation actions by task status', async () => {

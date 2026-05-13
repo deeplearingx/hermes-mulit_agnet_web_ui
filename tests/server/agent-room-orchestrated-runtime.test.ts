@@ -26,7 +26,18 @@ vi.mock('../../packages/server/src/config', () => ({
     },
 }))
 
+vi.mock('../../packages/server/src/shared/infer-provider', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../packages/server/src/shared/infer-provider')>()
+    return {
+        ...actual,
+        inferProvider: vi.fn(actual.inferProvider),
+        inferProviderForProfile: vi.fn(actual.inferProviderForProfile),
+    }
+})
+
 import { runHermesGatewayTask } from '../../packages/server/src/services/hermes/gateway-run-client'
+import { inferProvider, inferProviderForProfile } from '../../packages/server/src/shared/infer-provider'
+import { logger } from '../../packages/server/src/services/logger'
 
 // ─── Shared helpers ─────────────────────────────────────────────
 
@@ -160,34 +171,35 @@ describe('OrchestratedGatewayRuntime dual-run (P4.11-A4)', () => {
         })
     })
 
-    describe('planner missing binding failure', () => {
-        it('throws when roleBindings is undefined', async () => {
-            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
-            await expect(runtime.runTask(makeInput({ roleBindings: undefined }))).rejects.toThrow(
-                /planner role binding/,
-            )
-        })
+    describe('planner fallback binding resolution', () => {
+        it('falls back to assignedAgentId when planner binding is missing', async () => {
+            mockDualGatewayRuns()
 
-        it('throws when roleBindings is empty', async () => {
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
-            await expect(runtime.runTask(makeInput({ roleBindings: new Map() }))).rejects.toThrow(
-                /planner role binding/,
-            )
-        })
-
-        it('throws when roleBindings has developer but not planner', async () => {
-            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
-            await expect(runtime.runTask(makeInput({
+            const result = await runtime.runTask(makeInput({
                 roleBindings: new Map([
-                    ['developer', { role: 'developer', profileName: 'gpt-4o' }],
+                    ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet' }],
+                    ['reviewer', { role: 'reviewer', profileName: 'gpt-4o' }],
                 ]),
-            }))).rejects.toThrow(/planner role binding/)
+                assignedAgentId: 'fallback-agent-id',
+            }))
+
+            expect(runHermesGatewayTask).toHaveBeenCalledTimes(3)
+            const payload = result.steps[0].events[0].payload as Record<string, unknown>
+            expect(payload.plannerProfileName).toBe('fallback-agent-id')
+            expect(payload.plannerBindingSource).toBe('assigned-agent')
         })
 
-        it('does NOT call runHermesGatewayTask when planner binding is missing', async () => {
+        it('falls back to active profile when roleBindings is undefined', async () => {
+            mockDualGatewayRuns()
+
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
-            await expect(runtime.runTask(makeInput({ roleBindings: undefined }))).rejects.toThrow()
-            expect(runHermesGatewayTask).not.toHaveBeenCalled()
+            const result = await runtime.runTask(makeInput({ roleBindings: undefined }))
+
+            expect(runHermesGatewayTask).toHaveBeenCalledTimes(3)
+            const payload = result.steps[0].events[0].payload as Record<string, unknown>
+            expect(payload.plannerProfileName).toBe('(active-profile)')
+            expect(payload.plannerBindingSource).toBe('active-profile')
         })
     })
 
@@ -225,7 +237,7 @@ describe('OrchestratedGatewayRuntime dual-run (P4.11-A4)', () => {
             expect(metadata.developerBindingSource).toBe('assigned-agent')
         })
 
-        it('uses "none" binding source when neither developer binding nor assignedAgentId', async () => {
+        it('uses active-profile binding source when neither developer binding nor assignedAgentId', async () => {
             mockDualGatewayRuns()
 
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
@@ -240,7 +252,7 @@ describe('OrchestratedGatewayRuntime dual-run (P4.11-A4)', () => {
 
             const submittedStep = result.steps[3]
             const metadata = submittedStep.events[0].payload as Record<string, unknown>
-            expect(metadata.developerBindingSource).toBe('none')
+            expect(metadata.developerBindingSource).toBe('active-profile')
         })
 
         it('developer instructions contain plan-aware guidance', async () => {
@@ -254,6 +266,42 @@ describe('OrchestratedGatewayRuntime dual-run (P4.11-A4)', () => {
             expect(devCall.instructions).toContain('执行计划')
         })
 
+        it('developer prompt forbids emitting reviewer conclusions or review JSON', async () => {
+            mockDualGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await runtime.runTask(makeInput())
+
+            const devCall = vi.mocked(runHermesGatewayTask).mock.calls[1][0]
+            expect(devCall.instructions).toContain('不要输出 reviewer 视角的结论或 JSON')
+            expect(devCall.input).toContain('不要伪造 reviewer/review JSON')
+        })
+
+        it('retry developer prompt also forbids emitting reviewer conclusions or review JSON', async () => {
+            vi.mocked(runHermesGatewayTask)
+                .mockResolvedValueOnce({
+                    output: 'Retry implementation complete',
+                    runId: 'run-dev-retry-001',
+                    sessionId: 'agent-room-developer-sess-1-task-1-rev1',
+                })
+                .mockResolvedValueOnce({
+                    output: APPROVED_REVIEWER_JSON,
+                    runId: 'run-reviewer-retry-001',
+                    sessionId: 'agent-room-reviewer-sess-1-task-1-rev1',
+                })
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await runtime.runTask(makeInput({
+                currentStatus: 'revision_required',
+                revisionRound: 1,
+                previousReviewFeedback: 'Please fix the remaining issue.',
+            }))
+
+            const devCall = vi.mocked(runHermesGatewayTask).mock.calls[0][0]
+            expect(devCall.instructions).toContain('不要输出 reviewer 视角的结论或 JSON')
+            expect(devCall.input).toContain('不要伪造 reviewer/review JSON')
+        })
+
         it('developer input includes planner output as plan context', async () => {
             mockDualGatewayRuns()
 
@@ -263,6 +311,28 @@ describe('OrchestratedGatewayRuntime dual-run (P4.11-A4)', () => {
             const devCall = vi.mocked(runHermesGatewayTask).mock.calls[1][0]
             expect(devCall.input).toContain('执行计划（由规划 Agent 生成）')
             expect(devCall.input).toContain('Plan: step 1, step 2, step 3')
+        })
+    })
+
+
+
+    describe('reviewer fallback binding resolution', () => {
+        it('falls back to assignedAgentId when reviewer binding is missing', async () => {
+            mockDualGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            const result = await runtime.runTask(makeInput({
+                roleBindings: new Map([
+                    ['planner', { role: 'planner', profileName: 'gpt-4o' }],
+                    ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet' }],
+                ]),
+                assignedAgentId: 'fallback-reviewer',
+            }))
+
+            expect(runHermesGatewayTask).toHaveBeenCalledTimes(3)
+            const payload = result.steps[4].events[0].payload as Record<string, unknown>
+            expect(payload.reviewerProfileName).toBe('fallback-reviewer')
+            expect(payload.reviewerBindingSource).toBe('assigned-agent')
         })
     })
 
@@ -594,7 +664,7 @@ describe('OrchestratedGatewayRuntime dual-run (P4.11-A4)', () => {
 describe('OrchestratedGatewayRuntime failure handling (P4.11-A6)', () => {
     beforeEach(() => {
         vi.clearAllMocks()
-        vi.spyOn(console, 'error').mockImplementation(() => {})
+        vi.spyOn(logger, 'error').mockImplementation(() => {})
     })
 
     afterEach(() => {
@@ -609,7 +679,7 @@ describe('OrchestratedGatewayRuntime failure handling (P4.11-A6)', () => {
 
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
             await expect(runtime.runTask(makeInput())).rejects.toThrow(
-                /Orchestrated planner phase failed:.*Planner connection timeout/,
+                /Orchestrated planner phase failed.*Planner connection timeout/,
             )
         })
 
@@ -623,9 +693,9 @@ describe('OrchestratedGatewayRuntime failure handling (P4.11-A6)', () => {
                 // expected
             }
 
-            expect(console.error).toHaveBeenCalledWith(
-                expect.stringContaining('profile=gpt-4o'),
-                expect.anything(),
+            expect(logger.error).toHaveBeenCalledWith(
+                expect.objectContaining({ profile: 'gpt-4o' }),
+                expect.any(String),
             )
         })
 
@@ -638,15 +708,15 @@ describe('OrchestratedGatewayRuntime failure handling (P4.11-A6)', () => {
             expect(runHermesGatewayTask).toHaveBeenCalledTimes(1)
         })
 
-        it('console.error called with [orchestrated-runtime] Planner phase failed', async () => {
+        it('logger.error called with [orchestrated-runtime] Planner phase failed', async () => {
             vi.mocked(runHermesGatewayTask).mockRejectedValueOnce(new Error('timeout'))
 
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
             await expect(runtime.runTask(makeInput())).rejects.toThrow()
 
-            expect(console.error).toHaveBeenCalledWith(
+            expect(logger.error).toHaveBeenCalledWith(
+                expect.objectContaining({}),
                 expect.stringContaining('[orchestrated-runtime] Planner phase failed'),
-                expect.anything(),
             )
         })
     })
@@ -665,7 +735,7 @@ describe('OrchestratedGatewayRuntime failure handling (P4.11-A6)', () => {
 
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
             await expect(runtime.runTask(makeInput())).rejects.toThrow(
-                /Orchestrated developer phase failed:.*Developer OOM/,
+                /Orchestrated developer phase failed.*Developer OOM/,
             )
         })
 
@@ -685,13 +755,13 @@ describe('OrchestratedGatewayRuntime failure handling (P4.11-A6)', () => {
                 // expected
             }
 
-            expect(console.error).toHaveBeenCalledWith(
-                expect.stringContaining('profile=claude-3.5-sonnet'),
-                expect.anything(),
+            expect(logger.error).toHaveBeenCalledWith(
+                expect.objectContaining({ profile: 'claude-3.5-sonnet' }),
+                expect.any(String),
             )
-            expect(console.error).toHaveBeenCalledWith(
-                expect.stringContaining('plannerRunId=run-planner-fail-002'),
-                expect.anything(),
+            expect(logger.error).toHaveBeenCalledWith(
+                expect.objectContaining({ plannerRunId: 'run-planner-fail-002' }),
+                expect.any(String),
             )
         })
 
@@ -710,7 +780,7 @@ describe('OrchestratedGatewayRuntime failure handling (P4.11-A6)', () => {
             expect(runHermesGatewayTask).toHaveBeenCalledTimes(2)
         })
 
-        it('console.error called with [orchestrated-runtime] Developer phase failed', async () => {
+        it('logger.error called with [orchestrated-runtime] Developer phase failed', async () => {
             vi.mocked(runHermesGatewayTask)
                 .mockResolvedValueOnce({
                     output: 'Plan',
@@ -722,9 +792,9 @@ describe('OrchestratedGatewayRuntime failure handling (P4.11-A6)', () => {
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
             await expect(runtime.runTask(makeInput())).rejects.toThrow()
 
-            expect(console.error).toHaveBeenCalledWith(
+            expect(logger.error).toHaveBeenCalledWith(
+                expect.objectContaining({}),
                 expect.stringContaining('[orchestrated-runtime] Developer phase failed'),
-                expect.anything(),
             )
         })
     })
@@ -753,6 +823,62 @@ describe('OrchestratedGatewayRuntime failure handling (P4.11-A6)', () => {
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
             await expect(runtime.runTask(makeInput())).rejects.toThrow(
                 /Orchestrated developer phase failed/,
+            )
+        })
+
+    })
+
+    describe('retry path failure handling', () => {
+        it('wraps retry developer failure with diagnostic context', async () => {
+            vi.mocked(runHermesGatewayTask).mockRejectedValueOnce(new Error('Retry developer exploded'))
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await expect(runtime.runTask(makeInput({
+                currentStatus: 'revision_required',
+                revisionRound: 2,
+            }))).rejects.toThrow(
+                /Orchestrated retry developer phase failed.*revisionRound=2.*Retry developer exploded/,
+            )
+
+            expect(logger.error).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    role: 'developer',
+                    source: 'role-binding',
+                    sessionId: 'agent-room-developer-sess-1-task-1-rev2',
+                    revisionRound: 2,
+                    taskId: 'task-1',
+                }),
+                expect.stringContaining('[orchestrated-runtime] Retry developer phase failed'),
+            )
+        })
+
+        it('wraps retry reviewer failure with diagnostic context', async () => {
+            vi.mocked(runHermesGatewayTask)
+                .mockResolvedValueOnce({
+                    output: 'Retry developer output',
+                    runId: 'run-dev-retry-diagnostic',
+                    sessionId: 'agent-room-developer-sess-1-task-1-rev3',
+                })
+                .mockRejectedValueOnce(new Error('Retry reviewer exploded'))
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await expect(runtime.runTask(makeInput({
+                currentStatus: 'revision_required',
+                revisionRound: 3,
+            }))).rejects.toThrow(
+                /Orchestrated retry reviewer phase failed.*developerRunId=run-dev-retry-diagnostic.*Retry reviewer exploded/,
+            )
+
+            expect(logger.error).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    role: 'reviewer',
+                    source: 'role-binding',
+                    sessionId: 'agent-room-reviewer-sess-1-task-1-rev3',
+                    revisionRound: 3,
+                    developerRunId: 'run-dev-retry-diagnostic',
+                    taskId: 'task-1',
+                }),
+                expect.stringContaining('[orchestrated-runtime] Retry reviewer phase failed'),
             )
         })
     })
@@ -1017,13 +1143,14 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
             expect(updatedRun.status).toBe('failed')
         }, { timeout: 5000 })
 
-        // Run should have error message
+        // Run should have error message with diagnostic fields
         const failedRun = svc.getRun(run.id)!
         expect(failedRun.errorMessage).toContain('Orchestrated planner phase failed')
+        expect(failedRun.errorMessage).toContain('role=planner')
 
-        // Task should stay in 'created' (no partial advancement)
+        // Task transitions to 'failed' when workflow errors
         const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
-        expect(finalTask.status).toBe('created')
+        expect(finalTask.status).toBe('failed')
 
         resetActiveRunnerForTest()
     })
@@ -1058,13 +1185,14 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
             expect(updatedRun.status).toBe('failed')
         }, { timeout: 5000 })
 
-        // Run should have error message with "developer phase failed"
+        // Run should have error message with "developer phase failed" and diagnostic fields
         const failedRun = svc.getRun(run.id)!
         expect(failedRun.errorMessage).toContain('Orchestrated developer phase failed')
+        expect(failedRun.errorMessage).toContain('role=developer')
 
-        // Task should stay in 'created' (no partial advancement)
+        // Task transitions to 'failed' when workflow errors
         const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
-        expect(finalTask.status).toBe('created')
+        expect(finalTask.status).toBe('failed')
 
         resetActiveRunnerForTest()
     })
@@ -1100,30 +1228,28 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
             expect(updatedRun.status).toBe('failed')
         }, { timeout: 5000 })
 
-        // No step-transition workflow events should have been emitted (exception before applyRunnerResult)
-        // Note: createTask() emits a task_created event, so we exclude that
+        // On workflow failure, the service layer emits a task_failed event
         const events = svc.listWorkflowEvents(session.id)
         const taskEvents = events.filter(e => e.taskId === task.id && e.type !== 'task_created')
-        expect(taskEvents).toHaveLength(0)
+        const eventTypes = taskEvents.map(e => e.type)
+        expect(eventTypes).toContain('task_failed')
 
-        // Task stays in 'created'
+        // Task transitions to 'failed'
         const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
-        expect(finalTask.status).toBe('created')
+        expect(finalTask.status).toBe('failed')
 
         resetActiveRunnerForTest()
     })
 
     // ── Group 6: planner missing binding E2E (P1.3.a) ────────────
 
-    it('P1.3.a: planner missing binding → run fails, task stays created, no artifacts', async () => {
+    it('P1.3.a: planner missing binding falls back and workflow can execute', async () => {
         const { runHermesGatewayTask } = await import('../../packages/server/src/services/hermes/gateway-run-client')
 
-        // Mock should NOT be called — planner binding missing causes immediate rejection
-        vi.mocked(runHermesGatewayTask).mockResolvedValue({
-            output: 'should not be called',
-            runId: 'should-not-be-called',
-            sessionId: 'should-not',
-        })
+        vi.mocked(runHermesGatewayTask)
+            .mockResolvedValueOnce({ output: 'Fallback planner output', runId: 'run-fallback-planner', sessionId: 'p' })
+            .mockResolvedValueOnce({ output: 'Fallback developer output', runId: 'run-fallback-dev', sessionId: 'd' })
+            .mockResolvedValueOnce({ output: APPROVED_REVIEWER_JSON, runId: 'run-fallback-reviewer', sessionId: 'r' })
 
         const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
         const { setActiveRunnerForTest, resetActiveRunnerForTest } = await import(
@@ -1134,31 +1260,19 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
         setActiveRunnerForTest(new RealAgentRunner(runtime))
 
         const session = svc.createSession('Planner Missing E2E')
-        // Create task WITHOUT setting planner role binding
-        const task = svc.createTask(session.id, 'No Planner', 'Task without planner binding')
+        const task = svc.createTask(session.id, 'No Planner', 'Task without planner binding', 'fallback-profile')
 
         const run = svc.startWorkflow(session.id, task.id)
 
         await vi.waitFor(() => {
             const updatedRun = svc.getRun(run.id)!
-            expect(updatedRun.status).toBe('failed')
+            expect(updatedRun.status).toBe('completed')
         }, { timeout: 5000 })
 
-        // Run errorMessage must contain "planner"
-        const failedRun = svc.getRun(run.id)!
-        expect(failedRun.errorMessage).not.toBeNull()
-        expect(failedRun.errorMessage!.toLowerCase()).toContain('planner')
+        expect(runHermesGatewayTask).toHaveBeenCalledTimes(3)
 
-        // Task remains in "created" — no partial advancement
-        const finalTask = svc.listTasks(session.id).find(t => t.id === task.id)!
-        expect(finalTask.status).toBe('created')
-
-        // No artifacts created
-        const artifacts = svc.listTaskArtifacts(session.id, task.id)
-        expect(artifacts).toHaveLength(0)
-
-        // runHermesGatewayTask should not have been called
-        expect(runHermesGatewayTask).not.toHaveBeenCalled()
+        const completedRun = svc.getRun(run.id)!
+        expect(completedRun.errorMessage).toBeFalsy()
 
         resetActiveRunnerForTest()
     })
@@ -1213,7 +1327,7 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
         resetActiveRunnerForTest()
     })
 
-    it('P1.3.b.3: developer fallback to "none" when neither binding nor assignedAgentId', async () => {
+    it('P1.3.b.3: developer fallback to active-profile when neither binding nor assignedAgentId', async () => {
         const { runHermesGatewayTask } = await import('../../packages/server/src/services/hermes/gateway-run-client')
 
         let callCount = 0
@@ -1254,7 +1368,7 @@ describe('startWorkflow + OrchestratedGatewayRuntime E2E (P4.11-A7)', () => {
         expect(artifacts).toHaveLength(2)
         const codeArtifact = artifacts.find(a => a.type === 'code_output')!
         const meta = codeArtifact.metadata as Record<string, unknown>
-        expect(meta.developerBindingSource).toBe('none')
+        expect(meta.developerBindingSource).toBe('active-profile')
 
         resetActiveRunnerForTest()
     })
@@ -2140,11 +2254,200 @@ describe('P2: Delivery Agent mode (orchestrated pipeline)', () => {
     }
 
     describe('delivery binding + approved reviewer', () => {
+        it('infers provider for created-path developer call from resolver model when binding has no provider/model', async () => {
+            mockDualGatewayRuns()
+            vi.mocked(inferProviderForProfile).mockResolvedValue('openai')
+            vi.mocked(inferProvider).mockResolvedValue(undefined)
+
+            const profileResolver = vi.fn((profileName: string | undefined, fallbackUpstream: string) => {
+                if (profileName === 'claude-3.5-sonnet') {
+                    return {
+                        upstream: fallbackUpstream,
+                        apiKey: null,
+                        model: 'gpt-4o-mini',
+                        provider: undefined,
+                        transportSource: 'constructor-fallback' as const,
+                    }
+                }
+                return {
+                    upstream: fallbackUpstream,
+                    apiKey: null,
+                    model: 'gpt-4o',
+                    provider: 'openai',
+                    transportSource: 'constructor-fallback' as const,
+                }
+            })
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000, profileResolver)
+            await runtime.runTask(makeInput())
+
+            const developerCall = vi.mocked(runHermesGatewayTask).mock.calls[1][0]
+            expect(developerCall.sessionId).toBe('agent-room-developer-sess-1-task-1')
+            expect(developerCall.model).toBe('gpt-4o-mini')
+            expect(developerCall.provider).toBe('openai')
+            expect(inferProviderForProfile).toHaveBeenCalledWith('claude-3.5-sonnet', 'gpt-4o-mini')
+            expect(inferProvider).not.toHaveBeenCalled()
+        })
+
+        it('falls back to generic inference when profile-aware inference cannot resolve provider', async () => {
+            mockDualGatewayRuns()
+            vi.mocked(inferProviderForProfile).mockResolvedValue(undefined)
+            vi.mocked(inferProvider).mockResolvedValue('openai')
+
+            const profileResolver = vi.fn((profileName: string | undefined, fallbackUpstream: string) => {
+                if (profileName === 'claude-3.5-sonnet') {
+                    return {
+                        upstream: fallbackUpstream,
+                        apiKey: null,
+                        model: 'gpt-4o-mini',
+                        provider: undefined,
+                        transportSource: 'constructor-fallback' as const,
+                    }
+                }
+                return {
+                    upstream: fallbackUpstream,
+                    apiKey: null,
+                    model: 'gpt-4o',
+                    provider: 'openai',
+                    transportSource: 'constructor-fallback' as const,
+                }
+            })
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000, profileResolver)
+            await runtime.runTask(makeInput())
+
+            const developerCall = vi.mocked(runHermesGatewayTask).mock.calls[1][0]
+            expect(developerCall.model).toBe('gpt-4o-mini')
+            expect(developerCall.provider).toBe('openai')
+            expect(inferProviderForProfile).toHaveBeenCalledWith('claude-3.5-sonnet', 'gpt-4o-mini')
+            expect(inferProvider).toHaveBeenCalledWith('gpt-4o-mini')
+        })
+
+        it('re-infers provider when developer binding overrides model but not provider', async () => {
+            mockDualGatewayRuns()
+            vi.mocked(inferProviderForProfile).mockResolvedValue('anthropic')
+            vi.mocked(inferProvider).mockResolvedValue(undefined)
+
+            const profileResolver = vi.fn((_profileName: string | undefined, fallbackUpstream: string) => ({
+                upstream: fallbackUpstream,
+                apiKey: null,
+                model: 'gpt-4o',
+                provider: 'openai',
+                transportSource: 'constructor-fallback' as const,
+            }))
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000, profileResolver)
+            await runtime.runTask(makeInput({
+                roleBindings: new Map([
+                    ['planner', { role: 'planner', profileName: 'gpt-4o' }],
+                    ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet', model: 'claude-3-5-sonnet-latest' }],
+                    ['reviewer', { role: 'reviewer', profileName: 'gpt-4o' }],
+                ]),
+            }))
+
+            const developerCall = vi.mocked(runHermesGatewayTask).mock.calls[1][0]
+            expect(developerCall.model).toBe('claude-3-5-sonnet-latest')
+            expect(developerCall.provider).toBe('anthropic')
+            expect(inferProviderForProfile).toHaveBeenCalledWith('claude-3.5-sonnet', 'claude-3-5-sonnet-latest')
+            expect(inferProvider).not.toHaveBeenCalled()
+        })
+
+        it('infers provider for retry-path developer call from resolver model when binding has no provider/model', async () => {
+            const reviewerResult = {
+                output: APPROVED_REVIEWER_JSON,
+                runId: 'run-reviewer-retry-001',
+                sessionId: 'agent-room-reviewer-sess-1-task-1-rev1',
+            }
+            vi.mocked(runHermesGatewayTask)
+                .mockResolvedValueOnce({
+                    output: 'Revised implementation complete',
+                    runId: 'run-dev-retry-001',
+                    sessionId: 'agent-room-developer-sess-1-task-1-rev1',
+                })
+                .mockResolvedValueOnce(reviewerResult)
+            vi.mocked(inferProviderForProfile).mockResolvedValue('openai')
+            vi.mocked(inferProvider).mockResolvedValue(undefined)
+
+            const profileResolver = vi.fn((profileName: string | undefined, fallbackUpstream: string) => {
+                if (profileName === 'claude-3.5-sonnet') {
+                    return {
+                        upstream: fallbackUpstream,
+                        apiKey: null,
+                        model: 'gpt-4o-mini',
+                        provider: undefined,
+                        transportSource: 'constructor-fallback' as const,
+                    }
+                }
+                return {
+                    upstream: fallbackUpstream,
+                    apiKey: null,
+                    model: 'gpt-4o',
+                    provider: 'openai',
+                    transportSource: 'constructor-fallback' as const,
+                }
+            })
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000, profileResolver)
+            await runtime.runTask(makeInput({
+                currentStatus: 'revision_required',
+                revisionRound: 1,
+            }))
+
+            const developerCall = vi.mocked(runHermesGatewayTask).mock.calls[0][0]
+            expect(developerCall.sessionId).toBe('agent-room-developer-sess-1-task-1-rev1')
+            expect(developerCall.model).toBe('gpt-4o-mini')
+            expect(developerCall.provider).toBe('openai')
+            expect(inferProviderForProfile).toHaveBeenCalledWith('claude-3.5-sonnet', 'gpt-4o-mini')
+            expect(inferProvider).not.toHaveBeenCalled()
+        })
+
+        it('infers provider for delivery call from resolver model when binding has no provider/model', async () => {
+            mockQuadGatewayRuns()
+            vi.mocked(inferProviderForProfile).mockResolvedValue('openai')
+            vi.mocked(inferProvider).mockResolvedValue(undefined)
+
+            const profileResolver = vi.fn((profileName: string | undefined, fallbackUpstream: string) => {
+                if (profileName === 'delivery-agent') {
+                    return {
+                        upstream: fallbackUpstream,
+                        apiKey: null,
+                        model: 'gpt-4o-mini',
+                        provider: undefined,
+                        transportSource: 'constructor-fallback' as const,
+                    }
+                }
+                return {
+                    upstream: fallbackUpstream,
+                    apiKey: null,
+                    model: 'gpt-4o',
+                    provider: 'openai',
+                    transportSource: 'constructor-fallback' as const,
+                }
+            })
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000, profileResolver)
+            await runtime.runTask(makeInput({
+                roleBindings: new Map([
+                    ['planner', { role: 'planner', profileName: 'gpt-4o' }],
+                    ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet' }],
+                    ['reviewer', { role: 'reviewer', profileName: 'gpt-4o' }],
+                    ['delivery', { role: 'delivery', profileName: 'delivery-agent' }],
+                ]),
+            }))
+
+            const deliveryCall = vi.mocked(runHermesGatewayTask).mock.calls[3][0]
+            expect(deliveryCall.sessionId).toBe('agent-room-delivery-sess-1-task-1')
+            expect(deliveryCall.model).toBe('gpt-4o-mini')
+            expect(deliveryCall.provider).toBe('openai')
+            expect(inferProviderForProfile).toHaveBeenCalledWith('delivery-agent', 'gpt-4o-mini')
+            expect(inferProvider).not.toHaveBeenCalled()
+        })
+
         it('executes delivery Gateway run when delivery binding exists and reviewer approves', async () => {
             mockQuadGatewayRuns()
 
             const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
-            const result = await runtime.runTask(makeInput({
+            await runtime.runTask(makeInput({
                 roleBindings: new Map([
                     ['planner', { role: 'planner', profileName: 'gpt-4o' }],
                     ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet' }],
@@ -2259,6 +2562,30 @@ describe('P2: Delivery Agent mode (orchestrated pipeline)', () => {
             expect(deliveryCall.onUpstreamRunCreated).toBeTypeOf('function')
 
             deliveryCall.onUpstreamRunCreated?.('run-delivery-001')
+            expect(onUpstreamRunCreated).toHaveBeenCalledWith('run-delivery-001', { role: 'delivery' })
+        })
+
+        it('does not emit duplicate delivery upstream run notifications', async () => {
+            mockQuadGatewayRuns()
+
+            const onUpstreamRunCreated = vi.fn()
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await runtime.runTask(makeInput({
+                roleBindings: new Map([
+                    ['planner', { role: 'planner', profileName: 'gpt-4o' }],
+                    ['developer', { role: 'developer', profileName: 'claude-3.5-sonnet' }],
+                    ['reviewer', { role: 'reviewer', profileName: 'gpt-4o' }],
+                    ['delivery', { role: 'delivery', profileName: 'delivery-agent' }],
+                ]),
+                hooks: { onUpstreamRunCreated },
+            }))
+
+            expect(onUpstreamRunCreated).not.toHaveBeenCalled()
+
+            const deliveryCall = vi.mocked(runHermesGatewayTask).mock.calls[3][0]
+            deliveryCall.onUpstreamRunCreated?.('run-delivery-001')
+
+            expect(onUpstreamRunCreated).toHaveBeenCalledTimes(1)
             expect(onUpstreamRunCreated).toHaveBeenCalledWith('run-delivery-001', { role: 'delivery' })
         })
     })
@@ -2402,6 +2729,252 @@ describe('P2: Delivery Agent mode (orchestrated pipeline)', () => {
             }))).rejects.toThrow()
 
             expect(runHermesGatewayTask).toHaveBeenCalledTimes(4)
+        })
+    })
+})
+
+// ─── Phase timeout default + output constraints + diagnostic error tests ──
+
+describe('OrchestratedGatewayRuntime timeout defaults & output constraints', () => {
+    beforeEach(() => {
+        vi.clearAllMocks()
+        vi.spyOn(logger, 'error').mockImplementation(() => {})
+        // Ensure HERMES_AGENT_TIMEOUT_MS is not set
+        delete process.env.HERMES_AGENT_TIMEOUT_MS
+    })
+
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    describe('default orchestrated timeout', () => {
+        it('uses 300000ms as default timeout when HERMES_AGENT_TIMEOUT_MS is not set', async () => {
+            mockDualGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime()
+            await runtime.runTask(makeInput())
+
+            // All three calls should use 300000ms timeout
+            const plannerCall = vi.mocked(runHermesGatewayTask).mock.calls[0][0]
+            const devCall = vi.mocked(runHermesGatewayTask).mock.calls[1][0]
+            const reviewerCall = vi.mocked(runHermesGatewayTask).mock.calls[2][0]
+
+            expect(plannerCall.timeoutMs).toBe(300_000)
+            expect(devCall.timeoutMs).toBe(300_000)
+            expect(reviewerCall.timeoutMs).toBe(300_000)
+        })
+
+        it('constructor with no arguments uses default 300000ms', () => {
+            const runtime = new OrchestratedGatewayRuntime()
+            // Access private field via the gateway task calls — test indirectly
+            // by verifying the constructor does not throw
+            expect(runtime).toBeInstanceOf(OrchestratedGatewayRuntime)
+        })
+
+        it('HERMES_AGENT_TIMEOUT_MS overrides default timeout', async () => {
+            process.env.HERMES_AGENT_TIMEOUT_MS = '60000'
+            mockDualGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime()
+            await runtime.runTask(makeInput())
+
+            const plannerCall = vi.mocked(runHermesGatewayTask).mock.calls[0][0]
+            expect(plannerCall.timeoutMs).toBe(60_000)
+        })
+
+        it('explicit timeoutMs constructor argument overrides env', async () => {
+            process.env.HERMES_AGENT_TIMEOUT_MS = '60000'
+            mockDualGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 120_000)
+            await runtime.runTask(makeInput())
+
+            const plannerCall = vi.mocked(runHermesGatewayTask).mock.calls[0][0]
+            expect(plannerCall.timeoutMs).toBe(120_000)
+        })
+    })
+
+    describe('developer output constraints', () => {
+        it('developer input contains 1200 char limit constraint', async () => {
+            mockDualGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await runtime.runTask(makeInput())
+
+            const devCall = vi.mocked(runHermesGatewayTask).mock.calls[1][0]
+            expect(devCall.input).toContain('1200 字以内')
+        })
+
+        it('developer input contains minimal implementation guidance', async () => {
+            mockDualGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await runtime.runTask(makeInput())
+
+            const devCall = vi.mocked(runHermesGatewayTask).mock.calls[1][0]
+            expect(devCall.input).toContain('最小实现')
+        })
+
+        it('developer input contains fast-fail constraint', async () => {
+            mockDualGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await runtime.runTask(makeInput())
+
+            const devCall = vi.mocked(runHermesGatewayTask).mock.calls[1][0]
+            expect(devCall.input).toContain('不要长时间等待')
+        })
+
+        it('developer instructions contain concise output constraint', async () => {
+            mockDualGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await runtime.runTask(makeInput())
+
+            const devCall = vi.mocked(runHermesGatewayTask).mock.calls[1][0]
+            expect(devCall.instructions).toContain('输出必须简洁')
+        })
+
+        it('developer instructions contain 1200 char limit', async () => {
+            mockDualGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await runtime.runTask(makeInput())
+
+            const devCall = vi.mocked(runHermesGatewayTask).mock.calls[1][0]
+            expect(devCall.instructions).toContain('1200 字以内')
+        })
+
+        it('developer instructions contain fast-fail instruction', async () => {
+            mockDualGatewayRuns()
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 30000)
+            await runtime.runTask(makeInput())
+
+            const devCall = vi.mocked(runHermesGatewayTask).mock.calls[1][0]
+            expect(devCall.instructions).toContain('快速返回')
+        })
+    })
+
+    describe('developer phase diagnostic error fields', () => {
+        it('error message contains role=developer', async () => {
+            vi.mocked(runHermesGatewayTask)
+                .mockResolvedValueOnce({
+                    output: 'Plan',
+                    runId: 'run-p-diag',
+                    sessionId: 'sess-p',
+                })
+                .mockRejectedValueOnce(new Error('dev crash'))
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 300_000)
+            try {
+                await runtime.runTask(makeInput())
+            } catch (err: any) {
+                expect(err.message).toContain('role=developer')
+                expect(err.message).toContain('profile=claude-3.5-sonnet')
+                expect(err.message).toContain('source=role-binding')
+                expect(err.message).toContain('sessionId=agent-room-developer-sess-1-task-1')
+                expect(err.message).toContain('timeoutMs=300000')
+                expect(err.message).toContain('plannerRunId=run-p-diag')
+                expect(err.message).toContain('taskId=task-1')
+                expect(err.message).toContain('dev crash')
+                return
+            }
+            throw new Error('Expected developer phase to throw')
+        })
+
+        it('logger.error called with structured diagnostic fields', async () => {
+            vi.mocked(runHermesGatewayTask)
+                .mockResolvedValueOnce({
+                    output: 'Plan',
+                    runId: 'run-p-diag-logger',
+                    sessionId: 'sess-p',
+                })
+                .mockRejectedValueOnce(new Error('OOM'))
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 300_000)
+            try {
+                await runtime.runTask(makeInput())
+            } catch {
+                // expected
+            }
+
+            expect(logger.error).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    role: 'developer',
+                    profile: 'claude-3.5-sonnet',
+                    source: 'role-binding',
+                    sessionId: 'agent-room-developer-sess-1-task-1',
+                    timeoutMs: 300_000,
+                    plannerRunId: 'run-p-diag-logger',
+                    taskId: 'task-1',
+                }),
+                expect.stringContaining('[orchestrated-runtime] Developer phase failed'),
+            )
+        })
+
+        it('error message does NOT contain apiKey', async () => {
+            vi.mocked(runHermesGatewayTask)
+                .mockResolvedValueOnce({
+                    output: 'Plan',
+                    runId: 'run-p-nokey',
+                    sessionId: 'sess-p',
+                })
+                .mockRejectedValueOnce(new Error('fail'))
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', 'sk-secret-key-123', 300_000)
+            try {
+                await runtime.runTask(makeInput())
+            } catch (err: any) {
+                expect(err.message).not.toContain('sk-secret-key-123')
+                expect(err.message).not.toContain('apiKey')
+                return
+            }
+            throw new Error('Expected developer phase to throw')
+        })
+    })
+
+    describe('planner phase diagnostic error fields', () => {
+        it('error message contains role=planner and diagnostic fields', async () => {
+            vi.mocked(runHermesGatewayTask).mockRejectedValueOnce(new Error('planner boom'))
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 300_000)
+            try {
+                await runtime.runTask(makeInput())
+            } catch (err: any) {
+                expect(err.message).toContain('role=planner')
+                expect(err.message).toContain('profile=gpt-4o')
+                expect(err.message).toContain('source=role-binding')
+                expect(err.message).toContain('sessionId=agent-room-planner-sess-1-task-1')
+                expect(err.message).toContain('timeoutMs=300000')
+                expect(err.message).toContain('taskId=task-1')
+                expect(err.message).toContain('planner boom')
+                return
+            }
+            throw new Error('Expected planner phase to throw')
+        })
+
+        it('logger.error called with structured planner diagnostic fields', async () => {
+            vi.mocked(runHermesGatewayTask).mockRejectedValueOnce(new Error('boom'))
+
+            const runtime = new OrchestratedGatewayRuntime('http://127.0.0.1:8642', null, 300_000)
+            try {
+                await runtime.runTask(makeInput())
+            } catch {
+                // expected
+            }
+
+            expect(logger.error).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    role: 'planner',
+                    profile: 'gpt-4o',
+                    source: 'role-binding',
+                    sessionId: 'agent-room-planner-sess-1-task-1',
+                    timeoutMs: 300_000,
+                    taskId: 'task-1',
+                }),
+                expect.stringContaining('[orchestrated-runtime] Planner phase failed'),
+            )
         })
     })
 })

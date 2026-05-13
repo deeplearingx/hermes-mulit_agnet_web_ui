@@ -15,7 +15,7 @@ function getVitestWorkerId(): string {
 
 // In WSL, always use home directory to avoid cross-filesystem issues
 const DB_DIR = isDev
-  ? resolve(process.cwd(), 'packages/server/data')
+  ? resolve(__dirname, '../../data')
   : resolve(homedir(), '.hermes-web-ui')
 const DB_PATH = isTest
   ? resolve(DB_DIR, `hermes-web-ui-vitest-${getVitestWorkerId()}.db`)

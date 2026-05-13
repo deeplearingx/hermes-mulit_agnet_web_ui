@@ -19,6 +19,10 @@ import type { HermesAgentRuntimeHooks } from './runtime/types'
 export interface RunnerRoleBinding {
     role: AgentRoomRole
     profileName: string
+    /** Optional explicit provider override for Gateway /v1/runs body. */
+    provider?: string
+    /** Optional explicit model override for Gateway /v1/runs body. */
+    model?: string
 }
 
 /**

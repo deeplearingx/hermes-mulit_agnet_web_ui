@@ -107,6 +107,10 @@ export interface AgentRoomRoleBinding {
     role: string
     /** The Hermes profile name used for Gateway resolution. Maps to agent_id column. */
     profileName: string
+    /** Optional explicit provider override for Gateway /v1/runs body. */
+    provider?: string
+    /** Optional explicit model override for Gateway /v1/runs body. */
+    model?: string
     createdAt: string
 }
 
@@ -476,14 +480,16 @@ function mapRoleBindingRow(row: Record<string, unknown>): AgentRoomRoleBinding {
         sessionId: String(row.session_id),
         role: String(row.role),
         profileName: String(row.agent_id),
+        provider: row.provider != null && row.provider !== '' ? String(row.provider) : undefined,
+        model: row.model != null && row.model !== '' ? String(row.model) : undefined,
         createdAt: String(row.created_at),
     }
 }
 
 export function createRoleBinding(binding: AgentRoomRoleBinding): void {
     const db = requireDb()
-    db.prepare(`INSERT INTO ${AR_ROLE_BINDINGS_TABLE} (id, session_id, role, agent_id, created_at) VALUES (?, ?, ?, ?, ?)`)
-        .run(binding.id, binding.sessionId, binding.role, binding.profileName, binding.createdAt)
+    db.prepare(`INSERT INTO ${AR_ROLE_BINDINGS_TABLE} (id, session_id, role, agent_id, provider, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(binding.id, binding.sessionId, binding.role, binding.profileName, binding.provider ?? null, binding.model ?? null, binding.createdAt)
 }
 
 export function getRoleBinding(id: string): AgentRoomRoleBinding | null {
@@ -506,8 +512,8 @@ export function getRoleBindingBySessionAndRole(sessionId: string, role: string):
 
 export function updateRoleBinding(binding: AgentRoomRoleBinding): void {
     const db = requireDb()
-    db.prepare(`UPDATE ${AR_ROLE_BINDINGS_TABLE} SET agent_id = ? WHERE id = ?`)
-        .run(binding.profileName, binding.id)
+    db.prepare(`UPDATE ${AR_ROLE_BINDINGS_TABLE} SET agent_id = ?, provider = ?, model = ? WHERE id = ?`)
+        .run(binding.profileName, binding.provider ?? null, binding.model ?? null, binding.id)
 }
 
 export function deleteRoleBinding(id: string): void {

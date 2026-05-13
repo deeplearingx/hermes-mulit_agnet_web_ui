@@ -296,15 +296,15 @@ describe('Agent Room RunnerResult Protocol', () => {
 
         await expect(svc.runWorkflow(session.id, task.id)).rejects.toThrow(/Invalid step transition/)
 
-        // Verify rollback: task should remain at 'created' (no partial state)
+        // Verify rollback: task reaches terminal failed state without partial step persistence
         const updatedTask = svc.listTasks(session.id).find(t => t.id === task.id)!
-        expect(updatedTask.status).toBe('created')
+        expect(updatedTask.status).toBe('failed')
 
-        // Verify rollback: only the initial task_created event from createTask() should exist
+        // Verify rollback: only task_created + terminal task_failed should exist
         const events = svc.listWorkflowEvents(session.id)
         const taskEvents = events.filter(e => e.taskId === task.id)
-        expect(taskEvents.length).toBe(1)
-        expect(taskEvents[0].type).toBe('task_created')
+        expect(taskEvents).toHaveLength(2)
+        expect(taskEvents.map(e => e.type)).toEqual(['task_created', 'task_failed'])
 
         // Verify rollback: no step messages persisted
         const messages = svc.listMessages(session.id)
@@ -341,15 +341,15 @@ describe('Agent Room RunnerResult Protocol', () => {
 
         await expect(svc.runWorkflow(session.id, task.id)).rejects.toThrow(/not expected for status/)
 
-        // Verify rollback: task should remain at 'created'
+        // Verify rollback: task reaches terminal failed state
         const updatedTask = svc.listTasks(session.id).find(t => t.id === task.id)!
-        expect(updatedTask.status).toBe('created')
+        expect(updatedTask.status).toBe('failed')
 
-        // Verify rollback: only the initial task_created event from createTask() should exist
+        // Verify rollback: only task_created + terminal task_failed should exist
         const events = svc.listWorkflowEvents(session.id)
         const taskEvents = events.filter(e => e.taskId === task.id)
-        expect(taskEvents.length).toBe(1)
-        expect(taskEvents[0].type).toBe('task_created')
+        expect(taskEvents).toHaveLength(2)
+        expect(taskEvents.map(e => e.type)).toEqual(['task_created', 'task_failed'])
 
         resetActiveRunnerForTest()
     })
@@ -375,15 +375,15 @@ describe('Agent Room RunnerResult Protocol', () => {
 
         await expect(svc.runWorkflow(session.id, task.id)).rejects.toThrow(/events require status/)
 
-        // Verify rollback: task should remain at 'created'
+        // Verify rollback: task reaches terminal failed state
         const updatedTask = svc.listTasks(session.id).find(t => t.id === task.id)!
-        expect(updatedTask.status).toBe('created')
+        expect(updatedTask.status).toBe('failed')
 
-        // Verify rollback: no events persisted (only task_created from createTask)
+        // Verify rollback: only task_created + terminal task_failed should exist
         const events = svc.listWorkflowEvents(session.id)
         const taskEvents = events.filter(e => e.taskId === task.id)
-        expect(taskEvents.length).toBe(1)
-        expect(taskEvents[0].type).toBe('task_created')
+        expect(taskEvents).toHaveLength(2)
+        expect(taskEvents.map(e => e.type)).toEqual(['task_created', 'task_failed'])
 
         resetActiveRunnerForTest()
     })
@@ -433,15 +433,15 @@ describe('Agent Room RunnerResult Protocol', () => {
 
         await expect(svc.runWorkflow(session.id, task.id)).rejects.toThrow(/Invalid step transition/)
 
-        // Verify rollback: task should remain at 'created' (no partial state)
+        // Verify rollback: task reaches terminal failed state without partial state
         const updatedTask = svc.listTasks(session.id).find(t => t.id === task.id)!
-        expect(updatedTask.status).toBe('created')
+        expect(updatedTask.status).toBe('failed')
 
-        // Verify rollback: only the initial task_created event from createTask() should exist
+        // Verify rollback: only task_created + terminal task_failed should exist
         const events = svc.listWorkflowEvents(session.id)
         const taskEvents = events.filter(e => e.taskId === task.id)
-        expect(taskEvents.length).toBe(1)
-        expect(taskEvents[0].type).toBe('task_created')
+        expect(taskEvents).toHaveLength(2)
+        expect(taskEvents.map(e => e.type)).toEqual(['task_created', 'task_failed'])
 
         // Verify rollback: no step messages persisted
         const messages = svc.listMessages(session.id)

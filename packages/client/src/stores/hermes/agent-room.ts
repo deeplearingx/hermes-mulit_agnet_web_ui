@@ -570,11 +570,11 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         }
     }
 
-    async function saveRoleBinding(role: AgentRoomRole, profileName: string) {
+    async function saveRoleBinding(role: AgentRoomRole, profileName: string, provider?: string, model?: string) {
         if (!currentSessionId.value) return null
         error.value = null
         try {
-            const binding = await apiSetRoleBinding(currentSessionId.value, role, profileName)
+            const binding = await apiSetRoleBinding(currentSessionId.value, role, profileName, provider, model)
             // Upsert locally: replace existing or append
             const idx = roleBindings.value.findIndex(b => b.role === role)
             if (idx >= 0) {

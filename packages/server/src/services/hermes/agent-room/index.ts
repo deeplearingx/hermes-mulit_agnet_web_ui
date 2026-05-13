@@ -158,12 +158,12 @@ const EXPECTED_EVENTS_FOR_STATUS: Partial<Record<AgentRoomTaskStatus, AgentRoomW
 // review_rejected is a TRANSIENT state — submitReview always immediately
 // transitions it to either revision_required or need_user_decision.
 const VALID_TRANSITIONS: Record<AgentRoomTaskStatus, AgentRoomTaskStatus[]> = {
-    created: ['planned'],
-    planned: ['assigned'],
-    assigned: ['in_progress'],
+    created: ['planned', 'failed'],
+    planned: ['assigned', 'failed'],
+    assigned: ['in_progress', 'failed'],
     in_progress: ['submitted_for_review', 'failed'],
-    submitted_for_review: ['review_passed', 'review_rejected'],
-    review_passed: ['delivering'],
+    submitted_for_review: ['review_passed', 'review_rejected', 'failed'],
+    review_passed: ['delivering', 'failed'],
     review_rejected: ['revision_required', 'need_user_decision'],
     revision_required: ['in_progress'],
     delivering: ['completed', 'failed'],
@@ -725,6 +725,21 @@ function roleToPhase(role: AgentRoomRole): string {
     }
 }
 
+
+function resolveFallbackProfileName(task: AgentRoomTask): string {
+    return task.assignedAgentId || process.env.AGENT_ROOM_ASSIGNED_AGENT_ID || 'default'
+}
+
+function ensureEffectiveRoleBinding(
+    bindings: Map<AgentRoomRole, RunnerRoleBinding>,
+    role: 'planner' | 'developer' | 'reviewer',
+    task: AgentRoomTask,
+): void {
+    if (!bindings.has(role)) {
+        bindings.set(role, { role, profileName: resolveFallbackProfileName(task) })
+    }
+}
+
 /**
  * Create role run records for each bound role in a workflow run.
  * Returns the created role runs in binding order (planner → developer → reviewer → delivery).
@@ -940,25 +955,24 @@ async function executeRun(
     const bindings = store.listRoleBindingsBySession(sessionId)
     const roleBindings = new Map<AgentRoomRole, RunnerRoleBinding>()
     for (const b of bindings) {
-        roleBindings.set(b.role as AgentRoomRole, { role: b.role as AgentRoomRole, profileName: b.profileName })
+        roleBindings.set(b.role as AgentRoomRole, {
+            role: b.role as AgentRoomRole,
+            profileName: b.profileName,
+            provider: b.provider,
+            model: b.model,
+        })
     }
 
-    // P1: Compute effective role bindings ensuring role_runs match what the runtime will actually execute.
-    // The runtime (resolveDeveloperBinding) has its own resolution, but this map is for ROLE_RUN CREATION ONLY —
-    // it ensures the observability layer doesn't miss a role that will execute.
-    // Planner/reviewer are already covered by the binding map; if they are missing the runtime throws,
-    // so we do NOT auto-create planner/reviewer role_runs (no false records).
+    // P8: Compute effective role bindings ensuring role_runs match what the runtime will actually execute.
+    // Planner/developer/reviewer all execute with an explicit binding or the active Hermes profile fallback.
+    // Delivery remains optional and is only tracked when explicitly bound because missing delivery uses system delivery.
     const effectiveRoleBindings = new Map(roleBindings)
-    if (!effectiveRoleBindings.has('developer')) {
-        // Developer: if not explicitly bound, use assignedAgentId or 'default' profile.
-        // This mirrors resolveDeveloperBinding() behavior but always produces a concrete
-        // profileName so the role_run record is meaningful.
-        const devProfile = task.assignedAgentId || 'default'
-        effectiveRoleBindings.set('developer', { role: 'developer' as AgentRoomRole, profileName: devProfile })
-    }
+    ensureEffectiveRoleBinding(effectiveRoleBindings, 'planner', task)
+    ensureEffectiveRoleBinding(effectiveRoleBindings, 'developer', task)
+    ensureEffectiveRoleBinding(effectiveRoleBindings, 'reviewer', task)
 
     // effectiveRoleBindings is used ONLY for role_run creation.
-    // The original roleBindings is passed to the runner context — runtime resolution remains independent.
+    // The original roleBindings is passed to the runner context — runtime fallback resolution remains independent.
     const roleRuns = createRoleRunsForRun(run, effectiveRoleBindings)
 
     try {
@@ -1033,6 +1047,26 @@ async function executeRun(
 
         // P3.3: Finalize role runs — mark active one as failed, skip remaining
         finalizeRoleRuns(roleRuns, 'failed', err?.message)
+
+        // Mark task as failed so frontend can display error details.
+        // Only transition if the current status allows → failed (respects state machine).
+        try {
+            const failedTask = store.getTask(taskId) as AgentRoomTask | null
+            if (failedTask && failedTask.status !== 'completed' && failedTask.status !== 'failed') {
+                const allowedTransitions = VALID_TRANSITIONS[failedTask.status]
+                if (allowedTransitions.includes('failed')) {
+                    store.runInTransaction(() => {
+                        failedTask.status = 'failed'
+                        failedTask.updatedAt = new Date().toISOString()
+                        store.updateTask(failedTask as store.AgentRoomTask)
+                        emitEventAndMessage(sessionId, taskId, 'task_failed', 'conversation', failedTask.title, {
+                            error: err?.message ?? 'Unknown error',
+                            runId: run.id,
+                        })
+                    })
+                }
+            }
+        } catch { /* non-critical — swallow */ }
 
         if (rethrow) {
             throw err
@@ -1453,6 +1487,10 @@ export interface AgentRoomRoleBinding {
     role: AgentRoomRole
     /** The Hermes profile name used for Gateway resolution. Maps to agent_id column. */
     profileName: string
+    /** Optional explicit provider override for Gateway /v1/runs body. */
+    provider?: string
+    /** Optional explicit model override for Gateway /v1/runs body. */
+    model?: string
     createdAt: string
 }
 
@@ -1462,7 +1500,7 @@ function normalizeProfileName(profileName: string): string {
     return normalized
 }
 
-export function createRoleBinding(sessionId: string, role: AgentRoomRole, profileName: string): AgentRoomRoleBinding {
+export function createRoleBinding(sessionId: string, role: AgentRoomRole, profileName: string, provider?: string, model?: string): AgentRoomRoleBinding {
     assertSessionExists(sessionId)
     assertAgentRoomRole(role)
     const normalized = normalizeProfileName(profileName)
@@ -1475,6 +1513,8 @@ export function createRoleBinding(sessionId: string, role: AgentRoomRole, profil
         sessionId,
         role,
         profileName: normalized,
+        provider: provider?.trim() || undefined,
+        model: model?.trim() || undefined,
         createdAt: new Date().toISOString(),
     }
     store.runInTransaction(() => {
@@ -1488,20 +1528,26 @@ export function createRoleBinding(sessionId: string, role: AgentRoomRole, profil
  * Upsert a role binding: create if not exists, update profileName if exists.
  * Preferred API for frontend/UI callers.
  */
-export function setRoleBinding(sessionId: string, role: AgentRoomRole, profileName: string): AgentRoomRoleBinding {
+export function setRoleBinding(sessionId: string, role: AgentRoomRole, profileName: string, provider?: string, model?: string): AgentRoomRoleBinding {
     assertSessionExists(sessionId)
     assertAgentRoomRole(role)
     const normalized = normalizeProfileName(profileName)
     const existing = store.getRoleBindingBySessionAndRole(sessionId, role)
     if (existing) {
-        const updated: AgentRoomRoleBinding = { ...existing, role: existing.role as AgentRoomRole, profileName: normalized }
+        const updated: AgentRoomRoleBinding = {
+            ...existing,
+            role: existing.role as AgentRoomRole,
+            profileName: normalized,
+            provider: provider?.trim() || undefined,
+            model: model?.trim() || undefined,
+        }
         store.runInTransaction(() => {
             store.updateRoleBinding(updated)
             store.updateSessionTimestamp(sessionId)
         })
         return updated
     }
-    return createRoleBinding(sessionId, role, normalized)
+    return createRoleBinding(sessionId, role, normalized, provider, model)
 }
 
 export function listRoleBindings(sessionId: string): AgentRoomRoleBinding[] {

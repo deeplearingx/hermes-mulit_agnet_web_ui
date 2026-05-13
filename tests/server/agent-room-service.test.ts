@@ -1684,7 +1684,7 @@ describe('Agent Room Service', () => {
       expect(devRun!.profileName).toBe('explicit-dev-profile')
     })
 
-    it('planner role_run is NOT auto-created when planner binding is missing', async () => {
+    it('planner role_run is auto-created when planner binding is missing', async () => {
       const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
       const store = await import('../../packages/server/src/db/hermes/agent-room-store')
 
@@ -1699,10 +1699,11 @@ describe('Agent Room Service', () => {
       // should already reflect the correct state.
       await svc.runWorkflow(session.id, task.id)
 
-      // Verify: no planner role_run was auto-created
+      // Verify: planner role_run WAS auto-created for fallback observability
       const roleRuns = store.listRoleRunsByTask(task.id)
       const plannerRun = roleRuns.find(r => r.role === 'planner')
-      expect(plannerRun).toBeUndefined()
+      expect(plannerRun).toBeDefined()
+      expect(plannerRun!.profileName).toBe('dev-agent')
 
       // Verify: developer role_run WAS auto-created (effective fallback)
       const devRun = roleRuns.find(r => r.role === 'developer')

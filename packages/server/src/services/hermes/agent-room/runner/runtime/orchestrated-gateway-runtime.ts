@@ -4,7 +4,7 @@
 //
 // P4.11-A3: Planner-only Gateway run.
 // P4.11-A4: Planner → developer dual-run orchestration.
-//   - Resolves planner profile from roleBindings.get('planner')
+//   - Resolves planner profile from roleBindings.get('planner') with active profile fallback
 //   - Executes planner Gateway run, captures output as plan
 //   - Resolves developer profile from roleBindings.get('developer')
 //     with fallback to assignedAgentId (matching GatewayHermesRuntime convention)
@@ -19,7 +19,7 @@
 //   - run.upstreamRunId ends with developer's run ID (last-wins, developer is primary execution role)
 //
 // P2: Reviewer phase — extends multi-role pipeline to planner → developer → reviewer.
-//   - Resolves reviewer profile from roleBindings.get('reviewer')
+//   - Resolves reviewer profile from roleBindings.get('reviewer') with active profile fallback
 //   - Executes reviewer Gateway run using developer output as review context
 //   - Produces unified reviewer metadata (reviewerRunId, reviewerProfileName,
 //     reviewDecision, reviewFeedback) compatible with manual submitReview path
@@ -46,12 +46,17 @@ import type {
 import type { GatewayProfileResolver, GatewayRuntimeTarget } from './gateway-profile-resolver'
 import { createDefaultGatewayProfileResolver } from './gateway-profile-resolver'
 import { runHermesGatewayTask } from '../../../gateway-run-client'
+import { inferProvider, inferProviderForProfile } from '../../../../../shared/infer-provider'
 import { config } from '../../../../../config'
+import { logger } from '../../../../logger'
 
 const UPSTREAM = config.upstream.replace(/\/$/, '')
 
+/** Default orchestrated timeout: 300s (up from 120s to accommodate real model latency). */
+const DEFAULT_ORCHESTRATED_TIMEOUT_MS = 300_000
+
 function parseEnvTimeoutMs(): number {
-    const parsed = Number(process.env.HERMES_AGENT_TIMEOUT_MS ?? 120000)
+    const parsed = Number(process.env.HERMES_AGENT_TIMEOUT_MS ?? DEFAULT_ORCHESTRATED_TIMEOUT_MS)
     if (!Number.isFinite(parsed) || parsed <= 0) {
         throw new Error(`Invalid HERMES_AGENT_TIMEOUT_MS: "${process.env.HERMES_AGENT_TIMEOUT_MS}"`)
     }
@@ -79,41 +84,98 @@ export interface OrchestratedRuntimeConfig {
     // Reserved for future batches — per-role orchestration configuration
 }
 
-/**
- * Resolve the planner profileName from roleBindings.
- * Throws explicitly if the planner binding is missing.
- */
-function resolvePlannerBinding(input: HermesAgentRuntimeInput): string {
-    const binding = input.roleBindings?.get('planner')
-    if (!binding) {
-        throw new Error(
-            'OrchestratedGatewayRuntime requires a planner role binding. ' +
-            'Ensure roleBindings.get("planner") is set before starting an orchestrated run.',
-        )
-    }
-    return binding.profileName
+type RoleBindingSource = 'role-binding' | 'assigned-agent' | 'env-assigned-agent' | 'active-profile'
+
+interface ResolvedRoleBinding {
+    profileName: string | undefined
+    bindingSource: RoleBindingSource
+    /** Optional explicit provider override from role binding. */
+    provider?: string
+    /** Optional explicit model override from role binding. */
+    model?: string
 }
 
-/**
- * Resolve the developer profileName from roleBindings with fallback.
- *
- * Resolution priority (matching GatewayHermesRuntime convention):
- *   1. roleBindings.get('developer') → profileName
- *   2. assignedAgentId fallback
- *   3. undefined (constructor defaults via profile resolver)
- */
-function resolveDeveloperBinding(input: HermesAgentRuntimeInput): {
-    profileName: string | undefined
-    bindingSource: 'role-binding' | 'assigned-agent' | 'none'
-} {
-    const binding = input.roleBindings?.get('developer')
-    if (binding) {
-        return { profileName: binding.profileName, bindingSource: 'role-binding' }
-    }
+function resolveActiveProfileFallback(input: HermesAgentRuntimeInput): ResolvedRoleBinding {
     if (input.assignedAgentId) {
         return { profileName: input.assignedAgentId, bindingSource: 'assigned-agent' }
     }
-    return { profileName: undefined, bindingSource: 'none' }
+    if (process.env.AGENT_ROOM_ASSIGNED_AGENT_ID) {
+        return { profileName: process.env.AGENT_ROOM_ASSIGNED_AGENT_ID, bindingSource: 'env-assigned-agent' }
+    }
+    return { profileName: undefined, bindingSource: 'active-profile' }
+}
+
+/**
+ * Resolve a role profileName from explicit role binding or current active Hermes profile.
+ *
+ * Resolution priority:
+ *   1. roleBindings.get(role) → explicit profileName
+ *   2. task/input assignedAgentId
+ *   3. AGENT_ROOM_ASSIGNED_AGENT_ID
+ *   4. undefined, letting GatewayManager/default resolver pick the active profile
+ */
+function resolveExecutableRoleBinding(input: HermesAgentRuntimeInput, role: 'planner' | 'developer' | 'reviewer'): ResolvedRoleBinding {
+    const binding = input.roleBindings?.get(role)
+    if (binding) {
+        return {
+            profileName: binding.profileName,
+            bindingSource: 'role-binding',
+            provider: binding.provider,
+            model: binding.model,
+        }
+    }
+    return resolveActiveProfileFallback(input)
+}
+
+function displayProfileName(resolved: ResolvedRoleBinding): string {
+    return resolved.profileName ?? '(active-profile)'
+}
+
+interface ResolvedGatewayRunTarget extends GatewayRuntimeTarget {
+    providerInferred: boolean
+}
+
+/**
+ * Resolve the final provider/model pair for a Gateway run.
+ *
+ * Priority:
+ *   1. binding.provider / binding.model (explicit from role binding)
+ *   2. If no model override, reuse profileResolver's provider
+ *   3. If final model exists but provider is still missing → inferProviderForProfile() then inferProvider()
+ *
+ * Returns a new GatewayRuntimeTarget with the exact model/provider that should
+ * be sent to /v1/runs.
+ */
+async function resolveGatewayRunTarget(
+    target: GatewayRuntimeTarget,
+    binding: ResolvedRoleBinding,
+): Promise<ResolvedGatewayRunTarget> {
+    const modelOverride = binding.model?.trim() || undefined
+    const providerOverride = binding.provider?.trim() || undefined
+
+    const finalModel = modelOverride ?? target.model
+    let finalProvider = providerOverride
+    let providerInferred = false
+
+    if (!finalProvider && finalModel) {
+        if (!modelOverride) {
+            finalProvider = target.provider
+        }
+        if (!finalProvider) {
+            finalProvider = await inferProviderForProfile(binding.profileName, finalModel)
+        }
+        if (!finalProvider) {
+            finalProvider = await inferProvider(finalModel)
+        }
+        providerInferred = !!finalProvider
+    }
+
+    return {
+        ...target,
+        model: finalModel,
+        provider: finalProvider,
+        providerInferred,
+    }
 }
 
 /**
@@ -161,7 +223,10 @@ function buildDeveloperInput(input: HermesAgentRuntimeInput, plannerPlan: string
         '--- 计划结束 ---',
         '',
         '请根据上述执行计划，完成任务的具体实现。',
-        '请返回清晰的执行结果、关键步骤、产物说明和需要审核的内容。',
+        '请优先给出可验证的最小实现结果，不要展开冗长推理。',
+        '输出请控制在 1200 字以内，包含：执行结果、关键变更、验证建议、风险。',
+        '不要代替审核 Agent 输出审核结论，不要伪造 reviewer/review JSON、approved 结论或验收结果。',
+        '如果任务需要实际代码修改但当前运行环境不能修改文件，请明确说明限制和建议的最小补丁，不要长时间等待。',
     ]
     return parts.join('\n')
 }
@@ -175,26 +240,15 @@ function buildDeveloperInstructions(input: HermesAgentRuntimeInput): string {
         '你是 AgentRoom 中的开发 Agent。',
         '你将收到由规划 Agent 制定的执行计划，请根据计划完成任务实现。',
         '你只需要完成任务执行，不要输出 AgentRoom 状态机字段。',
+        '不要代替审核 Agent 做验收，不要输出 reviewer 视角的结论或 JSON。',
+        '输出必须简洁，不要输出长篇思考过程。',
+        '请在 1200 字以内返回结果，避免生成过长内容导致 Gateway 超时。',
+        '如果无法完成，快速返回阻塞原因和下一步，不要无限等待。',
         '请返回清晰的执行结果、关键步骤、产物说明和需要审核的内容。',
         `当前任务：${input.taskTitle}`,
     ].join('\n')
 }
 
-/**
- * Resolve the reviewer profileName from roleBindings.
- * Throws explicitly if the reviewer binding is missing (reviewer phase is mandatory
- * in full pipeline mode).
- */
-function resolveReviewerBinding(input: HermesAgentRuntimeInput): string {
-    const binding = input.roleBindings?.get('reviewer')
-    if (!binding) {
-        throw new Error(
-            'OrchestratedGatewayRuntime reviewer phase requires a reviewer role binding. ' +
-            'Ensure roleBindings.get("reviewer") is set before starting an orchestrated run.',
-        )
-    }
-    return binding.profileName
-}
 
 /**
  * Build reviewer-specific input text for the Gateway run.
@@ -263,6 +317,21 @@ function resolveDeliveryBinding(input: HermesAgentRuntimeInput): string | null {
 }
 
 /**
+ * Resolve delivery binding with provider/model overrides.
+ * Returns a ResolvedRoleBinding for final Gateway run target resolution.
+ */
+function resolveDeliveryBindingFull(input: HermesAgentRuntimeInput): ResolvedRoleBinding | null {
+    const binding = input.roleBindings?.get('delivery')
+    if (!binding?.profileName) return null
+    return {
+        profileName: binding.profileName,
+        bindingSource: 'role-binding',
+        provider: binding.provider,
+        model: binding.model,
+    }
+}
+
+/**
  * P2: Build delivery-specific input text for the Gateway run.
  * Provides the delivery Agent with planner plan, developer output, and reviewer feedback.
  */
@@ -328,6 +397,7 @@ function buildRevisionDeveloperInput(input: HermesAgentRuntimeInput): string {
     parts.push(
         '',
         '请返回清晰的执行结果、关键步骤、产物说明和需要审核的内容。',
+        '不要代替审核 Agent 输出审核结论，不要伪造 reviewer/review JSON、approved 结论或验收结果。',
     )
     return parts.join('\n')
 }
@@ -342,6 +412,7 @@ function buildRevisionDeveloperInstructions(input: HermesAgentRuntimeInput): str
         '你将收到上一轮审核的反馈，请根据反馈修改你的实现。',
         '不要重新执行整个任务，只需针对审核反馈进行修正。',
         '你只需要完成任务执行，不要输出 AgentRoom 状态机字段。',
+        '不要代替审核 Agent 做验收，不要输出 reviewer 视角的结论或 JSON。',
         '请返回清晰的执行结果、关键步骤、产物说明和需要审核的内容。',
         `当前任务：${input.taskTitle}`,
         `修订轮次：${input.revisionRound}`,
@@ -507,19 +578,29 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         // ── Phase 1: Planner run (created path) ───────────────────
 
-        // Step 1: Resolve planner binding — fail explicitly if missing
-        const plannerProfileName = resolvePlannerBinding(input)
+        // Step 1: Resolve planner binding or fall back to the current active Hermes profile
+        const plannerBinding = resolveExecutableRoleBinding(input, 'planner')
+        const plannerProfileName = plannerBinding.profileName
 
-        // Step 2: Resolve planner Gateway target via profile resolver
-        const plannerTarget = this.profileResolver(
+        // Step 2: Resolve planner Gateway target via profile resolver + binding overrides
+        const plannerTargetRaw = this.profileResolver(
             plannerProfileName,
             this.upstream,
             this.apiKey,
         )
+        const plannerTarget = await resolveGatewayRunTarget(plannerTargetRaw, plannerBinding)
 
         // Step 3: Execute planner Gateway run with role-tagged hooks
         const plannerSessionId = `agent-room-planner-${input.sessionId}-${input.taskId}`
         const plannerHooks = createRoleTaggedHooks(input.hooks, 'planner')
+        logger.info({
+            role: 'planner',
+            profile: displayProfileName(plannerBinding),
+            source: plannerBinding.bindingSource,
+            model: plannerTarget.model,
+            provider: plannerTarget.provider,
+            providerInferred: plannerTarget.providerInferred,
+        }, '[orchestrated-runtime] Resolved planner Gateway target')
 
         let plannerResult: Awaited<ReturnType<typeof runHermesGatewayTask>>
         try {
@@ -536,31 +617,48 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                 onRawEvent: plannerHooks?.onRawEvent,
             })
         } catch (err: any) {
-            console.error(
-                `[orchestrated-runtime] Planner phase failed (profile=${plannerProfileName}, task=${input.taskId}):`,
-                err?.message ?? err,
+            const plannerDiag = {
+                role: 'planner',
+                profile: displayProfileName(plannerBinding),
+                source: plannerBinding.bindingSource,
+                sessionId: plannerSessionId,
+                timeoutMs: this.timeoutMs,
+                taskId: input.taskId,
+            }
+            logger.error(
+                { err, ...plannerDiag },
+                '[orchestrated-runtime] Planner phase failed',
             )
             throw new Error(
-                `Orchestrated planner phase failed: ${err?.message ?? err}`,
+                `Orchestrated planner phase failed [role=planner, profile=${plannerDiag.profile}, source=${plannerDiag.source}, sessionId=${plannerDiag.sessionId}, timeoutMs=${plannerDiag.timeoutMs}, taskId=${plannerDiag.taskId}]: ${err?.message ?? err}`,
             )
         }
 
         // ── Phase 2: Developer run ────────────────────────────────
 
         // Step 4: Resolve developer binding — fallback to assignedAgentId or defaults
-        const { profileName: developerProfileName, bindingSource: developerBindingSource } =
-            resolveDeveloperBinding(input)
+        const developerBinding = resolveExecutableRoleBinding(input, 'developer')
+        const { profileName: developerProfileName, bindingSource: developerBindingSource } = developerBinding
 
-        // Step 5: Resolve developer Gateway target via profile resolver
-        const developerTarget = this.profileResolver(
+        // Step 5: Resolve developer Gateway target via profile resolver + binding overrides
+        const developerTargetRaw = this.profileResolver(
             developerProfileName,
             this.upstream,
             this.apiKey,
         )
+        const developerTarget = await resolveGatewayRunTarget(developerTargetRaw, developerBinding)
 
         // Step 6: Execute developer Gateway run with planner output as plan context
         const developerSessionId = `agent-room-developer-${input.sessionId}-${input.taskId}`
         const developerHooks = createRoleTaggedHooks(input.hooks, 'developer')
+        logger.info({
+            role: 'developer',
+            profile: displayProfileName(developerBinding),
+            source: developerBindingSource,
+            model: developerTarget.model,
+            provider: developerTarget.provider,
+            providerInferred: developerTarget.providerInferred,
+        }, '[orchestrated-runtime] Resolved developer Gateway target')
 
         let developerResult: Awaited<ReturnType<typeof runHermesGatewayTask>>
         try {
@@ -577,30 +675,49 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                 onRawEvent: developerHooks?.onRawEvent,
             })
         } catch (err: any) {
-            console.error(
-                `[orchestrated-runtime] Developer phase failed (profile=${developerProfileName ?? '(default)'}, plannerRunId=${plannerResult.runId}, task=${input.taskId}):`,
-                err?.message ?? err,
+            const diag = {
+                role: 'developer',
+                profile: displayProfileName(developerBinding),
+                source: developerBindingSource,
+                sessionId: developerSessionId,
+                timeoutMs: this.timeoutMs,
+                plannerRunId: plannerResult.runId,
+                taskId: input.taskId,
+            }
+            logger.error(
+                { err, ...diag },
+                '[orchestrated-runtime] Developer phase failed',
             )
             throw new Error(
-                `Orchestrated developer phase failed: ${err?.message ?? err}`,
+                `Orchestrated developer phase failed [role=developer, profile=${diag.profile}, source=${diag.source}, sessionId=${diag.sessionId}, timeoutMs=${diag.timeoutMs}, plannerRunId=${diag.plannerRunId}, taskId=${diag.taskId}]: ${err?.message ?? err}`,
             )
         }
 
         // ── Phase 3: Reviewer run ────────────────────────────────
 
-        // Step 7: Resolve reviewer binding — fail explicitly if missing
-        const reviewerProfileName = resolveReviewerBinding(input)
+        // Step 7: Resolve reviewer binding or fall back to the current active Hermes profile
+        const reviewerBinding = resolveExecutableRoleBinding(input, 'reviewer')
+        const reviewerProfileName = reviewerBinding.profileName
 
-        // Step 8: Resolve reviewer Gateway target via profile resolver
-        const reviewerTarget = this.profileResolver(
+        // Step 8: Resolve reviewer Gateway target via profile resolver + binding overrides
+        const reviewerTargetRaw = this.profileResolver(
             reviewerProfileName,
             this.upstream,
             this.apiKey,
         )
+        const reviewerTarget = await resolveGatewayRunTarget(reviewerTargetRaw, reviewerBinding)
 
         // Step 9: Execute reviewer Gateway run using developer output as review context
         const reviewerSessionId = `agent-room-reviewer-${input.sessionId}-${input.taskId}`
         const reviewerHooks = createRoleTaggedHooks(input.hooks, 'reviewer')
+        logger.info({
+            role: 'reviewer',
+            profile: displayProfileName(reviewerBinding),
+            source: reviewerBinding.bindingSource,
+            model: reviewerTarget.model,
+            provider: reviewerTarget.provider,
+            providerInferred: reviewerTarget.providerInferred,
+        }, '[orchestrated-runtime] Resolved reviewer Gateway target')
 
         let reviewerResult: Awaited<ReturnType<typeof runHermesGatewayTask>>
         try {
@@ -617,9 +734,9 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                 onRawEvent: reviewerHooks?.onRawEvent,
             })
         } catch (err: any) {
-            console.error(
-                `[orchestrated-runtime] Reviewer phase failed (profile=${reviewerProfileName}, developerRunId=${developerResult.runId}, task=${input.taskId}):`,
-                err?.message ?? err,
+            logger.error(
+                { err, profile: displayProfileName(reviewerBinding), source: reviewerBinding.bindingSource, developerRunId: developerResult.runId, taskId: input.taskId },
+                '[orchestrated-runtime] Reviewer phase failed',
             )
             throw new Error(
                 `Orchestrated reviewer phase failed: ${err?.message ?? err}`,
@@ -642,15 +759,25 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
         let deliveryProfile: string | null = null
 
         if (reviewDecision === 'approved') {
-            deliveryProfile = resolveDeliveryBinding(input)
-            if (deliveryProfile) {
-                const deliveryTarget = this.profileResolver(
+            const deliveryBindingFull = resolveDeliveryBindingFull(input)
+            deliveryProfile = deliveryBindingFull?.profileName ?? null
+            if (deliveryProfile && deliveryBindingFull) {
+                const deliveryTargetRaw = this.profileResolver(
                     deliveryProfile,
                     this.upstream,
                     this.apiKey,
                 )
+                const deliveryTarget = await resolveGatewayRunTarget(deliveryTargetRaw, deliveryBindingFull)
                 const deliverySessionId = `agent-room-delivery-${input.sessionId}-${input.taskId}`
                 const deliveryHooks = createRoleTaggedHooks(input.hooks, 'delivery')
+                logger.info({
+                    role: 'delivery',
+                    profile: deliveryProfile,
+                    source: deliveryBindingFull.bindingSource,
+                    model: deliveryTarget.model,
+                    provider: deliveryTarget.provider,
+                    providerInferred: deliveryTarget.providerInferred,
+                }, '[orchestrated-runtime] Resolved delivery Gateway target')
 
                 try {
                     const deliveryResult = await runHermesGatewayTask({
@@ -667,13 +794,10 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                     })
                     deliveryRunId = deliveryResult.runId
                     deliveryOutput = deliveryResult.output
-
-                    // Notify hooks for observability
-                    input.hooks?.onUpstreamRunCreated?.(deliveryResult.runId, { role: 'delivery' })
                 } catch (err: any) {
-                    console.error(
-                        `[orchestrated-runtime] Delivery phase failed (profile=${deliveryProfile}, task=${input.taskId}):`,
-                        err?.message ?? err,
+                    logger.error(
+                        { err, profile: deliveryProfile, taskId: input.taskId },
+                        '[orchestrated-runtime] Delivery phase failed',
                     )
                     throw new Error(
                         `Orchestrated delivery phase failed: ${err?.message ?? err}`,
@@ -687,7 +811,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
         // Step 11: Build dual-run metadata
         const plannerMetadata: HermesAgentRuntimeMetadata = {
             plannerRunId: plannerResult.runId,
-            plannerProfileName,
+            plannerProfileName: displayProfileName(plannerBinding),
+            plannerBindingSource: plannerBinding.bindingSource,
             plannerSource: 'orchestrated-planner',
         }
         if (plannerTarget.model) plannerMetadata.plannerModel = plannerTarget.model
@@ -698,7 +823,7 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         const developerMetadata: HermesAgentRuntimeMetadata = {
             developerRunId: developerResult.runId,
-            developerProfileName: developerProfileName ?? '(default)',
+            developerProfileName: displayProfileName(developerBinding),
             developerSource: 'orchestrated-developer',
             developerBindingSource,
         }
@@ -712,7 +837,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
         // P5.2: includes issues and confidence from structured JSON output
         const reviewerMetadata: HermesAgentRuntimeMetadata = {
             reviewerRunId: reviewerResult.runId,
-            reviewerProfileName,
+            reviewerProfileName: displayProfileName(reviewerBinding),
+            reviewerBindingSource: reviewerBinding.bindingSource,
             reviewDecision,
             reviewFeedback,
             reviewIssues: reviewerParsed.issues,
@@ -814,7 +940,7 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                         type: 'task_assigned',
                         agentRole: 'developer',
                         payload: {
-                            developerProfileName: developerProfileName ?? '(default)',
+                            developerProfileName: displayProfileName(developerBinding),
                             developerBindingSource,
                         },
                     }],
@@ -862,7 +988,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                             agentRole: 'reviewer' as const,
                             payload: {
                                 reviewerRunId: reviewerResult.runId,
-                                reviewerProfileName,
+                                reviewerProfileName: displayProfileName(reviewerBinding),
+                                reviewerBindingSource: reviewerBinding.bindingSource,
                                 reviewDecision,
                                 reviewFeedback,
                             },
@@ -875,7 +1002,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                             content: reviewFeedback,
                             metadata: {
                                 reviewerRunId: reviewerResult.runId,
-                                reviewerProfileName,
+                                reviewerProfileName: displayProfileName(reviewerBinding),
+                                reviewerBindingSource: reviewerBinding.bindingSource,
                                 reviewDecision,
                             },
                         }],
@@ -890,7 +1018,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                                 agentRole: 'reviewer' as const,
                                 payload: {
                                     reviewerRunId: reviewerResult.runId,
-                                    reviewerProfileName,
+                                    reviewerProfileName: displayProfileName(reviewerBinding),
+                                    reviewerBindingSource: reviewerBinding.bindingSource,
                                     reviewDecision,
                                     reviewFeedback,
                                     revisionRound: input.revisionRound,
@@ -904,7 +1033,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                                 content: `❌ 审核驳回：${reviewFeedback}`,
                                 metadata: {
                                     reviewerRunId: reviewerResult.runId,
-                                    reviewerProfileName,
+                                    reviewerProfileName: displayProfileName(reviewerBinding),
+                                    reviewerBindingSource: reviewerBinding.bindingSource,
                                     reviewDecision,
                                 },
                             }],
@@ -918,7 +1048,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                                 agentRole: 'reviewer' as const,
                                 payload: {
                                     reviewerRunId: reviewerResult.runId,
-                                    reviewerProfileName,
+                                    reviewerProfileName: displayProfileName(reviewerBinding),
+                                    reviewerBindingSource: reviewerBinding.bindingSource,
                                     reviewDecision,
                                     reviewFeedback,
                                     revisionRound: input.revisionRound,
@@ -934,7 +1065,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                                     : `需要修改：${reviewFeedback}`,
                                 metadata: {
                                     reviewerRunId: reviewerResult.runId,
-                                    reviewerProfileName,
+                                    reviewerProfileName: displayProfileName(reviewerBinding),
+                                    reviewerBindingSource: reviewerBinding.bindingSource,
                                     reviewDecision,
                                 },
                             }],
@@ -976,7 +1108,7 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
             reviewerDecision: {
                 sessionId: input.sessionId,
                 taskId: input.taskId,
-                reviewerProfileName,
+                reviewerProfileName: displayProfileName(reviewerBinding),
                 reviewDecision,
                 reviewFeedback,
                 reviewerRunId: reviewerResult.runId,
@@ -1000,56 +1132,119 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
     private async runRetryPath(input: HermesAgentRuntimeInput): Promise<HermesAgentRuntimeOutput> {
         // ── Phase 1: Developer revision run ──────────────────────
 
-        const { profileName: developerProfileName, bindingSource: developerBindingSource } =
-            resolveDeveloperBinding(input)
+        const developerBinding = resolveExecutableRoleBinding(input, 'developer')
+        const { profileName: developerProfileName, bindingSource: developerBindingSource } = developerBinding
 
-        const developerTarget = this.profileResolver(
+        const developerTargetRaw = this.profileResolver(
             developerProfileName,
             this.upstream,
             this.apiKey,
         )
+        const developerTarget = await resolveGatewayRunTarget(developerTargetRaw, developerBinding)
 
         const developerSessionId = `agent-room-developer-${input.sessionId}-${input.taskId}-rev${input.revisionRound}`
         const developerHooks = createRoleTaggedHooks(input.hooks, 'developer')
-
-        const developerResult = await runHermesGatewayTask({
-            upstream: developerTarget.upstream,
-            apiKey: developerTarget.apiKey,
-            input: buildRevisionDeveloperInput(input),
-            instructions: buildRevisionDeveloperInstructions(input),
-            sessionId: developerSessionId,
-            timeoutMs: this.timeoutMs,
+        logger.info({
+            role: 'developer',
+            profile: displayProfileName(developerBinding),
+            source: developerBindingSource,
             model: developerTarget.model,
             provider: developerTarget.provider,
-            onUpstreamRunCreated: developerHooks?.onUpstreamRunCreated,
-            onRawEvent: developerHooks?.onRawEvent,
-        })
+            providerInferred: developerTarget.providerInferred,
+            retry: true,
+        }, '[orchestrated-runtime] Resolved retry developer Gateway target')
+
+        let developerResult: Awaited<ReturnType<typeof runHermesGatewayTask>>
+        try {
+            developerResult = await runHermesGatewayTask({
+                upstream: developerTarget.upstream,
+                apiKey: developerTarget.apiKey,
+                input: buildRevisionDeveloperInput(input),
+                instructions: buildRevisionDeveloperInstructions(input),
+                sessionId: developerSessionId,
+                timeoutMs: this.timeoutMs,
+                model: developerTarget.model,
+                provider: developerTarget.provider,
+                onUpstreamRunCreated: developerHooks?.onUpstreamRunCreated,
+                onRawEvent: developerHooks?.onRawEvent,
+            })
+        } catch (err: any) {
+            const diag = {
+                role: 'developer',
+                profile: displayProfileName(developerBinding),
+                source: developerBindingSource,
+                sessionId: developerSessionId,
+                timeoutMs: this.timeoutMs,
+                revisionRound: input.revisionRound,
+                taskId: input.taskId,
+            }
+            logger.error(
+                { err, ...diag },
+                '[orchestrated-runtime] Retry developer phase failed',
+            )
+            throw new Error(
+                `Orchestrated retry developer phase failed [role=developer, profile=${diag.profile}, source=${diag.source}, sessionId=${diag.sessionId}, timeoutMs=${diag.timeoutMs}, revisionRound=${diag.revisionRound}, taskId=${diag.taskId}]: ${err?.message ?? err}`,
+            )
+        }
 
         // ── Phase 2: Reviewer run ────────────────────────────────
 
-        const reviewerProfileName = resolveReviewerBinding(input)
+        const reviewerBinding = resolveExecutableRoleBinding(input, 'reviewer')
 
-        const reviewerTarget = this.profileResolver(
+        const reviewerProfileName = reviewerBinding.profileName
+
+        const reviewerTargetRaw = this.profileResolver(
             reviewerProfileName,
             this.upstream,
             this.apiKey,
         )
+        const reviewerTarget = await resolveGatewayRunTarget(reviewerTargetRaw, reviewerBinding)
 
         const reviewerSessionId = `agent-room-reviewer-${input.sessionId}-${input.taskId}-rev${input.revisionRound}`
         const reviewerHooks = createRoleTaggedHooks(input.hooks, 'reviewer')
-
-        const reviewerResult = await runHermesGatewayTask({
-            upstream: reviewerTarget.upstream,
-            apiKey: reviewerTarget.apiKey,
-            input: buildReviewerInput(input, developerResult.output),
-            instructions: buildReviewerInstructions(input),
-            sessionId: reviewerSessionId,
-            timeoutMs: this.timeoutMs,
+        logger.info({
+            role: 'reviewer',
+            profile: displayProfileName(reviewerBinding),
+            source: reviewerBinding.bindingSource,
             model: reviewerTarget.model,
             provider: reviewerTarget.provider,
-            onUpstreamRunCreated: reviewerHooks?.onUpstreamRunCreated,
-            onRawEvent: reviewerHooks?.onRawEvent,
-        })
+            providerInferred: reviewerTarget.providerInferred,
+            retry: true,
+        }, '[orchestrated-runtime] Resolved retry reviewer Gateway target')
+
+        let reviewerResult: Awaited<ReturnType<typeof runHermesGatewayTask>>
+        try {
+            reviewerResult = await runHermesGatewayTask({
+                upstream: reviewerTarget.upstream,
+                apiKey: reviewerTarget.apiKey,
+                input: buildReviewerInput(input, developerResult.output),
+                instructions: buildReviewerInstructions(input),
+                sessionId: reviewerSessionId,
+                timeoutMs: this.timeoutMs,
+                model: reviewerTarget.model,
+                provider: reviewerTarget.provider,
+                onUpstreamRunCreated: reviewerHooks?.onUpstreamRunCreated,
+                onRawEvent: reviewerHooks?.onRawEvent,
+            })
+        } catch (err: any) {
+            const diag = {
+                role: 'reviewer',
+                profile: displayProfileName(reviewerBinding),
+                source: reviewerBinding.bindingSource,
+                sessionId: reviewerSessionId,
+                timeoutMs: this.timeoutMs,
+                revisionRound: input.revisionRound,
+                developerRunId: developerResult.runId,
+                taskId: input.taskId,
+            }
+            logger.error(
+                { err, ...diag },
+                '[orchestrated-runtime] Retry reviewer phase failed',
+            )
+            throw new Error(
+                `Orchestrated retry reviewer phase failed [role=reviewer, profile=${diag.profile}, source=${diag.source}, sessionId=${diag.sessionId}, timeoutMs=${diag.timeoutMs}, revisionRound=${diag.revisionRound}, developerRunId=${diag.developerRunId}, taskId=${diag.taskId}]: ${err?.message ?? err}`,
+            )
+        }
 
         // ── Build output ──────────────────────────────────────────
 
@@ -1063,7 +1258,7 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         const developerMetadata: HermesAgentRuntimeMetadata = {
             developerRunId: developerResult.runId,
-            developerProfileName: developerProfileName ?? '(default)',
+            developerProfileName: displayProfileName(developerBinding),
             developerSource: 'orchestrated-developer-revision',
             developerBindingSource,
             revisionRound: input.revisionRound,
@@ -1074,7 +1269,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         const reviewerMetadata: HermesAgentRuntimeMetadata = {
             reviewerRunId: reviewerResult.runId,
-            reviewerProfileName,
+            reviewerProfileName: displayProfileName(reviewerBinding),
+            reviewerBindingSource: reviewerBinding.bindingSource,
             reviewDecision,
             reviewFeedback,
             reviewIssues: reviewerParsed.issues,
@@ -1149,7 +1345,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                             agentRole: 'reviewer' as const,
                             payload: {
                                 reviewerRunId: reviewerResult.runId,
-                                reviewerProfileName,
+                                reviewerProfileName: displayProfileName(reviewerBinding),
+                                reviewerBindingSource: reviewerBinding.bindingSource,
                                 reviewDecision,
                                 reviewFeedback,
                             },
@@ -1162,7 +1359,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                             content: reviewFeedback,
                             metadata: {
                                 reviewerRunId: reviewerResult.runId,
-                                reviewerProfileName,
+                                reviewerProfileName: displayProfileName(reviewerBinding),
+                                reviewerBindingSource: reviewerBinding.bindingSource,
                                 reviewDecision,
                             },
                         }],
@@ -1176,7 +1374,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                                 agentRole: 'reviewer' as const,
                                 payload: {
                                     reviewerRunId: reviewerResult.runId,
-                                    reviewerProfileName,
+                                    reviewerProfileName: displayProfileName(reviewerBinding),
+                                    reviewerBindingSource: reviewerBinding.bindingSource,
                                     reviewDecision,
                                     reviewFeedback,
                                     revisionRound: input.revisionRound,
@@ -1190,7 +1389,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                                 content: `❌ 审核驳回：${reviewFeedback}`,
                                 metadata: {
                                     reviewerRunId: reviewerResult.runId,
-                                    reviewerProfileName,
+                                    reviewerProfileName: displayProfileName(reviewerBinding),
+                                    reviewerBindingSource: reviewerBinding.bindingSource,
                                     reviewDecision,
                                 },
                             }],
@@ -1203,7 +1403,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                                 agentRole: 'reviewer' as const,
                                 payload: {
                                     reviewerRunId: reviewerResult.runId,
-                                    reviewerProfileName,
+                                    reviewerProfileName: displayProfileName(reviewerBinding),
+                                    reviewerBindingSource: reviewerBinding.bindingSource,
                                     reviewDecision,
                                     reviewFeedback,
                                     revisionRound: input.revisionRound,
@@ -1219,7 +1420,8 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                                     : `需要修改：${reviewFeedback}`,
                                 metadata: {
                                     reviewerRunId: reviewerResult.runId,
-                                    reviewerProfileName,
+                                    reviewerProfileName: displayProfileName(reviewerBinding),
+                                    reviewerBindingSource: reviewerBinding.bindingSource,
                                     reviewDecision,
                                 },
                             }],
@@ -1249,7 +1451,7 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
             reviewerDecision: {
                 sessionId: input.sessionId,
                 taskId: input.taskId,
-                reviewerProfileName,
+                reviewerProfileName: displayProfileName(reviewerBinding),
                 reviewDecision,
                 reviewFeedback,
                 reviewerRunId: reviewerResult.runId,

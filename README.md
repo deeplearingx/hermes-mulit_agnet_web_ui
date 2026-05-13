@@ -240,7 +240,26 @@ npm run dev
 ```
 
 - Frontend: http://localhost:5173
-- BFF Server: http://localhost:8648 (proxies to Hermes on 8642)
+- BFF Server: http://localhost:18648 (proxies to Hermes gateways)
+
+For Agent Room real orchestrated development (planner → developer → reviewer), use the dedicated startup script:
+
+```bash
+npm run dev:agent-room
+```
+
+This starts both the frontend and the BFF server with:
+
+- `HERMES_AGENT_RUNTIME=orchestrated`
+- `AGENT_ROOM_RUNNER=real`
+- `AUTH_DISABLED=1`
+- `PORT=18648`
+
+If you only need the BFF server for an already running frontend, use:
+
+```bash
+npm run dev:server:agent-room
+```
 
 ```bash
 npm run build   # outputs to dist/

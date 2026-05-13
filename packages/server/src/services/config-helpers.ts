@@ -3,7 +3,7 @@ import { readdir, stat } from 'fs/promises'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import YAML from 'js-yaml'
-import { getActiveProfileDir, getActiveConfigPath, getActiveEnvPath, getActiveAuthPath } from './hermes/hermes-profile'
+import { getActiveProfileDir, getActiveConfigPath, getActiveEnvPath, getActiveAuthPath, getProfileDir } from './hermes/hermes-profile'
 import { logger } from './logger'
 
 // --- Provider env var mapping (from hermes providers.py HERMES_OVERLAYS + config.py) ---
@@ -65,6 +65,15 @@ const configPath = () => getActiveConfigPath()
 
 export async function readConfigYaml(): Promise<Record<string, any>> {
   const raw = await safeReadFile(configPath())
+  if (!raw) return {}
+  return (YAML.load(raw) as Record<string, any>) || {}
+}
+
+export async function readConfigYamlForProfile(profileName?: string | null): Promise<Record<string, any>> {
+  if (!profileName) {
+    return readConfigYaml()
+  }
+  const raw = await safeReadFile(join(getProfileDir(profileName), 'config.yaml'))
   if (!raw) return {}
   return (YAML.load(raw) as Record<string, any>) || {}
 }

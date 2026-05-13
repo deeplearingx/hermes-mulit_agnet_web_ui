@@ -2,10 +2,10 @@
 // Exports runtime types and implementations.
 //
 // Modes:
-//   gateway|real (default)  → GatewayHermesRuntime — uses Hermes Gateway /v1/runs protocol
-//   http|bridge             → RealHermesRuntime    — custom HTTP bridge to /agent-room/run-task
-//   deterministic|mock      → DeterministicHermesRuntime — hardcoded test runtime
-//   orchestrated|gateway-multi-role → OrchestratedGatewayRuntime — multi-role orchestrated runtime (P4.11-A1 skeleton)
+//   orchestrated|gateway-multi-role (default outside test) → OrchestratedGatewayRuntime — multi-role orchestrated runtime
+//   deterministic|mock (default in test)                    → DeterministicHermesRuntime — hardcoded test runtime
+//   gateway|real                                            → GatewayHermesRuntime — uses Hermes Gateway /v1/runs protocol
+//   http|bridge                                             → RealHermesRuntime — custom HTTP bridge to /agent-room/run-task
 
 export type {
     HermesAgentRuntime,
@@ -36,11 +36,13 @@ import { OrchestratedGatewayRuntime } from './orchestrated-gateway-runtime'
  * Create a runtime instance based on the given mode.
  * @param mode - 'gateway'|'real' for Gateway protocol,
  *               'http'|'bridge' for custom HTTP bridge,
- *               'orchestrated'|'gateway-multi-role' for multi-role orchestrated runtime,
- *               'deterministic'|'mock' (default) for hardcoded test runtime.
+ *               'orchestrated'|'gateway-multi-role' (default outside test) for multi-role orchestrated runtime,
+ *               'deterministic'|'mock' (default in test) for hardcoded test runtime.
  */
 export function createHermesAgentRuntime(mode?: string): HermesAgentRuntime {
-    const normalized = (mode ?? 'deterministic').toLowerCase()
+    const explicitMode = mode ?? process.env.HERMES_AGENT_RUNTIME
+    const defaultMode = process.env.NODE_ENV === 'test' ? 'deterministic' : 'orchestrated'
+    const normalized = (explicitMode ?? defaultMode).toLowerCase()
 
     switch (normalized) {
         case 'gateway':

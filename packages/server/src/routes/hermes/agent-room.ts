@@ -416,14 +416,14 @@ agentRoomRoutes.put('/api/agent-room/sessions/:sessionId/role-bindings/:role', a
         ctx.body = { error: `Invalid role '${role}'. Must be one of: conversation, planner, developer, reviewer, delivery` }
         return
     }
-    const { profileName } = ctx.request.body as { profileName?: string }
+    const { profileName, provider, model } = ctx.request.body as { profileName?: string; provider?: string; model?: string }
     if (!profileName || !profileName.trim()) {
         ctx.status = 400
         ctx.body = { error: 'profileName is required' }
         return
     }
     try {
-        ctx.body = agentRoomService.setRoleBinding(ctx.params.sessionId, role, profileName)
+        ctx.body = agentRoomService.setRoleBinding(ctx.params.sessionId, role, profileName, provider, model)
     } catch (err: any) {
         mapAgentRoomError(ctx, err)
     }

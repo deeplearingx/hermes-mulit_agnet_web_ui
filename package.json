@@ -47,8 +47,10 @@
   "scripts": {
     "start": "vite --host --port 8648",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:agent-room": "HERMES_AGENT_RUNTIME=orchestrated AGENT_ROOM_RUNNER=real AUTH_DISABLED=1 PORT=18648 npm run dev",
     "dev:client": "vite --host",
     "dev:server": "nodemon --signal SIGTERM --watch packages/server/src -e ts,tsx --exec TS_NODE_PROJECT=packages/server/tsconfig.json node -r ts-node/register packages/server/src/index.ts",
+    "dev:server:agent-room": "HERMES_AGENT_RUNTIME=orchestrated AGENT_ROOM_RUNNER=real AUTH_DISABLED=1 PORT=18648 npm run dev:server",
     "build": "vue-tsc -b && vite build && tsc --noEmit -p packages/server/tsconfig.json && node scripts/build-server.mjs",
     "prepare": "[ -d dist ] || npm run build",
     "preview": "NODE_ENV=production vite preview",

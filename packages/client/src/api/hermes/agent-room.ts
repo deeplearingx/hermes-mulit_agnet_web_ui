@@ -180,6 +180,10 @@ export interface AgentRoomRoleBinding {
     sessionId: string
     role: AgentRoomRole
     profileName: string
+    /** Optional explicit provider override for Gateway /v1/runs body. */
+    provider?: string
+    /** Optional explicit model override for Gateway /v1/runs body. */
+    model?: string
     createdAt: string
 }
 
@@ -405,11 +409,11 @@ export async function listRoleBindings(sessionId: string): Promise<AgentRoomRole
     return request(`${BASE}/sessions/${sessionId}/role-bindings`)
 }
 
-export async function setRoleBinding(sessionId: string, role: AgentRoomRole, profileName: string): Promise<AgentRoomRoleBinding> {
+export async function setRoleBinding(sessionId: string, role: AgentRoomRole, profileName: string, provider?: string, model?: string): Promise<AgentRoomRoleBinding> {
     return request(`${BASE}/sessions/${sessionId}/role-bindings/${role}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profileName }),
+        body: JSON.stringify({ profileName, provider, model }),
     })
 }
 

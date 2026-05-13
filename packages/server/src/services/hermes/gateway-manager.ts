@@ -328,6 +328,34 @@ export class GatewayManager {
     }
   }
 
+  /** 从 profile 的 config.yaml 读取 model.default */
+  getModel(profileName?: string): string | null {
+    const name = profileName || this.activeProfile
+    try {
+      const configPath = join(this.profileDir(name), 'config.yaml')
+      if (!existsSync(configPath)) return null
+      const content = readFileSync(configPath, 'utf-8')
+      const cfg = yaml.load(content) as any || {}
+      return cfg?.model?.default || null
+    } catch {
+      return null
+    }
+  }
+
+  /** 从 profile 的 config.yaml 读取 model.provider */
+  getProvider(profileName?: string): string | null {
+    const name = profileName || this.activeProfile
+    try {
+      const configPath = join(this.profileDir(name), 'config.yaml')
+      if (!existsSync(configPath)) return null
+      const content = readFileSync(configPath, 'utf-8')
+      const cfg = yaml.load(content) as any || {}
+      return cfg?.model?.provider || null
+    } catch {
+      return null
+    }
+  }
+
   getActiveProfile(): string {
     return this.activeProfile
   }

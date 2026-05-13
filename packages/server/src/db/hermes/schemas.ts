@@ -312,6 +312,8 @@ export const AR_ROLE_BINDINGS_SCHEMA: Record<string, string> = {
     session_id: 'TEXT NOT NULL',
     role: 'TEXT NOT NULL',
     agent_id: 'TEXT NOT NULL',
+    provider: 'TEXT',
+    model: 'TEXT',
     created_at: 'TEXT NOT NULL',
 }
 

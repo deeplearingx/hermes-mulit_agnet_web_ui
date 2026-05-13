@@ -248,7 +248,26 @@ npm run dev
 ```
 
 - 前端：http://localhost:5173
-- BFF 服务器：http://localhost:8648（代理到 Hermes 网关 8642）
+- BFF 服务器：http://localhost:18648（代理到 Hermes 网关）
+
+如果要开发或验证 Agent Room 真实编排模式（planner → developer → reviewer），请使用专用启动脚本：
+
+```bash
+npm run dev:agent-room
+```
+
+该脚本会同时启动前端和 BFF 后端，并固定以下运行参数：
+
+- `HERMES_AGENT_RUNTIME=orchestrated`
+- `AGENT_ROOM_RUNNER=real`
+- `AUTH_DISABLED=1`
+- `PORT=18648`
+
+如果前端已经在运行，只需要单独启动 BFF 后端，可以使用：
+
+```bash
+npm run dev:server:agent-room
+```
 
 ```bash
 npm run build   # 构建输出到 dist/

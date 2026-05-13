@@ -169,10 +169,10 @@ function showToast(message: string, type: 'success' | 'error') {
 }
 
 // ─── Role Binding Actions ──────────────────────────────────────
-async function handleSaveRoleBinding(data: { role: AgentRoomRole; profileName: string }) {
+async function handleSaveRoleBinding(data: { role: AgentRoomRole; profileName: string; provider?: string; model?: string }) {
     savingRoleBinding.value = true
     try {
-        await store.saveRoleBinding(data.role, data.profileName)
+        await store.saveRoleBinding(data.role, data.profileName, data.provider, data.model)
     } catch {
         // Error already set in store
     } finally {

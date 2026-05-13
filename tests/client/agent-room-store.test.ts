@@ -293,7 +293,7 @@ describe('Agent Room Client Store — Role Bindings', () => {
 
         const result = await store.saveRoleBinding('developer', 'gpt-4')
 
-        expect(mockApi.setRoleBinding).toHaveBeenCalledWith('s1', 'developer', 'gpt-4')
+        expect(mockApi.setRoleBinding).toHaveBeenCalledWith('s1', 'developer', 'gpt-4', undefined, undefined)
         expect(result).toEqual(newBinding)
         expect(store.roleBindings).toHaveLength(1)
         expect(store.roleBindings[0].role).toBe('developer')

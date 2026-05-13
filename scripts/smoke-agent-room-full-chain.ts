@@ -9,22 +9,25 @@
 //   npm run smoke:full-chain
 //
 // Optional env vars:
-//   AGENT_ROOM_API          — server base URL (default: http://127.0.0.1:8648)
+//   AGENT_ROOM_API          — server base URL (default: http://127.0.0.1:38649)
 //   AUTH_TOKEN              — Bearer token for server auth (optional)
 //   PLANNER_PROFILE         — planner profile name (default: mock-planner)
 //   DEVELOPER_PROFILE       — developer profile name (default: mock-developer)
 //   REVIEWER_PROFILE        — reviewer profile name (default: mock-reviewer)
 //   AGENT_ROOM_RUNNER       — runner mode: mock | real (default: mock)
 //   AGENT_ROOM_RUNTIME      — runtime mode: deterministic | orchestrated (default: deterministic)
+//                             NOTE: this controls script-side logging only. The actual server runtime
+//                             is determined by HERMES_AGENT_RUNTIME at server startup time.
 //   VERBOSE                 — '1' for detailed output (default: '0')
 
-const API = (process.env.AGENT_ROOM_API || 'http://127.0.0.1:8648').replace(/\/$/, '')
+const API = (process.env.AGENT_ROOM_API || 'http://127.0.0.1:38649').replace(/\/$/, '')
 const AUTH_TOKEN = process.env.AUTH_TOKEN || ''
 const PLANNER_PROFILE = process.env.PLANNER_PROFILE || 'mock-planner'
 const DEVELOPER_PROFILE = process.env.DEVELOPER_PROFILE || 'mock-developer'
 const REVIEWER_PROFILE = process.env.REVIEWER_PROFILE || 'mock-reviewer'
 const RUNNER = process.env.AGENT_ROOM_RUNNER || 'mock'
-const RUNTIME = process.env.AGENT_ROOM_RUNTIME || 'deterministic'
+// Read HERMES_AGENT_RUNTIME (server-side) as primary, fall back to AGENT_ROOM_RUNTIME (script-side)
+const RUNTIME = process.env.HERMES_AGENT_RUNTIME || process.env.AGENT_ROOM_RUNTIME || 'deterministic'
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 1000)
 const POLL_TIMEOUT_MS = Number(process.env.POLL_TIMEOUT_MS || 120_000)
 const VERBOSE = process.env.VERBOSE === '1'
@@ -78,7 +81,31 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(init?.headers as Record<string, string>) }
     if (AUTH_TOKEN) headers['Authorization'] = `Bearer ${AUTH_TOKEN}`
     const res = await fetch(url, { headers, ...init })
-    const body = await res.json() as any
+    const text = await res.text()
+    let body: any
+    try {
+        body = JSON.parse(text)
+    } catch {
+        // Non-JSON response — likely wrong server/port or 404 text page
+        const snippet = text.slice(0, 200).replace(/\n/g, ' ')
+        if (res.status === 401) {
+            throw new Error(
+                `HTTP 401 Unauthorized from ${url}. Set AUTH_TOKEN or start server with AUTH_DISABLED=1. ` +
+                `(Response snippet: ${snippet})`,
+            )
+        }
+        if (res.status === 404) {
+            throw new Error(
+                `HTTP 404 Not Found from ${url}. Check AGENT_ROOM_API points to the hermes-web-ui server (default http://127.0.0.1:38649), not the Hermes Agent/Gateway (default http://127.0.0.1:8648). ` +
+                `(Response snippet: ${snippet})`,
+            )
+        }
+        throw new Error(
+            `Non-JSON response from ${url} (HTTP ${res.status}). ` +
+            `Content-Type: ${res.headers.get('content-type') || '(none)'}. ` +
+            `Snippet: ${snippet}`,
+        )
+    }
     if (!res.ok) {
         throw new Error(`HTTP ${res.status}: ${body.error || JSON.stringify(body)}`)
     }
@@ -579,6 +606,14 @@ async function main(): Promise<void> {
     if (!DEVELOPER_PROFILE) { fail('DEVELOPER_PROFILE is required'); process.exit(1) }
     if (!REVIEWER_PROFILE) { fail('REVIEWER_PROFILE is required'); process.exit(1) }
 
+    // Runtime mismatch warning
+    const serverRuntime = process.env.HERMES_AGENT_RUNTIME
+    if (serverRuntime && serverRuntime !== RUNTIME) {
+        console.warn(`\n⚠️  WARNING: HERMES_AGENT_RUNTIME=${serverRuntime} (server) differs from script runtime=${RUNTIME}.`)
+        console.warn('   The server runtime takes precedence over this script\'s AGENT_ROOM_RUNTIME.')
+        console.warn('   Set HERMES_AGENT_RUNTIME on the server to match your intended test scenario.\n')
+    }
+
     // Health check
     logStep('Health check')
     try {
@@ -586,7 +621,11 @@ async function main(): Promise<void> {
         log('  API is reachable ✓')
     } catch (err: any) {
         fail(`API health check failed: ${err.message}`)
-        console.error('\n❌ Cannot reach Agent Room API. Is the server running?')
+        console.error('\n❌ Cannot reach Agent Room API.')
+        console.error(`   Target: ${API}`)
+        console.error('   Ensure the hermes-web-ui server is running on this port.')
+        console.error('   Default server port is 38649 (not 8648 — that is the Hermes Agent/Gateway).')
+        console.error('   If auth is enabled, set AUTH_TOKEN env var or start server with AUTH_DISABLED=1.')
         process.exit(1)
     }
 

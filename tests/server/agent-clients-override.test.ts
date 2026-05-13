@@ -19,16 +19,24 @@ vi.mock('socket.io-client', () => ({
     }),
 }))
 
-vi.mock('../../../packages/server/src/services/auth', () => ({
+vi.mock('../../packages/server/src/services/auth', () => ({
     getToken: vi.fn().mockResolvedValue('test-token'),
 }))
 
+vi.mock('../../packages/server/src/config', () => ({
+    config: {
+        port: 9999,
+    },
+}))
+
+import { io } from 'socket.io-client'
 import { AgentClients } from '../../packages/server/src/services/hermes/group-chat/agent-clients'
 
 describe('AgentClients.updateAgentOverride — dbAgentId fix', () => {
     let clients: AgentClients
 
     beforeEach(() => {
+        vi.clearAllMocks()
         clients = new AgentClients()
     })
 
@@ -45,14 +53,38 @@ describe('AgentClients.updateAgentOverride — dbAgentId fix', () => {
         const client = await clients.createAgent({
             profile: 'default', name: 'TestAgent', description: '', invited: 0, dbAgentId,
         })
+        const setOverrideSpy = vi.spyOn(client, 'setOverride')
         await clients.addAgentToRoom('room-1', client)
 
-        clients.updateAgentOverride('room-1', dbAgentId, { model: 'gpt-4o' })
+        const override = { model: 'gpt-4o' }
+        clients.updateAgentOverride('room-1', dbAgentId, override)
 
         expect(clients.getAgent('room-1', dbAgentId)).toBe(client)
+        expect(setOverrideSpy).toHaveBeenCalledWith(override)
     })
 
     it('updateAgentOverride is a no-op when agentId does not match', () => {
         expect(() => clients.updateAgentOverride('room-1', 'nonexistent', { model: 'gpt-4o' })).not.toThrow()
+    })
+
+    it('createAgent connects to the configured server port when no port is passed', async () => {
+        await clients.createAgent({
+            profile: 'default',
+            name: 'PortAwareAgent',
+            description: '',
+            invited: 0,
+            dbAgentId: 'port-aware-agent',
+        })
+
+        expect(io).toHaveBeenCalledWith(
+            'http://127.0.0.1:9999/group-chat',
+            expect.objectContaining({
+                auth: expect.objectContaining({
+                    token: 'test-token',
+                    name: 'PortAwareAgent',
+                }),
+                transports: ['websocket'],
+            }),
+        )
     })
 })

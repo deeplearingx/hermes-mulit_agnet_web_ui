@@ -6,9 +6,9 @@
 
 ## 通用入口
 
-- Runner 入口：`AGENT_ROOM_RUNNER=real` 才会走真实 runtime adapter；未设置时默认使用 mock runner。
-- Runtime 选择：`HERMES_AGENT_RUNTIME` 由 `createHermesAgentRuntime()` 解析。
-- 超时：可选 `HERMES_AGENT_TIMEOUT_MS`，默认 `60000` 毫秒；必须为正数。
+- Runner 入口：`AGENT_ROOM_RUNNER` 显式设置时优先生效；未设置时，非 test 环境默认 `real`，test 环境默认 `mock`。
+- Runtime 选择：`HERMES_AGENT_RUNTIME` 显式设置时优先生效；未设置时，非 test 环境默认 `orchestrated`，test 环境默认 `deterministic`。
+- 超时：可选 `HERMES_AGENT_TIMEOUT_MS`，默认 `120000` 毫秒；必须为正数。
 - 执行 smoke：`rtk npm run smoke:agent-room-runtime-matrix`。
 
 ## Runtime 配置矩阵
@@ -18,7 +18,14 @@
 | deterministic local | `AGENT_ROOM_RUNNER=real`, `HERMES_AGENT_RUNTIME=deterministic` | 无 | 本地纯 deterministic runtime，runtime matrix 永远执行此项。 |
 | gateway / real single-role | `AGENT_ROOM_RUNNER=real`, `HERMES_AGENT_RUNTIME=gateway` 或 `HERMES_AGENT_RUNTIME=real`, `AGENT_ROOM_RUNTIME_MATRIX_GATEWAY=1` | GatewayManager profile 配置，或 Gateway fallback upstream/apiKey 配置；`AGENT_ROOM_ASSIGNED_AGENT_ID` 可作为 profileName fallback | 走 Gateway `/v1/runs` 协议；`real` 是 gateway runtime 的别名，不是 HTTP bridge。 |
 | http / bridge | `AGENT_ROOM_RUNNER=real`, `HERMES_AGENT_RUNTIME=http` 或 `HERMES_AGENT_RUNTIME=bridge`, `HERMES_AGENT_BASE_URL=<bridge base url>` | `HERMES_AGENT_TIMEOUT_MS` | 走自定义 HTTP bridge，调用 `${HERMES_AGENT_BASE_URL}/agent-room/run-task`。`bridge` 是 `http` runtime 的别名。 |
-| orchestrated / gateway-multi-role | `AGENT_ROOM_RUNNER=real`, `HERMES_AGENT_RUNTIME=orchestrated` 或 `HERMES_AGENT_RUNTIME=gateway-multi-role`, `AGENT_ROOM_RUNTIME_MATRIX_ORCHESTRATED=1` | planner/developer/reviewer/delivery role bindings 对应的 Gateway profiles；`AGENT_ROOM_ASSIGNED_AGENT_ID` 仅可作为 developer fallback | 多角色 Gateway orchestration；`gateway-multi-role` 是 `orchestrated` runtime 的别名。真实业务请求需在 session 中配置 planner、developer、reviewer role bindings。 |
+| orchestrated / gateway-multi-role | `AGENT_ROOM_RUNNER=real`, `HERMES_AGENT_RUNTIME=orchestrated` 或 `HERMES_AGENT_RUNTIME=gateway-multi-role`, `AGENT_ROOM_RUNTIME_MATRIX_ORCHESTRATED=1` | planner/developer/reviewer/delivery role bindings 对应的 Gateway profiles；`AGENT_ROOM_ASSIGNED_AGENT_ID` 可作为 planner/developer/reviewer fallback | 多角色 Gateway orchestration；`gateway-multi-role` 是 `orchestrated` runtime 的别名。未绑定 planner/developer/reviewer 时使用当前 active Hermes profile；delivery 未绑定时使用系统交付。 |
+
+## 默认启动语义
+
+- 正常产品启动：未显式设置 `AGENT_ROOM_RUNNER` 或 `HERMES_AGENT_RUNTIME` 时，Agent Room 默认使用 `real + orchestrated`。
+- 测试环境：`NODE_ENV=test` 且未显式设置 mode/env 时，默认使用 `mock + deterministic`，保证单元测试不依赖真实 Gateway。
+- 显式配置优先：传入 mode 参数或设置 `AGENT_ROOM_RUNNER` / `HERMES_AGENT_RUNTIME` 时，始终尊重显式值。
+- Role fallback：planner/developer/reviewer 未绑定时不会阻断 workflow，会按显式绑定、任务分配 profile、`AGENT_ROOM_ASSIGNED_AGENT_ID`、GatewayManager 当前/默认 profile 的顺序解析；delivery 未绑定时不执行 delivery agent，继续使用系统交付。
 
 ## Runtime matrix smoke 结果语义
 

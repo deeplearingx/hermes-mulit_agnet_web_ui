@@ -1,7 +1,7 @@
 // ─── Agent Room Runner Facade ──────────────────────────────────
 // Selects and exports the active runner implementation.
-// Set AGENT_ROOM_RUNNER=real to use the deterministic RealAgentRunner adapter skeleton.
-// Defaults to MockAgentRoomRunner.
+// Set AGENT_ROOM_RUNNER=mock|real to explicitly choose an implementation.
+// Defaults to RealAgentRunner outside test and MockAgentRoomRunner in test.
 
 export type {
     AgentRoomRunner,
@@ -35,12 +35,14 @@ import { createHermesAgentRuntime } from './runtime'
 
 /**
  * Create a runner instance based on the given mode.
- * @param mode - 'mock' or 'real'. Defaults to 'mock'.
- * For 'real' mode, injects the default HermesAgentRuntime (deterministic).
+ * @param mode - 'mock' or 'real'. Defaults to 'real' outside test and 'mock' in test.
+ * For 'real' mode, injects the default HermesAgentRuntime (orchestrated outside test, deterministic in test).
  */
 export function createAgentRoomRunner(mode?: string): AgentRoomRunner {
-    const normalized = (mode ?? 'mock').toLowerCase()
-    if (normalized === 'real') return new RealAgentRunner(createHermesAgentRuntime(process.env.HERMES_AGENT_RUNTIME))
+    const explicitMode = mode ?? process.env.AGENT_ROOM_RUNNER
+    const defaultMode = process.env.NODE_ENV === 'test' ? 'mock' : 'real'
+    const normalized = (explicitMode ?? defaultMode).toLowerCase()
+    if (normalized === 'real') return new RealAgentRunner(createHermesAgentRuntime())
     return new MockAgentRoomRunner()
 }
 
