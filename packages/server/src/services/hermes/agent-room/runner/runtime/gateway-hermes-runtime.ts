@@ -18,6 +18,7 @@ import type { GatewayProfileResolver, GatewayRuntimeTarget } from './gateway-pro
 import { createDefaultGatewayProfileResolver } from './gateway-profile-resolver'
 import { runHermesGatewayTask } from '../../../gateway-run-client'
 import { config } from '../../../../../config'
+import { assertResolvedProfileRunTarget, resolveProfileRunTarget } from '../../../../hermes/profile-run-target-resolver'
 
 const UPSTREAM = config.upstream.replace(/\/$/, '')
 
@@ -121,12 +122,21 @@ export class GatewayHermesRuntime implements HermesAgentRuntime {
             bindingSource = 'assigned-agent'
         }
 
-        // Resolve target: profileName → upstream/apiKey/model/provider via GatewayManager or constructor fallback.
-        const target = this.profileResolver(
+        // Resolve target: profileName → upstream/apiKey/model/provider via shared resolver.
+        const baseTarget = this.profileResolver(
             profileName,
             this.upstream,
             this.apiKey,
         )
+        const target = await resolveProfileRunTarget({
+            profileName,
+            fallbackUpstream: this.upstream,
+            fallbackApiKey: this.apiKey,
+            modelOverride: developerBinding?.model,
+            providerOverride: developerBinding?.provider,
+            baseTarget,
+        })
+        assertResolvedProfileRunTarget(target, { role: 'developer', profileName })
 
         const gatewaySessionId = `agent-room-${input.sessionId}-${input.taskId}`
 

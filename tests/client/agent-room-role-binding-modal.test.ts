@@ -2,13 +2,41 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { reactive, ref } from 'vue'
+import { reactive } from 'vue'
 
-import AgentRoomRoleBindingModal from '@/components/hermes/agent-room/AgentRoomRoleBindingModal.vue'
-import type { AgentRoomRoleBinding } from '@/api/hermes/agent-room'
-import type { HermesProfile } from '@/api/hermes/profiles'
+import AgentRoomRoleBindingModal from '../../packages/client/src/components/hermes/agent-room/AgentRoomRoleBindingModal.vue'
+import type { AgentRoomRoleBinding } from '../../packages/client/src/api/hermes/agent-room'
+import type { HermesProfile } from '../../packages/client/src/api/hermes/profiles'
 
-// ─── Mock profiles store (reactive to match Pinia auto-unwrap) ──
+vi.mock('naive-ui', () => ({
+    NButton: {
+        template: '<button :disabled="disabled" @click="$emit(\'click\', $event)"><slot /></button>',
+        props: ['disabled', 'loading', 'size', 'type', 'secondary', 'tertiary'],
+        emits: ['click'],
+    },
+    NInput: {
+        template: '<input :value="value" @input="$emit(\'update:value\', $event.target.value)" />',
+        props: ['value', 'placeholder'],
+        emits: ['update:value'],
+    },
+    NSelect: {
+        template: `
+            <select :value="value ?? ''" @change="$emit('update:value', $event.target.value)">
+                <option v-for="option in options" :key="option.value" :value="option.value">{{ option.label }}</option>
+            </select>
+        `,
+        props: ['value', 'options', 'placeholder', 'filterable', 'clearable', 'consistentMenuWidth'],
+        emits: ['update:value'],
+    },
+    NTag: {
+        template: '<span><slot /></span>',
+        props: ['size', 'type'],
+    },
+    NSpace: {
+        template: '<div><slot /></div>',
+    },
+}))
+
 const mockState = reactive({
     profiles: [] as HermesProfile[],
     activeProfile: null as HermesProfile | null,
@@ -28,6 +56,15 @@ vi.mock('@/stores/hermes/profiles', () => ({
     }),
 }))
 
+vi.mock('@/stores/hermes/app', () => ({
+    useAppStore: () => ({
+        modelGroups: [
+            { provider: 'openai', label: 'OpenAI', models: ['gpt-4o', 'gpt-4.1'] },
+            { provider: 'anthropic', label: 'Anthropic', models: ['claude-3.5-sonnet', 'claude-sonnet-4.7'] },
+        ],
+    }),
+}))
+
 const now = '2026-01-01T00:00:00.000Z'
 
 const sampleProfiles: HermesProfile[] = [
@@ -36,19 +73,24 @@ const sampleProfiles: HermesProfile[] = [
     { name: 'glm', active: false, model: 'glm-4', gateway: '127.0.0.1:8644', alias: '' },
 ]
 
-function makeBindings(profileNames: Partial<Record<string, string>> = {}): AgentRoomRoleBinding[] {
-    return Object.entries(profileNames).map(([role, profileName]) => ({
-        id: `rb-${role}`,
-        sessionId: 's1',
-        role: role as AgentRoomRoleBinding['role'],
-        profileName,
-        createdAt: now,
-    }))
+function makeBindings(input: Partial<Record<string, { profileName: string; provider?: string; model?: string }>> = {}): AgentRoomRoleBinding[] {
+    return Object.entries(input).flatMap(([role, value]) => {
+        if (!value) return []
+        return [{
+            id: `rb-${role}`,
+            sessionId: 's1',
+            role: role as AgentRoomRoleBinding['role'],
+            profileName: value.profileName,
+            provider: value.provider,
+            model: value.model,
+            createdAt: now,
+        }]
+    })
 }
 
 function setupStore(profiles: HermesProfile[] = sampleProfiles, activeName?: string) {
     mockState.profiles = profiles
-    mockState.activeProfile = profiles.find(p => p.active) ?? null
+    mockState.activeProfile = profiles.find(profile => profile.active) ?? null
     mockState.activeProfileName = activeName ?? (mockState.activeProfile?.name ?? null)
     mockState.loading = false
     mockFetchProfiles.mockResolvedValue(undefined)
@@ -60,7 +102,6 @@ async function mountModal(options: {
     saving?: boolean
     profiles?: HermesProfile[]
     fetchError?: boolean
-    showAdvanced?: boolean
 } = {}) {
     if (options.fetchError) {
         mockFetchProfiles.mockRejectedValue(new Error('network error'))
@@ -85,223 +126,159 @@ async function mountModal(options: {
     })
 
     await flushPromises()
-
-    if (options.showAdvanced) {
-        await wrapper.find('.btn-toggle-advanced').trigger('click')
-        await flushPromises()
-    }
-
     return wrapper
 }
 
-describe('AgentRoomRoleBindingModal — profile dropdown', () => {
+describe('AgentRoomRoleBindingModal', () => {
     beforeEach(() => {
         setActivePinia(createPinia())
         vi.clearAllMocks()
     })
 
-    it('shows profile select dropdown after opening', async () => {
-        const wrapper = await mountModal({ showAdvanced: true })
+    it('renders summary cards for all roles', async () => {
+        const wrapper = await mountModal()
 
-        const selects = wrapper.findAll('select.profile-select')
-        expect(selects.length).toBe(5)
-
-        // Each select has active-profile option + profiles + custom option
-        const firstSelect = selects[0]
-        const options = firstSelect.findAll('option')
-        // active-profile option + 3 profiles + 1 custom = 5
-        expect(options.length).toBe(5)
-
-        expect(options[0].text()).toContain('使用 active profile')
-
-        // Profile options show name · model · gateway
-        expect(options[1].text()).toContain('default')
-        expect(options[1].text()).toContain('gpt-4')
-        expect(options[1].text()).toContain('running')
-
-        // kimi shows alias info (alias takes precedence over gateway in label)
-        expect(options[2].text()).toContain('kimi')
-        expect(options[2].text()).toContain('kimi-for-coding')
-
-        // Custom option exists
-        const customOption = options[options.length - 1]
-        expect(customOption.text()).toContain('手动输入')
+        const cards = wrapper.findAll('.role-card')
+        expect(cards).toHaveLength(5)
+        expect(wrapper.text()).toContain('规划 Agent')
+        expect(wrapper.text()).toContain('开发 Agent')
+        expect(wrapper.text()).toContain('审核 Agent')
     })
 
-    it('marks active profile with checkmark', async () => {
-        const wrapper = await mountModal({ showAdvanced: true })
+    it('shows fallback summaries when no bindings exist', async () => {
+        const wrapper = await mountModal()
 
-        const selects = wrapper.findAll('select.profile-select')
-        const options = selects[0].findAll('option')
-
-        // The "default" profile is active, should have ✓
-        const defaultOption = options.find(o => o.attributes('value') === 'default')
-        expect(defaultOption?.text()).toContain('✓')
-
-        // The "kimi" profile is not active, should not have ✓
-        const kimiOption = options.find(o => o.attributes('value') === 'kimi')
-        expect(kimiOption?.text()).not.toContain('✓')
+        expect(wrapper.text()).toContain('active profile · default')
+        expect(wrapper.text()).toContain('任务 assigned profile / active profile')
+        expect(wrapper.text()).toContain('系统交付')
     })
 
-    it('pre-selects bound profile when existing binding matches a profile', async () => {
-        const bindings = makeBindings({ planner: 'kimi' })
-        const wrapper = await mountModal({ roleBindings: bindings, showAdvanced: true })
+    it('shows bound profile/provider/model summaries', async () => {
+        const wrapper = await mountModal({
+            roleBindings: makeBindings({
+                planner: { profileName: 'kimi', provider: 'openai', model: 'gpt-4o' },
+            }),
+        })
 
-        const selects = wrapper.findAll('select.profile-select')
-        // planner is index 1 (conversation=0, planner=1)
-        expect((selects[1].element as HTMLSelectElement).value).toBe('kimi')
+        const plannerCard = wrapper.findAll('.role-card')[1]
+        expect(plannerCard.text()).toContain('kimi')
+        expect(plannerCard.text()).toContain('Override · openai')
+        expect(plannerCard.text()).toContain('Override · gpt-4o')
     })
 
-    it('falls back to custom input when bound profile not in profiles list', async () => {
-        const bindings = makeBindings({ planner: 'unknown-profile' })
-        const wrapper = await mountModal({ roleBindings: bindings, showAdvanced: true })
+    it('opens a single-role editor with profile/provider/model controls', async () => {
+        const wrapper = await mountModal()
 
-        // Should show custom input for planner
-        const plannerInput = wrapper.find('input[data-role-input="planner"]')
-        expect(plannerInput.exists()).toBe(true)
-        expect((plannerInput.element as HTMLInputElement).value).toBe('unknown-profile')
-    })
-
-    it('switches to custom input when "手动输入" is selected', async () => {
-        const wrapper = await mountModal({ showAdvanced: true })
-
-        const plannerSelect = wrapper.find('select[data-role-select="planner"]')
-        expect(plannerSelect.exists()).toBe(true)
-
-        // Select custom option
-        await plannerSelect.setValue('__custom__')
-
-        // Should now show a text input for planner
-        const plannerInput = wrapper.find('input[data-role-input="planner"]')
-        expect(plannerInput.exists()).toBe(true)
-    })
-
-    it('emits save with selected profile name on bind click', async () => {
-        const wrapper = await mountModal({ showAdvanced: true })
-
-        const plannerSelect = wrapper.find('select[data-role-select="planner"]')
-        await plannerSelect.setValue('kimi')
-
-        const rows = wrapper.findAll('.role-row')
-        const saveBtn = rows[1].find('.btn-save')
-        await saveBtn.trigger('click')
-
-        expect(wrapper.emitted('save')).toEqual([[{ role: 'planner', profileName: 'kimi' }]])
-    })
-
-    it('emits save with custom input value when in custom mode', async () => {
-        const wrapper = await mountModal({ showAdvanced: true })
-
-        const plannerSelect = wrapper.find('select[data-role-select="planner"]')
-        await plannerSelect.setValue('__custom__')
+        await wrapper.get('[data-role-edit="planner"]').trigger('click')
         await flushPromises()
 
-        const customInput = wrapper.find('input[data-role-input="planner"]')
-        expect(customInput.exists()).toBe(true)
-        await customInput.setValue('my-custom-profile')
+        const editor = wrapper.get('[data-role-editor="planner"]')
+        expect(editor.findAll('select').length).toBeGreaterThanOrEqual(2)
+        expect(editor.findAll('input').length).toBeGreaterThanOrEqual(1)
+    })
 
-        const rows = wrapper.findAll('.role-row')
-        const saveBtn = rows[1].find('.btn-save')
-        await saveBtn.trigger('click')
+    it('emits save with selected profile, provider, and model', async () => {
+        const wrapper = await mountModal()
+
+        await wrapper.get('[data-role-edit="planner"]').trigger('click')
+        await flushPromises()
+
+        await wrapper.get('[data-role-select="planner"]').setValue('kimi')
+        await wrapper.get('[data-role-provider-select="planner"]').setValue('openai')
+        await wrapper.get('[data-role-model-input="planner"]').setValue('gpt-4o')
+        await wrapper.get('[data-role-save="planner"]').trigger('click')
+
+        expect(wrapper.emitted('save')).toEqual([[{ role: 'planner', profileName: 'kimi', provider: 'openai', model: 'gpt-4o' }]])
+    })
+
+    it('supports custom profile input when manual option is selected', async () => {
+        const wrapper = await mountModal()
+
+        await wrapper.get('[data-role-edit="planner"]').trigger('click')
+        await flushPromises()
+
+        await wrapper.get('[data-role-select="planner"]').setValue('__custom__')
+        await flushPromises()
+
+        await wrapper.get('[data-role-input="planner"]').setValue('my-custom-profile')
+        await wrapper.get('[data-role-save="planner"]').trigger('click')
 
         expect(wrapper.emitted('save')).toEqual([[{ role: 'planner', profileName: 'my-custom-profile' }]])
     })
-})
 
-describe('AgentRoomRoleBindingModal — empty & error states', () => {
-    beforeEach(() => {
-        setActivePinia(createPinia())
-        vi.clearAllMocks()
+    it('falls back to custom profile input when bound profile is missing from list', async () => {
+        const wrapper = await mountModal({
+            roleBindings: makeBindings({ planner: { profileName: 'unknown-profile' } }),
+        })
+
+        await wrapper.get('[data-role-edit="planner"]').trigger('click')
+        await flushPromises()
+
+        const profileSelect = wrapper.get('[data-role-select="planner"]')
+        expect((profileSelect.element as HTMLSelectElement).value).toBe('__custom__')
+        const customInput = wrapper.get('[data-role-input="planner"]')
+        expect((customInput.element as HTMLInputElement).value).toBe('unknown-profile')
     })
-
     it('shows empty state when no profiles are returned', async () => {
-        const wrapper = await mountModal({ profiles: [], showAdvanced: true })
-
+        const wrapper = await mountModal({ profiles: [] })
         expect(wrapper.text()).toContain('未发现 Hermes profiles')
     })
 
-    it('still allows manual input save when no profiles exist', async () => {
-        const wrapper = await mountModal({ profiles: [], showAdvanced: true })
+    it('shows warning and manual input fallback when profile fetch fails', async () => {
+        const wrapper = await mountModal({ fetchError: true })
 
-        // With empty profiles, select is shown; switch to custom
-        const plannerSelect = wrapper.find('select[data-role-select="planner"]')
-        await plannerSelect.setValue('__custom__')
+        await wrapper.get('[data-role-edit="planner"]').trigger('click')
         await flushPromises()
 
-        const customInput = wrapper.find('input[data-role-input="planner"]')
-        expect(customInput.exists()).toBe(true)
-        await customInput.setValue('manual-profile')
-
-        const rows = wrapper.findAll('.role-row')
-        const saveBtn = rows[1].find('.btn-save')
-        await saveBtn.trigger('click')
-
-        expect(wrapper.emitted('save')).toEqual([[{ role: 'planner', profileName: 'manual-profile' }]])
+        expect(wrapper.text()).toContain('Profiles 加载失败')
+        expect(wrapper.find('[data-role-input="planner"]').exists()).toBe(true)
     })
 
-    it('shows custom inputs when fetch throws and still allows save', async () => {
-        const wrapper = await mountModal({ fetchError: true, showAdvanced: true })
+    it('saves manual profile input when profile fetch fails', async () => {
+        const wrapper = await mountModal({ fetchError: true })
 
-        // When fetch rejects, profilesLoaded stays false → each role gets text input
-        const inputs = wrapper.findAll('input.profile-input')
-        expect(inputs.length).toBe(5)
+        await wrapper.get('[data-role-edit="planner"]').trigger('click')
+        await flushPromises()
 
-        const plannerInput = wrapper.find('input[data-role-input="planner"]')
-        await plannerInput.setValue('fallback-profile')
-
-        const rows = wrapper.findAll('.role-row')
-        const saveBtn = rows[1].find('.btn-save')
-        await saveBtn.trigger('click')
+        await wrapper.get('[data-role-input="planner"]').setValue('fallback-profile')
+        await wrapper.get('[data-role-save="planner"]').trigger('click')
 
         expect(wrapper.emitted('save')).toEqual([[{ role: 'planner', profileName: 'fallback-profile' }]])
     })
-})
-
-describe('AgentRoomRoleBindingModal — delete binding', () => {
-    beforeEach(() => {
-        setActivePinia(createPinia())
-        vi.clearAllMocks()
-    })
 
     it('emits delete for a bound role', async () => {
-        const bindings = makeBindings({ planner: 'kimi' })
-        const wrapper = await mountModal({ roleBindings: bindings, showAdvanced: true })
+        const wrapper = await mountModal({
+            roleBindings: makeBindings({ planner: { profileName: 'kimi' } }),
+        })
 
-        const rows = wrapper.findAll('.role-row')
-        const deleteBtn = rows[1].find('.btn-delete')
-        await deleteBtn.trigger('click')
+        await wrapper.get('[data-role-reset="planner"]').trigger('click')
 
         expect(wrapper.emitted('delete')).toEqual([['planner']])
     })
-})
 
-describe('AgentRoomRoleBindingModal — dirty state', () => {
-    beforeEach(() => {
-        setActivePinia(createPinia())
-        vi.clearAllMocks()
+    it('disables save when an existing binding is unchanged', async () => {
+        const wrapper = await mountModal({
+            roleBindings: makeBindings({ planner: { profileName: 'kimi' } }),
+        })
+
+        await wrapper.get('[data-role-edit="planner"]').trigger('click')
+        await flushPromises()
+
+        const saveButton = wrapper.get('[data-role-save="planner"]')
+        expect(saveButton.attributes('disabled')).toBeDefined()
     })
 
-    it('disables save when selection is not dirty and already bound', async () => {
-        const bindings = makeBindings({ planner: 'kimi' })
-        const wrapper = await mountModal({ roleBindings: bindings, showAdvanced: true })
+    it('enables save after changing bound values', async () => {
+        const wrapper = await mountModal({
+            roleBindings: makeBindings({ planner: { profileName: 'kimi' } }),
+        })
 
-        const rows = wrapper.findAll('.role-row')
-        const saveBtn = rows[1].find('.btn-save')
+        await wrapper.get('[data-role-edit="planner"]').trigger('click')
+        await flushPromises()
 
-        // kimi is already bound, selecting kimi again = not dirty → disabled
-        expect(saveBtn.attributes('disabled')).toBeDefined()
-    })
+        await wrapper.get('[data-role-provider-select="planner"]').setValue('anthropic')
 
-    it('enables save when selection changes from bound value', async () => {
-        const bindings = makeBindings({ planner: 'kimi' })
-        const wrapper = await mountModal({ roleBindings: bindings, showAdvanced: true })
-
-        const plannerSelect = wrapper.find('select[data-role-select="planner"]')
-        await plannerSelect.setValue('default')
-
-        const rows = wrapper.findAll('.role-row')
-        const saveBtn = rows[1].find('.btn-save')
-
-        expect(saveBtn.attributes('disabled')).toBeUndefined()
+        const saveButton = wrapper.get('[data-role-save="planner"]')
+        expect(saveButton.attributes('disabled')).toBeUndefined()
     })
 })

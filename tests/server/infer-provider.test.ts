@@ -66,6 +66,36 @@ describe('inferProvider', () => {
         expect(mockReadConfigForProfile).toHaveBeenCalledWith('kimi')
     })
 
+    it('uses model.provider when the requested model matches model.default', async () => {
+        mockReadConfigForProfile.mockResolvedValue({
+            model: {
+                default: 'GLM-5.1',
+                provider: 'custom:ark',
+            },
+            providers: {
+                'custom:ark': { base_url: 'https://ark.example.com' },
+            },
+        })
+
+        const result = await inferProviderForProfile('glm', 'GLM-5.1')
+        expect(result).toBe('custom:ark')
+    })
+
+    it('does not reuse model.provider for a different requested model', async () => {
+        mockReadConfigForProfile.mockResolvedValue({
+            model: {
+                default: 'GLM-5.1',
+                provider: 'custom:ark',
+            },
+            providers: {
+                'custom:ark': { base_url: 'https://ark.example.com' },
+            },
+        })
+
+        const result = await inferProviderForProfile('glm', 'totally-unknown-model-xyz')
+        expect(result).toBeUndefined()
+    })
+
     it('falls back to built-in provider catalog when the bound profile has no custom provider match', async () => {
         mockReadConfigForProfile.mockResolvedValue({ custom_providers: [] })
 

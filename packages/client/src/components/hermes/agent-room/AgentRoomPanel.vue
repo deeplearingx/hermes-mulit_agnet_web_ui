@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useAgentRoomStore } from '@/stores/hermes/agent-room'
 import type { AgentRoomTask, AgentRoomRole } from '@/api/hermes/agent-room'
 import AgentRoomWorkspace from './AgentRoomWorkspace.vue'
@@ -190,6 +190,26 @@ async function handleDeleteRoleBinding(role: AgentRoomRole) {
         savingRoleBinding.value = false
     }
 }
+
+const roleBindingSummary = computed(() => {
+    const labels: Partial<Record<AgentRoomRole, string>> = {
+        planner: 'Planner',
+        developer: 'Developer',
+        reviewer: 'Reviewer',
+    }
+
+    return (['planner', 'developer', 'reviewer'] as const).map((role) => {
+        const binding = store.roleBindings.find(item => item.role === role)
+        const model = binding?.model?.trim()
+        const provider = binding?.provider?.trim()
+        return {
+            role,
+            label: labels[role]!,
+            value: model || binding?.profileName || (role === 'developer' ? 'assigned / active profile' : 'active profile'),
+            hint: provider ? `provider · ${provider}` : binding ? '已绑定' : '自动回退',
+        }
+    })
+})
 </script>
 
 <template>
@@ -232,6 +252,17 @@ async function handleDeleteRoleBinding(role: AgentRoomRole) {
             >
                 🔗 角色绑定
             </button>
+            <div v-if="store.currentSessionId" class="role-binding-summary-bar">
+                <div
+                    v-for="item in roleBindingSummary"
+                    :key="item.role"
+                    class="role-binding-chip"
+                >
+                    <span class="role-binding-chip-label">{{ item.label }}</span>
+                    <span class="role-binding-chip-value">{{ item.value }}</span>
+                    <span class="role-binding-chip-hint">{{ item.hint }}</span>
+                </div>
+            </div>
             <div v-if="showNewSession" class="new-session-form">
                 <input
                     v-model="newSessionName"
@@ -579,6 +610,52 @@ async function handleDeleteRoleBinding(role: AgentRoomRole) {
         background: #1e293b;
         color: #e2e8f0;
     }
+}
+
+.role-binding-summary-bar {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+    margin-left: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+
+    &::-webkit-scrollbar {
+        display: none;
+    }
+}
+
+.role-binding-chip {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 112px;
+    padding: 5px 8px;
+    border: 1px solid #1e293b;
+    border-radius: 4px;
+    background: rgba(15, 23, 41, 0.65);
+}
+
+.role-binding-chip-label {
+    font-size: 10px;
+    color: #94a3b8;
+    text-transform: uppercase;
+}
+
+.role-binding-chip-value {
+    font-size: 11px;
+    color: #e2e8f0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.role-binding-chip-hint {
+    font-size: 10px;
+    color: #64748b;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .new-session-form {

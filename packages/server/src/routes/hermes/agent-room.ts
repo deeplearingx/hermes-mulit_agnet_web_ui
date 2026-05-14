@@ -22,6 +22,8 @@ export function mapAgentRoomError(ctx: Context, err: any): void {
     else if (message.includes('Workflow is already running')) ctx.status = 409
     else if (message.startsWith('Invalid transition')) ctx.status = 400
     else if (message.startsWith('Cannot review task')) ctx.status = 400
+    else if (message.startsWith('Agent Room model resolution failed')) ctx.status = 422
+    else if (message.startsWith('Agent Room role binding is not runnable')) ctx.status = 422
     else ctx.status = 400
 
     ctx.body = { error: message }
@@ -163,7 +165,7 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/review',
         return
     }
     try {
-        const review = agentRoomService.submitReview(
+        const review = await agentRoomService.submitReview(
             ctx.params.sessionId,
             ctx.params.taskId,
             reviewerAgentId,
@@ -201,7 +203,7 @@ agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/retry', 
 // Deliver task
 agentRoomRoutes.post('/api/agent-room/sessions/:sessionId/tasks/:taskId/deliver', async (ctx) => {
     try {
-        const task = agentRoomService.deliverTask(ctx.params.sessionId, ctx.params.taskId, 'manual')
+        const task = await agentRoomService.deliverTask(ctx.params.sessionId, ctx.params.taskId, 'manual')
         if (!task) {
             ctx.status = 404
             ctx.body = { error: 'Task not found' }
@@ -408,6 +410,21 @@ agentRoomRoutes.get('/api/agent-room/sessions/:sessionId/role-bindings', async (
     }
 })
 
+// Preview profile run target resolution for role-binding UI.
+agentRoomRoutes.post('/api/agent-room/profile-run-target/preview', async (ctx) => {
+    const { profileName, provider, model } = ctx.request.body as { profileName?: string; provider?: string; model?: string }
+    if (!profileName || !profileName.trim()) {
+        ctx.status = 400
+        ctx.body = { error: 'profileName is required' }
+        return
+    }
+    try {
+        ctx.body = await agentRoomService.previewProfileRunTarget(profileName, model, provider)
+    } catch (err: any) {
+        mapAgentRoomError(ctx, err)
+    }
+})
+
 // Upsert role binding (PUT by role)
 agentRoomRoutes.put('/api/agent-room/sessions/:sessionId/role-bindings/:role', async (ctx) => {
     const { role } = ctx.params
@@ -423,7 +440,7 @@ agentRoomRoutes.put('/api/agent-room/sessions/:sessionId/role-bindings/:role', a
         return
     }
     try {
-        ctx.body = agentRoomService.setRoleBinding(ctx.params.sessionId, role, profileName, provider, model)
+        ctx.body = await agentRoomService.setRoleBindingResolved(ctx.params.sessionId, role, profileName, provider, model)
     } catch (err: any) {
         mapAgentRoomError(ctx, err)
     }

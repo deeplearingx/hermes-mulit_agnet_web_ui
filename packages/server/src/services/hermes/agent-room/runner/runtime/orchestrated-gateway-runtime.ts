@@ -21,7 +21,7 @@
 // P2: Reviewer phase — extends multi-role pipeline to planner → developer → reviewer.
 //   - Resolves reviewer profile from roleBindings.get('reviewer') with active profile fallback
 //   - Executes reviewer Gateway run using developer output as review context
-//   - Produces unified reviewer metadata (reviewerRunId, reviewerProfileName,
+//   - Produces unified reviewer metadata (reviewerRunId, reviewerProfileName: displayProfileName(reviewerBinding),
 //     reviewDecision, reviewFeedback) compatible with manual submitReview path
 //   - Final status: review_passed | revision_required | need_user_decision
 //
@@ -39,16 +39,15 @@ import type {
     HermesAgentRuntimeHooks,
     HermesAgentRuntimeMetadata,
     HermesAgentRuntimeStep,
-    HermesAgentRuntimeArtifact,
     ReviewerDecision,
     ReviewerOutput,
 } from './types'
-import type { GatewayProfileResolver, GatewayRuntimeTarget } from './gateway-profile-resolver'
+import type { GatewayProfileResolver } from './gateway-profile-resolver'
 import { createDefaultGatewayProfileResolver } from './gateway-profile-resolver'
 import { runHermesGatewayTask } from '../../../gateway-run-client'
-import { inferProvider, inferProviderForProfile } from '../../../../../shared/infer-provider'
 import { config } from '../../../../../config'
 import { logger } from '../../../../logger'
+import { assertResolvedProfileRunTarget, resolveProfileRunTarget } from '../../../../hermes/profile-run-target-resolver'
 
 const UPSTREAM = config.upstream.replace(/\/$/, '')
 
@@ -131,51 +130,28 @@ function displayProfileName(resolved: ResolvedRoleBinding): string {
     return resolved.profileName ?? '(active-profile)'
 }
 
-interface ResolvedGatewayRunTarget extends GatewayRuntimeTarget {
-    providerInferred: boolean
-}
-
-/**
- * Resolve the final provider/model pair for a Gateway run.
- *
- * Priority:
- *   1. binding.provider / binding.model (explicit from role binding)
- *   2. If no model override, reuse profileResolver's provider
- *   3. If final model exists but provider is still missing → inferProviderForProfile() then inferProvider()
- *
- * Returns a new GatewayRuntimeTarget with the exact model/provider that should
- * be sent to /v1/runs.
- */
-async function resolveGatewayRunTarget(
-    target: GatewayRuntimeTarget,
+async function resolveExecutableRunTarget(
+    profileResolver: GatewayProfileResolver,
+    upstream: string,
+    apiKey: string | null | undefined,
     binding: ResolvedRoleBinding,
-): Promise<ResolvedGatewayRunTarget> {
-    const modelOverride = binding.model?.trim() || undefined
-    const providerOverride = binding.provider?.trim() || undefined
-
-    const finalModel = modelOverride ?? target.model
-    let finalProvider = providerOverride
-    let providerInferred = false
-
-    if (!finalProvider && finalModel) {
-        if (!modelOverride) {
-            finalProvider = target.provider
-        }
-        if (!finalProvider) {
-            finalProvider = await inferProviderForProfile(binding.profileName, finalModel)
-        }
-        if (!finalProvider) {
-            finalProvider = await inferProvider(finalModel)
-        }
-        providerInferred = !!finalProvider
-    }
-
-    return {
-        ...target,
-        model: finalModel,
-        provider: finalProvider,
-        providerInferred,
-    }
+    role: 'planner' | 'developer' | 'reviewer',
+): Promise<import('../../../../hermes/profile-run-target-resolver').ResolvedProfileRunTarget> {
+    const target = profileResolver(
+        binding.profileName,
+        upstream,
+        apiKey,
+    )
+    const resolved = await resolveProfileRunTarget({
+        profileName: binding.profileName,
+        fallbackUpstream: upstream,
+        fallbackApiKey: apiKey,
+        modelOverride: binding.model,
+        providerOverride: binding.provider,
+        baseTarget: target,
+    })
+    assertResolvedProfileRunTarget(resolved, { role, profileName: binding.profileName })
+    return resolved
 }
 
 /**
@@ -580,15 +556,15 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         // Step 1: Resolve planner binding or fall back to the current active Hermes profile
         const plannerBinding = resolveExecutableRoleBinding(input, 'planner')
-        const plannerProfileName = plannerBinding.profileName
 
         // Step 2: Resolve planner Gateway target via profile resolver + binding overrides
-        const plannerTargetRaw = this.profileResolver(
-            plannerProfileName,
+        const plannerTarget = await resolveExecutableRunTarget(
+            this.profileResolver,
             this.upstream,
             this.apiKey,
+            plannerBinding,
+            'planner',
         )
-        const plannerTarget = await resolveGatewayRunTarget(plannerTargetRaw, plannerBinding)
 
         // Step 3: Execute planner Gateway run with role-tagged hooks
         const plannerSessionId = `agent-room-planner-${input.sessionId}-${input.taskId}`
@@ -638,15 +614,16 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         // Step 4: Resolve developer binding — fallback to assignedAgentId or defaults
         const developerBinding = resolveExecutableRoleBinding(input, 'developer')
-        const { profileName: developerProfileName, bindingSource: developerBindingSource } = developerBinding
+        const { bindingSource: developerBindingSource } = developerBinding
 
         // Step 5: Resolve developer Gateway target via profile resolver + binding overrides
-        const developerTargetRaw = this.profileResolver(
-            developerProfileName,
+        const developerTarget = await resolveExecutableRunTarget(
+            this.profileResolver,
             this.upstream,
             this.apiKey,
+            developerBinding,
+            'developer',
         )
-        const developerTarget = await resolveGatewayRunTarget(developerTargetRaw, developerBinding)
 
         // Step 6: Execute developer Gateway run with planner output as plan context
         const developerSessionId = `agent-room-developer-${input.sessionId}-${input.taskId}`
@@ -697,15 +674,15 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         // Step 7: Resolve reviewer binding or fall back to the current active Hermes profile
         const reviewerBinding = resolveExecutableRoleBinding(input, 'reviewer')
-        const reviewerProfileName = reviewerBinding.profileName
 
         // Step 8: Resolve reviewer Gateway target via profile resolver + binding overrides
-        const reviewerTargetRaw = this.profileResolver(
-            reviewerProfileName,
+        const reviewerTarget = await resolveExecutableRunTarget(
+            this.profileResolver,
             this.upstream,
             this.apiKey,
+            reviewerBinding,
+            'reviewer',
         )
-        const reviewerTarget = await resolveGatewayRunTarget(reviewerTargetRaw, reviewerBinding)
 
         // Step 9: Execute reviewer Gateway run using developer output as review context
         const reviewerSessionId = `agent-room-reviewer-${input.sessionId}-${input.taskId}`
@@ -743,8 +720,6 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
             )
         }
 
-        // ── Phase 4: Delivery run (P2 — optional, only when approved + delivery binding) ──
-
         // Step 10: P5.2 — Parse reviewer output using JSON protocol
         const reviewerParsed = parseReviewerOutput(reviewerResult.output)
         const reviewDecision = reviewerParsed.decision
@@ -752,59 +727,6 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         // P6.3: reviewerDecision is returned in the output instead of hook call.
         // applyRunnerResult() will write the review record in the same transaction.
-
-        // P2: Run delivery Gateway if approved and delivery binding exists
-        let deliveryRunId: string | undefined
-        let deliveryOutput: string | undefined
-        let deliveryProfile: string | null = null
-
-        if (reviewDecision === 'approved') {
-            const deliveryBindingFull = resolveDeliveryBindingFull(input)
-            deliveryProfile = deliveryBindingFull?.profileName ?? null
-            if (deliveryProfile && deliveryBindingFull) {
-                const deliveryTargetRaw = this.profileResolver(
-                    deliveryProfile,
-                    this.upstream,
-                    this.apiKey,
-                )
-                const deliveryTarget = await resolveGatewayRunTarget(deliveryTargetRaw, deliveryBindingFull)
-                const deliverySessionId = `agent-room-delivery-${input.sessionId}-${input.taskId}`
-                const deliveryHooks = createRoleTaggedHooks(input.hooks, 'delivery')
-                logger.info({
-                    role: 'delivery',
-                    profile: deliveryProfile,
-                    source: deliveryBindingFull.bindingSource,
-                    model: deliveryTarget.model,
-                    provider: deliveryTarget.provider,
-                    providerInferred: deliveryTarget.providerInferred,
-                }, '[orchestrated-runtime] Resolved delivery Gateway target')
-
-                try {
-                    const deliveryResult = await runHermesGatewayTask({
-                        upstream: deliveryTarget.upstream,
-                        apiKey: deliveryTarget.apiKey,
-                        input: buildDeliveryInput(input, plannerResult.output, developerResult.output, reviewFeedback),
-                        instructions: buildDeliveryInstructions(input),
-                        sessionId: deliverySessionId,
-                        timeoutMs: this.timeoutMs,
-                        model: deliveryTarget.model,
-                        provider: deliveryTarget.provider,
-                        onUpstreamRunCreated: deliveryHooks?.onUpstreamRunCreated,
-                        onRawEvent: deliveryHooks?.onRawEvent,
-                    })
-                    deliveryRunId = deliveryResult.runId
-                    deliveryOutput = deliveryResult.output
-                } catch (err: any) {
-                    logger.error(
-                        { err, profile: deliveryProfile, taskId: input.taskId },
-                        '[orchestrated-runtime] Delivery phase failed',
-                    )
-                    throw new Error(
-                        `Orchestrated delivery phase failed: ${err?.message ?? err}`,
-                    )
-                }
-            }
-        }
 
         // ── Build output ──────────────────────────────────────────
 
@@ -851,21 +773,12 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
             reviewerMetadata.reviewerTransportSource = reviewerTarget.transportSource
         }
 
-        // P2: Delivery metadata when delivery Agent was executed
-        const deliveryMetadata: HermesAgentRuntimeMetadata = {}
-        if (deliveryRunId) {
-            deliveryMetadata.deliveryRunId = deliveryRunId
-            deliveryMetadata.deliveryProfileName = deliveryProfile ?? undefined
-            deliveryMetadata.deliverySource = 'orchestrated-delivery'
-        }
-
         // Combined metadata for observability
         const combinedMetadata: Record<string, unknown> = {
             ...plannerMetadata,
             ...developerMetadata,
             ...reviewerMetadata,
-            ...deliveryMetadata,
-            source: deliveryRunId ? 'orchestrated-quadruple-run' : 'orchestrated-triple-run',
+            source: 'orchestrated-triple-run',
         }
 
         const title = input.taskTitle
@@ -883,38 +796,7 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         const finalStatus = decisionStatusMap[reviewDecision]
 
-        // P2: Build delivery steps when delivery Agent executed
-        const hasDelivery = !!deliveryRunId
-        const deliverySteps: HermesAgentRuntimeStep[] = hasDelivery ? [
-            {
-                status: 'delivering' as const,
-                activeRole: 'delivery' as const,
-                events: [{
-                    type: 'delivery_started' as const,
-                    agentRole: 'delivery' as const,
-                    payload: { deliveryRunId, deliveryProfile },
-                }],
-            },
-            {
-                status: 'completed' as const,
-                activeRole: 'delivery' as const,
-                events: [{
-                    type: 'delivery_completed' as const,
-                    agentRole: 'delivery' as const,
-                    payload: { deliveryRunId, deliveryProfile },
-                }],
-                messages: [{
-                    senderRole: 'delivery' as const,
-                    senderId: 'delivery',
-                    senderName: '交付 Agent',
-                    type: 'final_delivery' as const,
-                    content: deliveryOutput ?? '',
-                    metadata: { deliveryRunId, deliveryProfile },
-                }],
-            },
-        ] : []
-
-        // Step 13: Return ordered steps: planned → assigned → in_progress → submitted_for_review → review_final → (delivery)
+        // Step 13: Return ordered steps: planned → assigned → in_progress → submitted_for_review → review_final
         return {
             steps: [
                 {
@@ -1072,8 +954,6 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                             }],
                         },
                     ]),
-                // P2: Delivery steps when delivery Agent executed
-                ...deliverySteps,
             ],
             artifacts: [
                 {
@@ -1088,21 +968,10 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                     content: reviewFeedback,
                     metadata: {
                         reviewerRunId: reviewerResult.runId,
-                        reviewerProfileName,
+                        reviewerProfileName: displayProfileName(reviewerBinding),
                         reviewDecision,
                     },
                 },
-                // P2: final_delivery artifact when delivery Agent executed
-                ...(hasDelivery ? [{
-                    name: `${safeName} — 交付结果`,
-                    type: 'final_delivery' as const,
-                    content: deliveryOutput ?? '',
-                    metadata: {
-                        deliveryRunId,
-                        deliveryProfile,
-                        source: 'orchestrated-delivery',
-                    } as Record<string, unknown>,
-                } as HermesAgentRuntimeArtifact] : []),
             ],
             // P6.3: Carry reviewer decision data for transactional review creation
             reviewerDecision: {
@@ -1133,14 +1002,15 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
         // ── Phase 1: Developer revision run ──────────────────────
 
         const developerBinding = resolveExecutableRoleBinding(input, 'developer')
-        const { profileName: developerProfileName, bindingSource: developerBindingSource } = developerBinding
+        const { bindingSource: developerBindingSource } = developerBinding
 
-        const developerTargetRaw = this.profileResolver(
-            developerProfileName,
+        const developerTarget = await resolveExecutableRunTarget(
+            this.profileResolver,
             this.upstream,
             this.apiKey,
+            developerBinding,
+            'developer',
         )
-        const developerTarget = await resolveGatewayRunTarget(developerTargetRaw, developerBinding)
 
         const developerSessionId = `agent-room-developer-${input.sessionId}-${input.taskId}-rev${input.revisionRound}`
         const developerHooks = createRoleTaggedHooks(input.hooks, 'developer')
@@ -1191,14 +1061,13 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
 
         const reviewerBinding = resolveExecutableRoleBinding(input, 'reviewer')
 
-        const reviewerProfileName = reviewerBinding.profileName
-
-        const reviewerTargetRaw = this.profileResolver(
-            reviewerProfileName,
+        const reviewerTarget = await resolveExecutableRunTarget(
+            this.profileResolver,
             this.upstream,
             this.apiKey,
+            reviewerBinding,
+            'reviewer',
         )
-        const reviewerTarget = await resolveGatewayRunTarget(reviewerTargetRaw, reviewerBinding)
 
         const reviewerSessionId = `agent-room-reviewer-${input.sessionId}-${input.taskId}-rev${input.revisionRound}`
         const reviewerHooks = createRoleTaggedHooks(input.hooks, 'reviewer')
@@ -1441,7 +1310,7 @@ export class OrchestratedGatewayRuntime implements HermesAgentRuntime {
                     content: reviewFeedback,
                     metadata: {
                         reviewerRunId: reviewerResult.runId,
-                        reviewerProfileName,
+                        reviewerProfileName: displayProfileName(reviewerBinding),
                         reviewDecision,
                         revisionRound: input.revisionRound,
                     },

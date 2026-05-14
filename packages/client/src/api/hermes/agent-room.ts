@@ -140,6 +140,18 @@ export interface AgentRoomRun {
 // ─── Role Run Entity (P3.1: per-role execution record) ─────────
 export type AgentRoomRoleRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'skipped'
 
+export interface DeliveryRoleRunMetadata {
+    source?: string
+    deliveryMode?: 'system' | 'agent'
+    deliveryProfileName?: string
+    deliveryRunId?: string
+    provider?: string
+    model?: string
+    trigger?: 'manual' | 'auto'
+    fallbackReason?: string
+    [key: string]: unknown
+}
+
 export interface AgentRoomRoleRun {
     id: string
     runId: string
@@ -153,7 +165,7 @@ export interface AgentRoomRoleRun {
     startedAt?: string
     finishedAt?: string
     errorMessage?: string
-    metadata?: Record<string, unknown>
+    metadata?: DeliveryRoleRunMetadata
     createdAt: string
     updatedAt: string
 }
@@ -187,10 +199,43 @@ export interface AgentRoomRoleBinding {
     createdAt: string
 }
 
+export interface AgentRoomProfileRunTargetPreview {
+    profileName: string
+    upstream: string
+    hasApiKey: boolean
+    model?: string
+    provider?: string
+    transportSource?: string
+    modelSource: string
+    providerSource: string
+    providerInferred: boolean
+    diagnostics: Record<string, unknown>
+}
+
 /** Fixed roles for AgentRoom (mirrors server AGENT_ROOM_ROLES) */
 export const AGENT_ROOM_ROLES: readonly AgentRoomRole[] = [
     'conversation', 'planner', 'developer', 'reviewer', 'delivery',
 ]
+
+export interface FinalDeliveryArtifactMetadata {
+    source?: string
+    deliveryMode?: 'system' | 'agent'
+    deliveryProfileName?: string
+    deliveryRoleRunId?: string
+    deliveryRunId?: string
+    provider?: string
+    model?: string
+    trigger?: 'manual' | 'auto'
+    fallbackReason?: string
+    revisionRound?: number
+    maxRevisionRounds?: number
+    reviewFeedback?: string | null
+    deliveredAt?: string
+    plannerRunId?: string
+    developerRunId?: string
+    reviewerRunId?: string
+    [key: string]: unknown
+}
 
 export interface AgentRoomArtifact {
     id: string
@@ -201,7 +246,7 @@ export interface AgentRoomArtifact {
     content?: string
     /** P5.6: External storage URL for artifact download/link. */
     storageUrl?: string
-    metadata?: Record<string, unknown>
+    metadata?: FinalDeliveryArtifactMetadata | Record<string, unknown>
     createdAt: string
 }
 
@@ -412,6 +457,14 @@ export async function listRoleBindings(sessionId: string): Promise<AgentRoomRole
 export async function setRoleBinding(sessionId: string, role: AgentRoomRole, profileName: string, provider?: string, model?: string): Promise<AgentRoomRoleBinding> {
     return request(`${BASE}/sessions/${sessionId}/role-bindings/${role}`, {
         method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileName, provider, model }),
+    })
+}
+
+export async function previewProfileRunTarget(profileName: string, provider?: string, model?: string): Promise<AgentRoomProfileRunTargetPreview> {
+    return request(`${BASE}/profile-run-target/preview`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ profileName, provider, model }),
     })

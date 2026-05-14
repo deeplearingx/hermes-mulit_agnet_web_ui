@@ -133,6 +133,22 @@ function formatDuration(start: string | undefined, end: string | undefined): str
     return `${min}m${sec % 60}s`
 }
 
+function metadataRows(metadata: Record<string, unknown> | undefined): Array<[string, unknown]> {
+    if (!metadata) return []
+    const keys = [
+        'deliveryMode',
+        'deliveryProfileName',
+        'deliveryRunId',
+        'provider',
+        'model',
+        'fallbackReason',
+        'trigger',
+    ]
+    return keys
+        .map((key) => [key, metadata[key]] as [string, unknown])
+        .filter(([, value]) => value !== undefined && value !== null && value !== '')
+}
+
 const RUN_EVENT_ICONS: Record<string, string> = {
     'run:started':       '🚀',
     'run:completed':     '✅',
@@ -228,23 +244,34 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
                             :class="{ clickable: getEventsForRoleRun(rr.id).length > 0 }"
                             @click="getEventsForRoleRun(rr.id).length > 0 && toggleRoleRun(rr.id)"
                         >
-                            <span class="rr-role-icon">{{ ROLE_ICONS[rr.role] ?? '🤖' }}</span>
-                            <span class="rr-role">{{ rr.role }}</span>
-                            <span class="rr-profile">{{ rr.profileName ?? '—' }}</span>
-                            <span
-                                class="rr-status"
-                                :style="{ color: getRoleRunStatusConfig(rr.status).color }"
-                            >{{ getRoleRunStatusConfig(rr.status).icon }} {{ getRoleRunStatusConfig(rr.status).label }}</span>
-                            <!-- Reviewer decision highlight: prefer reviewDecision, fall back to status -->
-                            <span
-                                v-if="rr.role === 'reviewer' && getReviewsForTask(run.taskId).length > 0"
-                                class="rr-decision"
-                                :title="`decision: ${getReviewsForTask(run.taskId)[0].reviewDecision ?? getReviewsForTask(run.taskId)[0].status}`"
-                            >
-                                {{ (getReviewsForTask(run.taskId)[0].reviewDecision === 'approved' || getReviewsForTask(run.taskId)[0].status === 'passed') ? '✅ Approved' : '❌ Rejected' }}
-                            </span>
-                            <span class="rr-upstream" v-if="rr.upstreamRunId" :title="rr.upstreamRunId">↑{{ rr.upstreamRunId.slice(0, 8) }}</span>
-                            <span class="rr-duration">{{ formatDuration(rr.startedAt, rr.finishedAt) }}</span>
+                            <div class="role-run-main">
+                                <span class="rr-role-icon">{{ ROLE_ICONS[rr.role] ?? '🤖' }}</span>
+                                <span class="rr-role">{{ rr.role }}</span>
+                                <span class="rr-profile">{{ rr.profileName ?? '—' }}</span>
+                                <span
+                                    class="rr-status"
+                                    :style="{ color: getRoleRunStatusConfig(rr.status).color }"
+                                >{{ getRoleRunStatusConfig(rr.status).icon }} {{ getRoleRunStatusConfig(rr.status).label }}</span>
+                                <span
+                                    v-if="rr.role === 'reviewer' && getReviewsForTask(run.taskId).length > 0"
+                                    class="rr-decision"
+                                    :title="`decision: ${getReviewsForTask(run.taskId)[0].reviewDecision ?? getReviewsForTask(run.taskId)[0].status}`"
+                                >
+                                    {{ (getReviewsForTask(run.taskId)[0].reviewDecision === 'approved' || getReviewsForTask(run.taskId)[0].status === 'passed') ? '✅ Approved' : '❌ Rejected' }}
+                                </span>
+                                <span class="rr-upstream" v-if="rr.upstreamRunId" :title="rr.upstreamRunId">↑{{ rr.upstreamRunId.slice(0, 8) }}</span>
+                                <span class="rr-duration">{{ formatDuration(rr.startedAt, rr.finishedAt) }}</span>
+                            </div>
+                            <div v-if="rr.role === 'delivery' && metadataRows(rr.metadata).length" class="rr-meta-list">
+                                <div
+                                    v-for="entry in metadataRows(rr.metadata)"
+                                    :key="`${rr.id}-${entry[0]}`"
+                                    class="rr-meta-row"
+                                >
+                                    <span class="rr-meta-key">{{ entry[0] }}</span>
+                                    <span class="rr-meta-value">{{ String(entry[1]) }}</span>
+                                </div>
+                            </div>
                         </div>
                         <!-- Expanded role run events -->
                         <div
@@ -274,12 +301,24 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
                             :key="artifact.id"
                             class="run-artifact-item"
                         >
-                            <span class="ra-icon">📦</span>
-                            <span class="ra-name">{{ artifact.name }}</span>
-                            <span class="ra-type">{{ artifact.type }}</span>
-                            <span v-if="artifact.storageUrl" class="ra-link">
-                                <a :href="artifact.storageUrl" target="_blank" rel="noopener">🔗</a>
-                            </span>
+                            <div class="run-artifact-main">
+                                <span class="ra-icon">📦</span>
+                                <span class="ra-name">{{ artifact.name }}</span>
+                                <span class="ra-type">{{ artifact.type }}</span>
+                                <span v-if="artifact.storageUrl" class="ra-link">
+                                    <a :href="artifact.storageUrl" target="_blank" rel="noopener">🔗</a>
+                                </span>
+                            </div>
+                            <div v-if="artifact.type === 'final_delivery' && metadataRows(artifact.metadata).length" class="ra-meta-list">
+                                <div
+                                    v-for="entry in metadataRows(artifact.metadata)"
+                                    :key="`${artifact.id}-${entry[0]}`"
+                                    class="ra-meta-row"
+                                >
+                                    <span class="ra-meta-key">{{ entry[0] }}</span>
+                                    <span class="ra-meta-value">{{ String(entry[1]) }}</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <!-- Run events -->
@@ -541,8 +580,8 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
 
 .role-run-item {
     display: flex;
-    align-items: center;
-    gap: 6px;
+    flex-direction: column;
+    gap: 4px;
     padding: 3px 4px;
     border: 1px solid #1e293b;
     border-radius: 3px;
@@ -554,10 +593,16 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
         background: #141e33;
     }
 
-    // P5.6: Clickable role run items
     &.clickable {
         cursor: pointer;
     }
+}
+
+.role-run-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
 }
 
 .rr-role-icon {
@@ -635,10 +680,17 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
 
 .run-artifact-item {
     display: flex;
-    align-items: center;
-    gap: 6px;
+    flex-direction: column;
+    gap: 4px;
     padding: 2px 4px;
     font-size: 11px;
+}
+
+.run-artifact-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
 }
 
 .ra-icon {
@@ -671,5 +723,30 @@ function getRoleRunsForRun(runId: string): AgentRoomRoleRun[] {
             text-decoration: underline;
         }
     }
+}
+
+.rr-meta-list,
+.ra-meta-list {
+    padding-left: 20px;
+}
+
+.rr-meta-row,
+.ra-meta-row {
+    display: flex;
+    gap: 8px;
+    font-size: 10px;
+    padding: 1px 0;
+}
+
+.rr-meta-key,
+.ra-meta-key {
+    min-width: 110px;
+    color: #64748b;
+}
+
+.rr-meta-value,
+.ra-meta-value {
+    color: #cbd5e1;
+    word-break: break-all;
 }
 </style>

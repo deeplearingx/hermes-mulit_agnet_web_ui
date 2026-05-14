@@ -2,14 +2,14 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
-import AgentRoomTaskPanel from '@/components/hermes/agent-room/AgentRoomTaskPanel.vue'
+import AgentRoomTaskPanel from '../../packages/client/src/components/hermes/agent-room/AgentRoomTaskPanel.vue'
 import type {
     AgentRoomAgent,
     AgentRoomArtifact,
     AgentRoomRoleBinding,
     AgentRoomTask,
     AgentRoomTaskStatus,
-} from '@/api/hermes/agent-room'
+} from '../../packages/client/src/api/hermes/agent-room'
 
 const now = '2026-01-01T00:00:00.000Z'
 
@@ -100,6 +100,10 @@ describe('AgentRoomTaskPanel actions', () => {
 
         expect(wrapper.text()).toContain('未绑定，将使用任务分配 profile: kimi')
         expect(wrapper.text()).toContain('未绑定，将使用系统交付')
+        expect(wrapper.text()).toContain('Planner')
+        expect(wrapper.text()).toContain('Developer')
+        expect(wrapper.text()).toContain('Reviewer')
+        expect(wrapper.text()).toContain('kimi')
 
         const action = wrapper.get('button.action-btn')
         await action.trigger('click')
@@ -114,7 +118,7 @@ describe('AgentRoomTaskPanel actions', () => {
             expectedEvent: string
         }> = [
             { status: 'submitted_for_review', expectedText: '🔍 审核', expectedEvent: 'open-review' },
-            { status: 'review_passed', expectedText: '📦 开始交付', expectedEvent: 'deliver-task' },
+            { status: 'review_passed', expectedText: '📦 系统生成交付', expectedEvent: 'deliver-task' },
             { status: 'revision_required', expectedText: '🔄 重新开发 (第1轮)', expectedEvent: 'run-workflow' },
             { status: 'need_user_decision', expectedText: '🔄 继续修改 (第1/3轮已用尽)', expectedEvent: 'run-workflow' },
             { status: 'failed', expectedText: '🔄 重新开始', expectedEvent: 'run-workflow' },

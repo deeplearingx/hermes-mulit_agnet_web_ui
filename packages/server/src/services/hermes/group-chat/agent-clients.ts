@@ -9,7 +9,7 @@ import { getActiveProfileName } from '../hermes-profile'
 import { logger } from '../../../services/logger'
 import { updateUsage } from '../../../db/hermes/usage-store'
 import { getSessionDetailFromDbWithProfile } from '../../../db/hermes/sessions-db'
-import { inferProvider } from './infer-provider'
+import { resolveProfileRunTarget } from '../profile-run-target-resolver'
 import { buildTaskInstruction, TASK_ACTION_TRANSITIONS } from './task-dispatch'
 import type { TaskAction } from './task-dispatch'
 
@@ -335,8 +335,17 @@ class AgentClient {
 
             // Resolve model/provider override before starting the run
             const overrideModel = this._override?.model || undefined
-            const overrideProvider = this._override?.provider ||
-                (overrideModel ? await inferProvider(overrideModel) : undefined)
+            const overrideTarget = overrideModel
+                ? await resolveProfileRunTarget({
+                    profileName: this.profile,
+                    fallbackUpstream: upstream,
+                    fallbackApiKey: apiKey,
+                    modelOverride: overrideModel,
+                    providerOverride: this._override?.provider ?? undefined,
+                    baseTarget: { upstream, apiKey },
+                })
+                : null
+            const overrideProvider = overrideTarget?.provider
             logger.info(`[AgentClients] ${this.name}: overrideModel=${overrideModel}, overrideProvider=${overrideProvider}, profile=${this.profile}`)
 
             // Start a run on Hermes gateway
@@ -585,8 +594,17 @@ class AgentClient {
 
             // Resolve model/provider override
             const overrideModel = this._override?.model || undefined
-            const overrideProvider = this._override?.provider ||
-                (overrideModel ? await inferProvider(overrideModel) : undefined)
+            const overrideTarget = overrideModel
+                ? await resolveProfileRunTarget({
+                    profileName: this.profile,
+                    fallbackUpstream: upstream,
+                    fallbackApiKey: apiKey,
+                    modelOverride: overrideModel,
+                    providerOverride: this._override?.provider ?? undefined,
+                    baseTarget: { upstream, apiKey },
+                })
+                : null
+            const overrideProvider = overrideTarget?.provider
 
             // Start a run on Hermes gateway
             const runRes = await fetch(`${upstream}/v1/runs`, {

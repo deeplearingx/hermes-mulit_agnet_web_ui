@@ -1,5 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('../../packages/server/src/services/config-helpers', async () => {
+    const actual = await vi.importActual<any>('../../packages/server/src/services/config-helpers')
+    return {
+        ...actual,
+        readConfigYamlForProfile: vi.fn(),
+    }
+})
+
+import { readConfigYamlForProfile } from '../../packages/server/src/services/config-helpers'
+
+const mockReadConfigYamlForProfile = vi.mocked(readConfigYamlForProfile)
+
 function ensureTableForTest(db: any, tableName: string, schema: Record<string, string>): void {
     const cols = Object.entries(schema).map(([col, type]) => `${col} ${type}`).join(', ')
     db.exec(`CREATE TABLE IF NOT EXISTS ${tableName} (${cols})`)
@@ -10,6 +22,8 @@ describe('Agent Room Role Binding — Provider/Model Override', () => {
 
     beforeEach(async () => {
         vi.resetModules()
+        mockReadConfigYamlForProfile.mockReset()
+        mockReadConfigYamlForProfile.mockResolvedValue({})
         const { DatabaseSync } = await import('node:sqlite')
         mockDb = new DatabaseSync(':memory:')
         vi.doMock('../../packages/server/src/db/index', () => ({
@@ -37,6 +51,48 @@ describe('Agent Room Role Binding — Provider/Model Override', () => {
             expect(binding.provider).toBe('openai')
             expect(binding.model).toBe('gpt-4o')
             expect(binding.role).toBe('developer')
+        })
+
+        it('resolved upsert snapshots provider/model from selected profile defaults', async () => {
+            mockReadConfigYamlForProfile.mockResolvedValue({
+                model: { default: 'GLM-5.1', provider: 'zai' },
+            })
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            const session = svc.createSession('Resolved Test')
+
+            const binding = await svc.setRoleBindingResolved(session.id, 'planner', 'glm')
+
+            expect(binding.profileName).toBe('glm')
+            expect(binding.provider).toBe('zai')
+            expect(binding.model).toBe('GLM-5.1')
+            expect(mockReadConfigYamlForProfile).toHaveBeenCalledWith('glm')
+        })
+
+        it('resolved upsert rejects profile bindings without model/provider', async () => {
+            mockReadConfigYamlForProfile.mockResolvedValue({})
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+            const session = svc.createSession('Unresolved Test')
+
+            await expect(svc.setRoleBindingResolved(session.id, 'planner', 'glm')).rejects.toThrow(/Agent Room role binding is not runnable/)
+        })
+
+        it('previewProfileRunTarget returns diagnostics without leaking api key', async () => {
+            mockReadConfigYamlForProfile.mockResolvedValue({
+                model: { default: 'GLM-5.1', provider: 'zai' },
+            })
+            const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+
+            const preview = await svc.previewProfileRunTarget('glm')
+
+            expect(preview).toMatchObject({
+                profileName: 'glm',
+                model: 'GLM-5.1',
+                provider: 'zai',
+                modelSource: 'profile.model.default',
+                providerSource: 'profile.model.provider',
+                hasApiKey: false,
+            })
+            expect(preview).not.toHaveProperty('apiKey')
         })
 
         it('creates a role binding without provider/model (backward compatible)', async () => {
@@ -205,7 +261,10 @@ describe('Agent Room Role Binding — Provider/Model Override', () => {
             })
         })
 
-        it('works without provider/model (backward compatible)', async () => {
+        it('resolves provider/model when route receives only profileName', async () => {
+            mockReadConfigYamlForProfile.mockResolvedValue({
+                model: { default: 'GLM-5.1', provider: 'zai' },
+            })
             const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
             const { agentRoomRoutes } = await import('../../packages/server/src/routes/hermes/agent-room')
 
@@ -218,7 +277,7 @@ describe('Agent Room Role Binding — Provider/Model Override', () => {
 
             const ctx = {
                 params: { sessionId: session.id, role: 'planner' },
-                request: { body: { profileName: 'claude-3' } },
+                request: { body: { profileName: 'glm' } },
                 status: 200,
                 body: null,
             } as any
@@ -227,11 +286,39 @@ describe('Agent Room Role Binding — Provider/Model Override', () => {
 
             expect(ctx.status).toBe(200)
             expect(ctx.body).toMatchObject({
-                profileName: 'claude-3',
+                profileName: 'glm',
                 role: 'planner',
+                provider: 'zai',
+                model: 'GLM-5.1',
             })
-            expect((ctx.body as any).provider).toBeUndefined()
-            expect((ctx.body as any).model).toBeUndefined()
+        })
+
+        it('preview route returns resolved target diagnostics', async () => {
+            mockReadConfigYamlForProfile.mockResolvedValue({
+                model: { default: 'GLM-5.1', provider: 'zai' },
+            })
+            const { agentRoomRoutes } = await import('../../packages/server/src/routes/hermes/agent-room')
+            const previewRoute = agentRoomRoutes.stack.find((r: any) =>
+                r.path === '/api/agent-room/profile-run-target/preview' &&
+                r.methods.includes('POST')
+            )
+            expect(previewRoute).toBeDefined()
+
+            const ctx = {
+                request: { body: { profileName: 'glm' } },
+                status: 200,
+                body: null,
+            } as any
+
+            await previewRoute!.stack[0](ctx, async () => {})
+
+            expect(ctx.status).toBe(200)
+            expect(ctx.body).toMatchObject({
+                profileName: 'glm',
+                model: 'GLM-5.1',
+                provider: 'zai',
+                hasApiKey: false,
+            })
         })
     })
 })

@@ -1,0 +1,60 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(./**)",
+      "Edit(./**)",
+      "Write(./**)",
+      "Bash(npm run *)",
+      "Bash(pnpm run *)",
+      "Bash(yarn *)",
+      "Bash(npm install *)",
+      "Bash(pnpm install *)",
+      "Bash(vitest *)",
+      "Bash(npx vitest *)",
+      "Bash(npm test *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(grep *)",
+      "Bash(find *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(sed *)",
+      "Bash(mkdir *)",
+      "Bash(touch *)",
+      "Bash(rtk git *)",
+      "Bash(rtk tsc *)",
+      "Bash(rtk lint *)",
+      "Bash(wsl.exe *)",
+      "Bash(rtk npm *)",
+      "Bash(bash *)",
+      "Bash(npm *)",
+      "Bash(node *)",
+      "Bash(rtk ls *)",
+      "Bash(/home/ly/hermes-web-ui/node_modules/.bin/vitest *)",
+      "Bash(./node_modules/.bin/eslint . *)",
+      "Bash(test -f \"//wsl.localhost/Ubuntu/home/ly/hermes-web-ui/package.json\")",
+      "Bash(test -f \"//wsl.localhost/Ubuntu/home/ly/hermes-web-ui/node_modules/vitest/vitest.mjs\")",
+      "Bash(test -f \"//wsl.localhost/Ubuntu/home/ly/hermes-web-ui/node_modules/.bin/vitest\")",
+      "Bash(./node_modules/.bin/tsc *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Bash(curl *)",
+      "Bash(wget *)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(git reset *)",
+      "Bash(git clean *)",
+      "Bash(rm *)"
+    ],
+    "defaultMode": "acceptEdits"
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "code-review-graph"
+  ]
+}

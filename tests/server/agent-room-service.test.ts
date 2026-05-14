@@ -53,6 +53,7 @@ describe('Agent Room Service', () => {
     db?.close()
     db = null
     vi.doUnmock('../../packages/server/src/db/index')
+    vi.doUnmock('../../packages/server/src/services/hermes/gateway-run-client')
     vi.resetModules()
   })
 
@@ -149,7 +150,7 @@ describe('Agent Room Service', () => {
 
     it('submitReview passed: submitted_for_review → review_passed', async () => {
       const { svc, session, task } = await setupTaskForReview()
-      const review = svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      const review = await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
       expect(review).not.toBeNull()
       expect(review!.status).toBe('passed')
 
@@ -159,7 +160,7 @@ describe('Agent Room Service', () => {
 
     it('submitReview rejected: submitted_for_review → revision_required', async () => {
       const { svc, session, task } = await setupTaskForReview()
-      const review = svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Needs work')
+      const review = await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Needs work')
       expect(review).not.toBeNull()
       expect(review!.status).toBe('rejected')
 
@@ -170,7 +171,7 @@ describe('Agent Room Service', () => {
 
     it('submitReview rejected with empty comment is allowed', async () => {
       const { svc, session, task } = await setupTaskForReview()
-      const review = svc.submitReview(session.id, task.id, 'reviewer', 'rejected', '')
+      const review = await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', '')
       expect(review).not.toBeNull()
       expect(review!.comment).toBe('')
     })
@@ -179,7 +180,7 @@ describe('Agent Room Service', () => {
       const { svc, session, task } = await setupTaskForReview()
 
       // First rejection: revisionRound 0 → 1
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 1')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 1')
       let updated = svc.getTask(task.id)!
       expect(updated.status).toBe('revision_required')
       expect(updated.revisionRound).toBe(1)
@@ -189,7 +190,7 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'submitted_for_review')
 
       // Second rejection: revisionRound 1 → 2
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 2')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 2')
       updated = svc.getTask(task.id)!
       expect(updated.status).toBe('revision_required')
       expect(updated.revisionRound).toBe(2)
@@ -199,7 +200,7 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'submitted_for_review')
 
       // Third rejection: revisionRound 2 → 3, which >= maxRevisionRounds(3) → need_user_decision
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 3')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 3')
       updated = svc.getTask(task.id)!
       expect(updated.status).toBe('need_user_decision')
       expect(updated.revisionRound).toBe(3)
@@ -210,7 +211,7 @@ describe('Agent Room Service', () => {
       const session = svc.createSession('Test')
       const task = svc.createTask(session.id, 'Task', '')
 
-      expect(() => svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')).toThrow(
+      await expect(svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')).rejects.toThrow(
         'Cannot review task in status "created"',
       )
     })
@@ -272,7 +273,7 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'assigned')
       svc.updateTaskStatus(task.id, 'in_progress')
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix')
 
       const result = svc.retryTask(session.id, task.id)
       expect(result!.status).toBe('in_progress')
@@ -288,17 +289,17 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'assigned')
       svc.updateTaskStatus(task.id, 'in_progress')
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 0')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 0')
 
       // Second iteration: retry → in_progress → submitted_for_review → reject
       svc.retryTask(session.id, task.id)
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 1')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 1')
 
       // Third iteration: retry → in_progress → submitted_for_review → reject → need_user_decision
       svc.retryTask(session.id, task.id)
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 2')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 2')
 
       // After 3 rejections, task should be in need_user_decision
       const beforeRetry = svc.getTask(task.id)!
@@ -337,9 +338,9 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'assigned')
       svc.updateTaskStatus(task.id, 'in_progress')
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
 
-      const result = svc.deliverTask(session.id, task.id)
+      const result = await svc.deliverTask(session.id, task.id)
       expect(result!.status).toBe('completed')
     })
   })
@@ -365,7 +366,7 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'assigned')
       svc.updateTaskStatus(task.id, 'in_progress')
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'Good')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'Good')
 
       const reviews = svc.listReviews(session.id)
       expect(reviews).toHaveLength(1)
@@ -405,7 +406,7 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'assigned')
       svc.updateTaskStatus(task.id, 'in_progress')
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(s1.id, task.id, 'reviewer', 'passed', '')
+      await svc.submitReview(s1.id, task.id, 'reviewer', 'passed', '')
 
       const s2 = svc.createSession('Session 2')
       expect(svc.listReviews(s1.id)).toHaveLength(1)
@@ -425,7 +426,7 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'assigned')
       svc.updateTaskStatus(task.id, 'in_progress')
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      expect(() => svc.submitReview(s2.id, task.id, 'reviewer', 'passed', '')).toThrow(
+      await expect(svc.submitReview(s2.id, task.id, 'reviewer', 'passed', '')).rejects.toThrow(
         `Task ${task.id} belongs to session ${s1.id}, not ${s2.id}`,
       )
     })
@@ -443,7 +444,7 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'in_progress')
       svc.updateTaskStatus(task.id, 'submitted_for_review')
 
-      const review = svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      const review = await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
       expect(review).not.toBeNull()
       expect(review!.sessionId).toBe(session.id)
     })
@@ -494,7 +495,7 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'assigned')
       svc.updateTaskStatus(task.id, 'in_progress')
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix')
 
       const before = svc.getSession(session.id)!.updatedAt
       await new Promise(r => setTimeout(r, 10))
@@ -512,11 +513,11 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'assigned')
       svc.updateTaskStatus(task.id, 'in_progress')
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
 
       const before = svc.getSession(session.id)!.updatedAt
       await new Promise(r => setTimeout(r, 10))
-      svc.deliverTask(session.id, task.id)
+      await svc.deliverTask(session.id, task.id)
 
       const after = svc.getSession(session.id)!.updatedAt
       expect(after > before).toBe(true)
@@ -569,7 +570,7 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'assigned')
       svc.updateTaskStatus(task.id, 'in_progress')
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix')
 
       expect(svc.getTask(task.id)!.status).toBe('revision_required')
 
@@ -601,17 +602,17 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'assigned')
       svc.updateTaskStatus(task.id, 'in_progress')
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 0')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 0')
 
       // Round 2: retry → in_progress → submitted_for_review → rejected
       svc.retryTask(session.id, task.id)
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 1')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 1')
 
       // Round 3: retry → in_progress → submitted_for_review → rejected → need_user_decision
       svc.retryTask(session.id, task.id)
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 2')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix 2')
 
       expect(svc.getTask(task.id)!.status).toBe('need_user_decision')
 
@@ -672,7 +673,7 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'assigned')
       svc.updateTaskStatus(task.id, 'in_progress')
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix')
 
       // Record event count before retry workflow
       const beforeCount = svc.listWorkflowEvents(session.id).length
@@ -743,7 +744,7 @@ describe('Agent Room Service', () => {
       // Run workflow to create events + messages
       await svc.runMockWorkflow(session.id, task.id)
       // Submit review to create reviews
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'ok')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'ok')
 
       // Verify data exists
       expect(svc.listTasks(session.id).length).toBeGreaterThan(0)
@@ -772,7 +773,7 @@ describe('Agent Room Service', () => {
       // Run workflow to create task-scoped messages + events
       await svc.runMockWorkflow(session.id, task.id)
       // Submit review
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'ok')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'ok')
 
       const userMsgCount = svc.listMessages(session.id).filter(m => m.type === 'user_message').length
       const taskMsgCount = svc.listMessages(session.id).filter(m => m.metadata?.taskId === task.id).length
@@ -858,10 +859,10 @@ describe('Agent Room Service', () => {
 
       // Walk through workflow to review_passed
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
 
       // Deliver
-      svc.deliverTask(session.id, task.id)
+      await svc.deliverTask(session.id, task.id)
 
       const artifacts = svc.listArtifacts(session.id)
       expect(artifacts.length).toBe(1)
@@ -878,13 +879,13 @@ describe('Agent Room Service', () => {
 
       // Deliver task1
       await svc.runWorkflow(session.id, task1.id)
-      svc.submitReview(session.id, task1.id, 'reviewer', 'passed', '')
-      svc.deliverTask(session.id, task1.id)
+      await svc.submitReview(session.id, task1.id, 'reviewer', 'passed', '')
+      await svc.deliverTask(session.id, task1.id)
 
       // Deliver task2
       await svc.runWorkflow(session.id, task2.id)
-      svc.submitReview(session.id, task2.id, 'reviewer', 'passed', '')
-      svc.deliverTask(session.id, task2.id)
+      await svc.submitReview(session.id, task2.id, 'reviewer', 'passed', '')
+      await svc.deliverTask(session.id, task2.id)
 
       const task1Artifacts = svc.listTaskArtifacts(session.id, task1.id)
       expect(task1Artifacts.length).toBe(1)
@@ -902,8 +903,8 @@ describe('Agent Room Service', () => {
       const task = svc.createTask(session1.id, 'Task', '')
 
       await svc.runWorkflow(session1.id, task.id)
-      svc.submitReview(session1.id, task.id, 'reviewer', 'passed', '')
-      svc.deliverTask(session1.id, task.id)
+      await svc.submitReview(session1.id, task.id, 'reviewer', 'passed', '')
+      await svc.deliverTask(session1.id, task.id)
 
       const artifacts = svc.listArtifacts(session1.id)
       expect(artifacts.length).toBe(1)
@@ -922,8 +923,8 @@ describe('Agent Room Service', () => {
       const task = svc.createTask(session.id, 'Task', '')
 
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
-      svc.deliverTask(session.id, task.id)
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      await svc.deliverTask(session.id, task.id)
 
       expect(svc.listArtifacts(session.id).length).toBe(1)
 
@@ -938,8 +939,8 @@ describe('Agent Room Service', () => {
       const task = svc.createTask(session.id, 'Task', '')
 
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
-      svc.deliverTask(session.id, task.id)
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      await svc.deliverTask(session.id, task.id)
 
       expect(svc.listArtifacts(session.id).length).toBe(1)
 
@@ -962,8 +963,8 @@ describe('Agent Room Service', () => {
       const task = svc.createTask(s1.id, 'Task', '')
 
       await svc.runWorkflow(s1.id, task.id)
-      svc.submitReview(s1.id, task.id, 'reviewer', 'passed', '')
-      svc.deliverTask(s1.id, task.id)
+      await svc.submitReview(s1.id, task.id, 'reviewer', 'passed', '')
+      await svc.deliverTask(s1.id, task.id)
 
       const artifacts = svc.listArtifacts(s1.id)
       expect(artifacts.length).toBe(1)
@@ -978,12 +979,12 @@ describe('Agent Room Service', () => {
       const task = svc.createTask(session.id, 'Task', '')
 
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
 
       // Before deliver: no artifacts
       expect(svc.listArtifacts(session.id).length).toBe(0)
 
-      svc.deliverTask(session.id, task.id)
+      await svc.deliverTask(session.id, task.id)
 
       // After deliver: exactly one final_delivery artifact
       const artifacts = svc.listArtifacts(session.id)
@@ -1000,8 +1001,8 @@ describe('Agent Room Service', () => {
       const task = svc.createTask(session.id, 'Build Widget', '')
 
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
-      svc.deliverTask(session.id, task.id)
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      await svc.deliverTask(session.id, task.id)
 
       const artifacts = svc.listTaskArtifacts(session.id, task.id)
       expect(artifacts.length).toBe(1)
@@ -1015,8 +1016,8 @@ describe('Agent Room Service', () => {
       const task = svc.createTask(session.id, 'Task', '')
 
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
-      svc.deliverTask(session.id, task.id)
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      await svc.deliverTask(session.id, task.id)
 
       const artifacts = svc.listTaskArtifacts(session.id, task.id)
       expect(artifacts.filter(a => a.type === 'final_delivery')).toHaveLength(1)
@@ -1167,17 +1168,17 @@ describe('Agent Room Service', () => {
       const session = svc.createSession('Test')
       const task = svc.createTask(session.id, 'Build Widget', '')
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
 
-      svc.deliverTask(session.id, task.id, 'manual')
+      await svc.deliverTask(session.id, task.id, 'manual')
 
       const artifacts = svc.listTaskArtifacts(session.id, task.id)
       expect(artifacts).toHaveLength(1)
       expect(artifacts[0].type).toBe('final_delivery')
       expect(artifacts[0].metadata).toBeDefined()
-      expect(artifacts[0].metadata!.deliveryMode).toBe('manual')
+      expect(artifacts[0].metadata!.deliveryMode).toBe('system')
       expect(artifacts[0].metadata!.deliveredAt).toBeTruthy()
-      expect(artifacts[0].content).toContain('手动')
+      expect(artifacts[0].content).toContain('触发方式: manual')
       expect(artifacts[0].content).toContain('Build Widget')
     })
 
@@ -1186,7 +1187,7 @@ describe('Agent Room Service', () => {
       const session = svc.createSession('Test')
       const task = svc.createTask(session.id, 'Task', '')
       // Task is in 'created' status — not deliverable
-      expect(() => svc.deliverTask(session.id, task.id)).toThrow('Cannot deliver task in status "created"')
+      await expect(svc.deliverTask(session.id, task.id)).rejects.toThrow('Cannot deliver task in status "created"')
     })
 
     it('deliverTask with review feedback includes feedback in artifact', async () => {
@@ -1196,18 +1197,18 @@ describe('Agent Room Service', () => {
 
       // Walk through workflow with a rejection cycle to generate feedback
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Needs improvement')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Needs improvement')
       svc.retryTask(session.id, task.id)
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM now')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM now')
 
-      svc.deliverTask(session.id, task.id, 'manual')
+      await svc.deliverTask(session.id, task.id, 'manual')
 
       const artifacts = svc.listTaskArtifacts(session.id, task.id)
       expect(artifacts).toHaveLength(1)
       expect(artifacts[0].metadata!.revisionRound).toBeGreaterThan(0)
-      expect(artifacts[0].metadata!.reviewFeedback).toBe('Needs improvement')
-      expect(artifacts[0].content).toContain('修改轮次')
+      expect(artifacts[0].metadata!.reviewFeedback).toBe('LGTM now')
+      expect(artifacts[0].content).toContain('修订轮次')
     })
 
     it('deliverTask emits delivery_started and delivery_completed workflow events', async () => {
@@ -1215,10 +1216,10 @@ describe('Agent Room Service', () => {
       const session = svc.createSession('Test')
       const task = svc.createTask(session.id, 'Task', '')
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
 
       const beforeCount = svc.listWorkflowEvents(session.id).length
-      svc.deliverTask(session.id, task.id)
+      await svc.deliverTask(session.id, task.id)
 
       const events = svc.listWorkflowEvents(session.id)
       const newEvents = events.slice(beforeCount)
@@ -1226,7 +1227,7 @@ describe('Agent Room Service', () => {
         'delivery_started',
         'delivery_completed',
       ])
-      expect(newEvents[0].payload).toHaveProperty('deliveryMode', 'manual')
+      expect(newEvents[0].payload).toHaveProperty('deliveryMode', 'system')
     })
 
     it('deliverTask creates final_delivery message via event adapter', async () => {
@@ -1234,9 +1235,9 @@ describe('Agent Room Service', () => {
       const session = svc.createSession('Test')
       const task = svc.createTask(session.id, 'Task', '')
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
 
-      svc.deliverTask(session.id, task.id)
+      await svc.deliverTask(session.id, task.id)
 
       const messages = svc.listMessages(session.id)
       const deliveryMessages = messages.filter(m => m.type === 'final_delivery')
@@ -1285,7 +1286,7 @@ describe('Agent Room Service', () => {
       await svc.runWorkflow(session.id, task.id)
 
       // This should trigger auto-delivery
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
 
       // Task should be completed (auto-delivered)
       const updated = svc.getTask(task.id)
@@ -1295,8 +1296,8 @@ describe('Agent Room Service', () => {
       const artifacts = svc.listTaskArtifacts(session.id, task.id)
       expect(artifacts).toHaveLength(1)
       expect(artifacts[0].type).toBe('final_delivery')
-      expect(artifacts[0].metadata!.deliveryMode).toBe('auto')
-      expect(artifacts[0].content).toContain('自动')
+      expect(artifacts[0].metadata!.deliveryMode).toBe('system')
+      expect(artifacts[0].content).toContain('触发方式: auto')
     })
 
     it('auto-delivery does NOT trigger when autoDeliveryEnabled = false', async () => {
@@ -1308,7 +1309,7 @@ describe('Agent Room Service', () => {
       expect(svc.getSessionConfig(session.id).autoDeliveryEnabled).toBe(false)
 
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
 
       // Task should be in review_passed (not auto-delivered)
       const updated = svc.getTask(task.id)
@@ -1327,7 +1328,7 @@ describe('Agent Room Service', () => {
       await svc.runWorkflow(session.id, task.id)
 
       const beforeCount = svc.listWorkflowEvents(session.id).length
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
 
       const events = svc.listWorkflowEvents(session.id)
       const newEvents = events.slice(beforeCount)
@@ -1348,20 +1349,20 @@ describe('Agent Room Service', () => {
 
       // First round: reject
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix bugs')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix bugs')
 
       // Second round: retry, submit, pass → auto-deliver
       svc.retryTask(session.id, task.id)
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
 
       // Should be auto-completed
       expect(svc.getTask(task.id)!.status).toBe('completed')
 
       const artifacts = svc.listTaskArtifacts(session.id, task.id)
       expect(artifacts).toHaveLength(1)
-      expect(artifacts[0].metadata!.deliveryMode).toBe('auto')
-      expect(artifacts[0].metadata!.reviewFeedback).toBe('Fix bugs')
+      expect(artifacts[0].metadata!.deliveryMode).toBe('system')
+      expect(artifacts[0].metadata!.reviewFeedback).toBe('LGTM')
       expect(artifacts[0].metadata!.revisionRound).toBeGreaterThan(0)
     })
   })
@@ -1375,19 +1376,19 @@ describe('Agent Room Service', () => {
       const session = svc.createSession('Test')
       const task = svc.createTask(session.id, 'Widget', '')
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
 
-      svc.deliverTask(session.id, task.id, 'manual')
+      await svc.deliverTask(session.id, task.id, 'manual')
 
       const artifacts = svc.listTaskArtifacts(session.id, task.id)
       expect(artifacts).toHaveLength(1)
       const meta = artifacts[0].metadata!
-      expect(meta.source).toBe('manual-delivery')
-      expect(meta.deliveryMode).toBe('manual')
-      expect(meta.deliveryRole).toBe('delivery')
+      expect(meta.source).toBe('manual-delivery-system')
+      expect(meta.deliveryMode).toBe('system')
+      expect(meta.trigger).toBe('manual')
       expect(typeof meta.revisionRound).toBe('number')
       expect(typeof meta.maxRevisionRounds).toBe('number')
-      expect(meta.reviewFeedback).toBeNull()
+      expect(meta.reviewFeedback).toBe('LGTM')
       expect(typeof meta.deliveredAt).toBe('string')
       // ISO string validation
       expect(new Date(meta.deliveredAt as string).toISOString()).toBe(meta.deliveredAt)
@@ -1399,14 +1400,14 @@ describe('Agent Room Service', () => {
       const task = svc.createTask(session.id, 'Widget', '')
       svc.updateSessionConfig(session.id, { autoDeliveryEnabled: true })
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
 
       const artifacts = svc.listTaskArtifacts(session.id, task.id)
       expect(artifacts).toHaveLength(1)
       const meta = artifacts[0].metadata!
-      expect(meta.source).toBe('auto-delivery')
-      expect(meta.deliveryMode).toBe('auto')
-      expect(meta.deliveryRole).toBe('delivery')
+      expect(meta.source).toBe('auto-delivery-system')
+      expect(meta.deliveryMode).toBe('system')
+      expect(meta.trigger).toBe('auto')
       expect(typeof meta.revisionRound).toBe('number')
       expect(typeof meta.maxRevisionRounds).toBe('number')
       expect(typeof meta.deliveredAt).toBe('string')
@@ -1418,16 +1419,16 @@ describe('Agent Room Service', () => {
       const session = svc.createSession('Test')
       const task = svc.createTask(session.id, 'Widget', '')
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Needs work')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Needs work')
       svc.retryTask(session.id, task.id)
       svc.updateTaskStatus(task.id, 'submitted_for_review')
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
 
-      svc.deliverTask(session.id, task.id, 'manual')
+      await svc.deliverTask(session.id, task.id, 'manual')
 
       const artifacts = svc.listTaskArtifacts(session.id, task.id)
       const meta = artifacts[0].metadata!
-      expect(meta.reviewFeedback).toBe('Needs work')
+      expect(meta.reviewFeedback).toBe('LGTM')
       expect(meta.revisionRound).toBeGreaterThan(0)
     })
 
@@ -1439,8 +1440,8 @@ describe('Agent Room Service', () => {
       const s1 = svc.createSession('Manual')
       const t1 = svc.createTask(s1.id, 'Task M', '')
       await svc.runWorkflow(s1.id, t1.id)
-      svc.submitReview(s1.id, t1.id, 'reviewer', 'passed', '')
-      svc.deliverTask(s1.id, t1.id, 'manual')
+      await svc.submitReview(s1.id, t1.id, 'reviewer', 'passed', '')
+      await svc.deliverTask(s1.id, t1.id, 'manual')
       const manualMeta = svc.listTaskArtifacts(s1.id, t1.id)[0].metadata!
 
       // Auto delivery
@@ -1448,7 +1449,7 @@ describe('Agent Room Service', () => {
       const t2 = svc.createTask(s2.id, 'Task A', '')
       svc.updateSessionConfig(s2.id, { autoDeliveryEnabled: true })
       await svc.runWorkflow(s2.id, t2.id)
-      svc.submitReview(s2.id, t2.id, 'reviewer', 'passed', '')
+      await svc.submitReview(s2.id, t2.id, 'reviewer', 'passed', '')
       const autoMeta = svc.listTaskArtifacts(s2.id, t2.id)[0].metadata!
 
       // Same key set
@@ -1457,10 +1458,10 @@ describe('Agent Room Service', () => {
       expect(manualKeys).toEqual(autoKeys)
 
       // Shared field types
-      expect(manualMeta.deliveryRole).toBe('delivery')
-      expect(autoMeta.deliveryRole).toBe('delivery')
-      expect(manualMeta.source).toBe('manual-delivery')
-      expect(autoMeta.source).toBe('auto-delivery')
+      expect(manualMeta.trigger).toBe('manual')
+      expect(autoMeta.trigger).toBe('auto')
+      expect(manualMeta.source).toBe('manual-delivery-system')
+      expect(autoMeta.source).toBe('auto-delivery-system')
     })
 
     // P4.3: Non-review_passed status throws
@@ -1468,7 +1469,7 @@ describe('Agent Room Service', () => {
       const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
       const session = svc.createSession('Test')
       const task = svc.createTask(session.id, 'Task', '')
-      expect(() => svc.deliverTask(session.id, task.id)).toThrow('Cannot deliver task in status "created"')
+      await expect(svc.deliverTask(session.id, task.id)).rejects.toThrow('Cannot deliver task in status "created"')
     })
 
     it('P4.3: deliverTask throws for in_progress status', async () => {
@@ -1479,7 +1480,7 @@ describe('Agent Room Service', () => {
       // Task is now in submitted_for_review after workflow
       // We need to get it back to in_progress — use retry from a failed state
       // Actually after runWorkflow it's submitted_for_review. Let's test that:
-      expect(() => svc.deliverTask(session.id, task.id)).toThrow('Cannot deliver task in status "submitted_for_review"')
+      await expect(svc.deliverTask(session.id, task.id)).rejects.toThrow('Cannot deliver task in status "submitted_for_review"')
     })
 
     it('P4.3: deliverTask throws for completed status', async () => {
@@ -1487,10 +1488,10 @@ describe('Agent Room Service', () => {
       const session = svc.createSession('Test')
       const task = svc.createTask(session.id, 'Task', '')
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
-      svc.deliverTask(session.id, task.id)
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      await svc.deliverTask(session.id, task.id)
       // Now it's completed — try again
-      expect(() => svc.deliverTask(session.id, task.id)).toThrow('Cannot deliver task in status "completed"')
+      await expect(svc.deliverTask(session.id, task.id)).rejects.toThrow('Cannot deliver task in status "completed"')
     })
 
     it('P4.3: deliverTask throws for failed status', async () => {
@@ -1502,7 +1503,7 @@ describe('Agent Room Service', () => {
       svc.updateTaskStatus(task.id, 'review_passed')
       svc.updateTaskStatus(task.id, 'delivering')
       svc.updateTaskStatus(task.id, 'failed')
-      expect(() => svc.deliverTask(session.id, task.id)).toThrow('Cannot deliver task in status "failed"')
+      await expect(svc.deliverTask(session.id, task.id)).rejects.toThrow('Cannot deliver task in status "failed"')
     })
 
     it('P4.3: deliverTask throws for revision_required status', async () => {
@@ -1510,9 +1511,9 @@ describe('Agent Room Service', () => {
       const session = svc.createSession('Test')
       const task = svc.createTask(session.id, 'Task', '')
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix it')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'rejected', 'Fix it')
       // Now in revision_required
-      expect(() => svc.deliverTask(session.id, task.id)).toThrow('Cannot deliver task in status "revision_required"')
+      await expect(svc.deliverTask(session.id, task.id)).rejects.toThrow('Cannot deliver task in status "revision_required"')
     })
 
     // P4.4: Delivery is synchronous — verify delivering→completed is the only path
@@ -1521,9 +1522,9 @@ describe('Agent Room Service', () => {
       const session = svc.createSession('Test')
       const task = svc.createTask(session.id, 'Task', '')
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
 
-      const result = svc.deliverTask(session.id, task.id)
+      const result = await svc.deliverTask(session.id, task.id)
 
       // Verify: delivering → completed, never failed
       expect(result!.status).toBe('completed')
@@ -1550,7 +1551,7 @@ describe('Agent Room Service', () => {
       expect(svc.getSessionConfig(session.id).autoDeliveryEnabled).toBe(false)
 
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
 
       // Task stays in review_passed
       const updated = svc.getTask(task.id)
@@ -1576,8 +1577,8 @@ describe('Agent Room Service', () => {
       const s1 = svc.createSession('Manual')
       const t1 = svc.createTask(s1.id, 'Build', '')
       await svc.runWorkflow(s1.id, t1.id)
-      svc.submitReview(s1.id, t1.id, 'reviewer', 'passed', 'LGTM')
-      svc.deliverTask(s1.id, t1.id, 'manual')
+      await svc.submitReview(s1.id, t1.id, 'reviewer', 'passed', 'LGTM')
+      await svc.deliverTask(s1.id, t1.id, 'manual')
       const manualArtifact = svc.listTaskArtifacts(s1.id, t1.id)[0]
 
       // Auto path
@@ -1585,7 +1586,7 @@ describe('Agent Room Service', () => {
       const t2 = svc.createTask(s2.id, 'Build', '')
       svc.updateSessionConfig(s2.id, { autoDeliveryEnabled: true })
       await svc.runWorkflow(s2.id, t2.id)
-      svc.submitReview(s2.id, t2.id, 'reviewer', 'passed', 'LGTM')
+      await svc.submitReview(s2.id, t2.id, 'reviewer', 'passed', 'LGTM')
       const autoArtifact = svc.listTaskArtifacts(s2.id, t2.id)[0]
 
       // Same artifact type
@@ -1603,18 +1604,18 @@ describe('Agent Room Service', () => {
       expect(typeof a.maxRevisionRounds).toBe('number')
       expect(typeof m.deliveredAt).toBe('string')
       expect(typeof a.deliveredAt).toBe('string')
-      expect(m.deliveryRole).toBe('delivery')
-      expect(a.deliveryRole).toBe('delivery')
+      expect(m.trigger).toBe('manual')
+      expect(a.trigger).toBe('auto')
 
       // Only differ in source and deliveryMode
-      expect(m.source).toBe('manual-delivery')
-      expect(a.source).toBe('auto-delivery')
-      expect(m.deliveryMode).toBe('manual')
-      expect(a.deliveryMode).toBe('auto')
+      expect(m.source).toBe('manual-delivery-system')
+      expect(a.source).toBe('auto-delivery-system')
+      expect(m.deliveryMode).toBe('system')
+      expect(a.deliveryMode).toBe('system')
 
       // Content reflects mode
-      expect(manualArtifact.content).toContain('手动')
-      expect(autoArtifact.content).toContain('自动')
+      expect(manualArtifact.content).toContain('触发方式: manual')
+      expect(autoArtifact.content).toContain('触发方式: auto')
     })
   })
 
@@ -1736,148 +1737,135 @@ describe('Agent Room Service', () => {
   })
 
   describe('P7.1: Delivery Role Run', () => {
-    it('manual deliverTask creates delivery role_run attached to latest workflow run', async () => {
+    it('system delivery does not create a synthetic delivery role_run', async () => {
       const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
       const store = await import('../../packages/server/src/db/hermes/agent-room-store')
 
-      const session = svc.createSession('P7.1 Test')
-      const task = svc.createTask(session.id, 'Delivery Role Run', '')
+      const session = svc.createSession('P7.1 System')
+      const task = svc.createTask(session.id, 'System Delivery', '')
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
 
-      svc.deliverTask(session.id, task.id, 'manual')
+      await svc.deliverTask(session.id, task.id, 'manual')
 
-      // Verify task completed
-      const updatedTask = svc.getTask(task.id)!
-      expect(updatedTask.status).toBe('completed')
+      const deliveryRun = store.listRoleRunsByTask(task.id).find(r => r.role === 'delivery')
+      expect(deliveryRun).toBeUndefined()
 
-      // Verify delivery role_run exists
-      const roleRuns = store.listRoleRunsByTask(task.id)
-      const deliveryRun = roleRuns.find(r => r.role === 'delivery')
+      const artifact = svc.listTaskArtifacts(session.id, task.id)[0]
+      expect(artifact.metadata!.deliveryMode).toBe('system')
+      expect(artifact.metadata!.deliveryRoleRunId).toBeUndefined()
+      expect(artifact.metadata!.deliveryRunId).toBeUndefined()
+    })
+
+    it('agent delivery creates a real delivery role_run and links it from the artifact', async () => {
+      vi.doMock('../../packages/server/src/services/hermes/gateway-run-client', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('../../packages/server/src/services/hermes/gateway-run-client')>()
+        return {
+          ...actual,
+          runHermesGatewayTask: vi.fn().mockResolvedValue({
+            output: 'Agent delivery output',
+            runId: 'delivery-run-001',
+            sessionId: 'agent-room-delivery-test',
+          }),
+        }
+      })
+
+      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
+      const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+
+      const session = svc.createSession('P7.1 Agent')
+      svc.setRoleBinding(session.id, 'delivery', 'delivery-agent', 'openai', 'gpt-4o-mini')
+      const task = svc.createTask(session.id, 'Agent Delivery', '')
+      await svc.runWorkflow(session.id, task.id)
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
+
+      await svc.deliverTask(session.id, task.id, 'manual')
+
+      const artifact = svc.listTaskArtifacts(session.id, task.id)[0]
+      expect(artifact.metadata!.deliveryMode).toBe('agent')
+      expect(artifact.metadata!.deliveryRunId).toBe('delivery-run-001')
+      expect(artifact.metadata!.deliveryProfileName).toBe('delivery-agent')
+
+      const deliveryRun = store.listRoleRunsByTask(task.id)
+        .find(r => r.id === artifact.metadata!.deliveryRoleRunId)
       expect(deliveryRun).toBeDefined()
       expect(deliveryRun!.status).toBe('completed')
       expect(deliveryRun!.phase).toBe('delivery')
-      expect(deliveryRun!.profileName).toBe('manual')
-      expect(deliveryRun!.metadata!.source).toBe('manual-delivery-runtime')
-      expect(deliveryRun!.metadata!.deliveryMode).toBe('manual')
-
-      // Verify delivery role_run is attached to the latest workflow run
-      const latestRun = store.listRunsByTask(task.id)[0]
-      expect(latestRun).toBeDefined()
-      expect(deliveryRun!.runId).toBe(latestRun.id)
+      expect(deliveryRun!.profileName).toBe('delivery-agent')
+      expect(deliveryRun!.metadata!.deliveryMode).toBe('agent')
+      expect(deliveryRun!.metadata!.provider).toBe('openai')
+      expect(deliveryRun!.metadata!.model).toBe('gpt-4o-mini')
+      expect(deliveryRun!.metadata!.trigger).toBe('manual')
+      expect(deliveryRun!.metadata!.deliveryRunId).toBe('delivery-run-001')
+      expect(artifact.metadata!.deliveryRoleRunId).toBe(deliveryRun!.id)
     })
 
-    it('final_delivery artifact metadata includes deliveryRoleRunId and deliveryRunId', async () => {
-      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
-      const store = await import('../../packages/server/src/db/hermes/agent-room-store')
+    it('agent delivery events include delivery role run linkage', async () => {
+      vi.doMock('../../packages/server/src/services/hermes/gateway-run-client', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('../../packages/server/src/services/hermes/gateway-run-client')>()
+        return {
+          ...actual,
+          runHermesGatewayTask: vi.fn().mockResolvedValue({
+            output: 'Agent delivery output',
+            runId: 'delivery-run-evt',
+            sessionId: 'agent-room-delivery-event',
+          }),
+        }
+      })
 
-      const session = svc.createSession('P7.1 Link Test')
-      const task = svc.createTask(session.id, 'Artifact Link', '')
-      await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
-
-      svc.deliverTask(session.id, task.id, 'manual')
-
-      // Verify artifact metadata
-      const artifacts = svc.listTaskArtifacts(session.id, task.id)
-      expect(artifacts).toHaveLength(1)
-      expect(artifacts[0].type).toBe('final_delivery')
-      expect(artifacts[0].metadata).toBeDefined()
-
-      // Verify delivery role_run linkage in artifact
-      const deliveryRoleRun = store.listRoleRunsByTask(task.id).find(r => r.role === 'delivery')
-      expect(deliveryRoleRun).toBeDefined()
-      expect(artifacts[0].metadata!.deliveryRoleRunId).toBe(deliveryRoleRun!.id)
-      expect(artifacts[0].metadata!.deliveryRunId).toBe(deliveryRoleRun!.runId)
-    })
-
-    it('delivery_started and delivery_completed events contain deliveryRoleRunId in payload', async () => {
       const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
       const store = await import('../../packages/server/src/db/hermes/agent-room-store')
 
       const session = svc.createSession('P7.1 Event Test')
+      svc.setRoleBinding(session.id, 'delivery', 'delivery-agent')
       const task = svc.createTask(session.id, 'Event Payload', '')
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
 
-      svc.deliverTask(session.id, task.id, 'manual')
-
-      const deliveryRoleRun = store.listRoleRunsByTask(task.id).find(r => r.role === 'delivery')
-      expect(deliveryRoleRun).toBeDefined()
+      await svc.deliverTask(session.id, task.id, 'manual')
 
       const events = svc.listWorkflowEvents(session.id)
       const deliveryStarted = events.find(e => e.type === 'delivery_started')
       const deliveryCompleted = events.find(e => e.type === 'delivery_completed')
+      const deliveryRoleRun = store.listRoleRunsByTask(task.id)
+        .find(r => r.id === deliveryCompleted!.payload!.deliveryRoleRunId)
+      expect(deliveryRoleRun).toBeDefined()
 
-      expect(deliveryStarted).toBeDefined()
-      expect(deliveryCompleted).toBeDefined()
-
-      // Both events should have deliveryRoleRunId in payload
-      expect(deliveryStarted!.payload).toBeDefined()
+      expect(deliveryStarted!.payload!.deliveryMode).toBe('agent')
       expect(deliveryStarted!.payload!.deliveryRoleRunId).toBe(deliveryRoleRun!.id)
-      expect(deliveryCompleted!.payload).toBeDefined()
+      expect(deliveryCompleted!.payload!.deliveryMode).toBe('agent')
       expect(deliveryCompleted!.payload!.deliveryRoleRunId).toBe(deliveryRoleRun!.id)
     })
 
-    it('delivery role_run is NOT created when no workflow run exists (legacy/manual status changes)', async () => {
+    it('agent delivery falls back to system delivery and records fallbackReason when the delivery agent fails', async () => {
+      vi.doMock('../../packages/server/src/services/hermes/gateway-run-client', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('../../packages/server/src/services/hermes/gateway-run-client')>()
+        return {
+          ...actual,
+          runHermesGatewayTask: vi.fn().mockRejectedValue(new Error('delivery gateway failed')),
+        }
+      })
+
       const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
       const store = await import('../../packages/server/src/db/hermes/agent-room-store')
 
-      const session = svc.createSession('P7.1 NoRun')
-      const task = svc.createTask(session.id, 'No Run', '')
-      // Reach review_passed via normal workflow path
+      const session = svc.createSession('P7.1 Fallback')
+      svc.setRoleBinding(session.id, 'delivery', 'delivery-agent')
+      const task = svc.createTask(session.id, 'Fallback Delivery', '')
       await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
+      await svc.submitReview(session.id, task.id, 'reviewer', 'passed', '')
 
-      // Delete all runs to simulate no-workflow-run scenario
-      const runs = store.listRunsByTask(task.id)
-      for (const run of runs) {
-        store.deleteRoleRunsByRun(run.id)
-      }
-      store.deleteRunsByTask(task.id)
+      const result = await svc.deliverTask(session.id, task.id, 'manual')
+      expect(result!.status).toBe('completed')
 
-      svc.deliverTask(session.id, task.id, 'manual')
+      const artifact = svc.listTaskArtifacts(session.id, task.id)[0]
+      expect(artifact.metadata!.deliveryMode).toBe('system')
+      expect(artifact.metadata!.fallbackReason).toBe('delivery gateway failed')
 
-      // Verify delivery completed despite no run
-      const updatedTask = svc.getTask(task.id)!
-      expect(updatedTask.status).toBe('completed')
-
-      // No delivery role_run should exist (no workflow run to attach to)
-      const deliveryRun = store.listRoleRunsByTask(task.id).find(r => r.role === 'delivery')
-      expect(deliveryRun).toBeUndefined()
-
-      // Artifact should still exist but without role run linkage
-      const artifacts = svc.listTaskArtifacts(session.id, task.id)
-      expect(artifacts).toHaveLength(1)
-      expect(artifacts[0].metadata!.deliveryRoleRunId).toBeUndefined()
-      expect(artifacts[0].metadata!.deliveryRunId).toBeUndefined()
-    })
-
-    it('auto delivery also creates delivery role_run with auto metadata', async () => {
-      const svc = await import('../../packages/server/src/services/hermes/agent-room/index')
-      const store = await import('../../packages/server/src/db/hermes/agent-room-store')
-
-      const session = svc.createSession('P7.1 Auto')
-      svc.updateSessionConfig(session.id, { autoDeliveryEnabled: true })
-      const task = svc.createTask(session.id, 'Auto Role Run', '')
-      await svc.runWorkflow(session.id, task.id)
-      svc.submitReview(session.id, task.id, 'reviewer', 'passed', 'LGTM')
-
-      // Auto-delivery should have triggered
-      const updatedTask = svc.getTask(task.id)!
-      expect(updatedTask.status).toBe('completed')
-
-      // Verify auto delivery role_run
-      const autoDeliveryRun = store.listRoleRunsByTask(task.id).find(r => r.role === 'delivery')
-      expect(autoDeliveryRun).toBeDefined()
-      expect(autoDeliveryRun!.status).toBe('completed')
-      expect(autoDeliveryRun!.profileName).toBe('auto')
-      expect(autoDeliveryRun!.metadata!.source).toBe('auto-delivery-runtime')
-      expect(autoDeliveryRun!.metadata!.deliveryMode).toBe('auto')
-
-      // Verify artifact linkage
-      const artifacts = svc.listTaskArtifacts(session.id, task.id)
-      expect(artifacts[0].metadata!.deliveryRoleRunId).toBe(autoDeliveryRun!.id)
+      const deliveryRun = store.listRoleRunsByTask(task.id)
+        .find(r => r.status === 'failed' && r.role === 'delivery')
+      expect(deliveryRun).toBeDefined()
+      expect(deliveryRun!.errorMessage).toBe('delivery gateway failed')
     })
   })
 })

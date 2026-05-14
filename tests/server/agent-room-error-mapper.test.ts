@@ -55,6 +55,20 @@ describe('Agent Room Routes — mapAgentRoomError', () => {
         expect(ctx.body).toEqual({ error: 'Cannot review task' })
     })
 
+    it('maps model resolution failures to 422', () => {
+        const ctx = makeCtx()
+        mapAgentRoomError(ctx, new Error('Agent Room model resolution failed [role=planner, profile=glm, model=missing, provider=missing]'))
+        expect(ctx.status).toBe(422)
+        expect(ctx.body).toEqual({ error: 'Agent Room model resolution failed [role=planner, profile=glm, model=missing, provider=missing]' })
+    })
+
+    it('maps unrunnable role bindings to 422', () => {
+        const ctx = makeCtx()
+        mapAgentRoomError(ctx, new Error('Agent Room role binding is not runnable [role=planner, profile=glm, model=missing, provider=missing].'))
+        expect(ctx.status).toBe(422)
+        expect(ctx.body).toEqual({ error: 'Agent Room role binding is not runnable [role=planner, profile=glm, model=missing, provider=missing].' })
+    })
+
     it('maps unknown errors to 400', () => {
         const ctx = makeCtx()
         mapAgentRoomError(ctx, new Error('Something unexpected'))

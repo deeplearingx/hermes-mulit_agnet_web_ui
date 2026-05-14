@@ -17,6 +17,7 @@ import type {
     AgentRoomRun,
     AgentRoomRunEvent,
     AgentRoomRoleRun,
+    AgentRoomProfileRunTargetPreview,
 } from '@/api/hermes/agent-room'
 import {
     AGENT_ROOM_AGENTS,
@@ -40,6 +41,7 @@ import {
     deleteTask as apiDeleteTask,
     listRoleBindings as apiListRoleBindings,
     setRoleBinding as apiSetRoleBinding,
+    previewProfileRunTarget as apiPreviewProfileRunTarget,
     deleteRoleBindingByRole as apiDeleteRoleBindingByRole,
     listRuns as apiListRuns,
     listRunEventsBySession as apiListRunEventsBySession,
@@ -590,6 +592,10 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         }
     }
 
+    async function previewRoleBindingTarget(profileName: string, provider?: string, model?: string): Promise<AgentRoomProfileRunTargetPreview> {
+        return apiPreviewProfileRunTarget(profileName, provider, model)
+    }
+
     async function removeRoleBinding(role: AgentRoomRole) {
         if (!currentSessionId.value) return
         error.value = null
@@ -739,6 +745,7 @@ export const useAgentRoomStore = defineStore('agentRoom', () => {
         loadWorkflowEvents,
         loadRoleBindings,
         saveRoleBinding,
+        previewRoleBindingTarget,
         removeRoleBinding,
         updateAutoDelivery,
         runWorkflow,

@@ -78,6 +78,10 @@ const latestRunError = computed(() => {
     return lastRun?.errorMessage ?? null
 })
 
+const deliveryBinding = computed(() =>
+    (props.roleBindings ?? []).find(binding => binding.role === 'delivery') ?? null,
+)
+
 const roleBindingValidation = computed<RoleBindingHint[]>(() => {
     const bindings = props.roleBindings ?? []
     const bindingMap = new Map(bindings.map(binding => [binding.role, binding]))
@@ -166,6 +170,19 @@ const roleBindingValidation = computed<RoleBindingHint[]>(() => {
 /** Whether workflow can start — role binding fallbacks are non-blocking. */
 const canStartWorkflow = computed(() => true)
 
+function getDeliveryActionLabel(task: AgentRoomTask): { label: string; icon: string } {
+    if (task.status === 'delivering') {
+        return { label: '交付中', icon: '⏳' }
+    }
+    if (task.status === 'failed') {
+        return { label: '重新交付', icon: '🔄' }
+    }
+    if (deliveryBinding.value) {
+        return { label: '交付 Agent 生成', icon: '🤖' }
+    }
+    return { label: '系统生成交付', icon: '📦' }
+}
+
 function getTaskActions(task: AgentRoomTask): TaskAction[] {
     const actions: TaskAction[] = []
     switch (task.status) {
@@ -180,9 +197,11 @@ function getTaskActions(task: AgentRoomTask): TaskAction[] {
         case 'submitted_for_review':
             actions.push({ label: '审核', icon: '🔍', action: 'open-review', color: '#ffb74d' })
             break
-        case 'review_passed':
-            actions.push({ label: '开始交付', icon: '📦', action: 'deliver', color: '#0e639c' })
+        case 'review_passed': {
+            const deliveryAction = getDeliveryActionLabel(task)
+            actions.push({ label: deliveryAction.label, icon: deliveryAction.icon, action: 'deliver', color: '#0e639c' })
             break
+        }
         case 'revision_required':
             actions.push({ label: `重新开发 (第${task.revisionRound}轮)`, icon: '🔄', action: 'run-workflow', color: '#f57c00' })
             break
@@ -273,10 +292,25 @@ const agentStatuses = computed<AgentStatusItem[]>(() => {
     })
 })
 
-/** Developer role binding profileName (if any) */
-const developerProfileName = computed(() => {
-    const binding = (props.roleBindings ?? []).find(b => b.role === 'developer')
-    return binding?.profileName ?? null
+const roleBindingSnapshot = computed(() => {
+    const bindingMap = new Map((props.roleBindings ?? []).map(binding => [binding.role, binding]))
+    return [
+        {
+            role: 'planner',
+            label: 'Planner',
+            value: bindingMap.get('planner')?.model || bindingMap.get('planner')?.profileName || 'active profile',
+        },
+        {
+            role: 'developer',
+            label: 'Developer',
+            value: bindingMap.get('developer')?.model || bindingMap.get('developer')?.profileName || activeTask.value?.assignedAgentId || 'active profile',
+        },
+        {
+            role: 'reviewer',
+            label: 'Reviewer',
+            value: bindingMap.get('reviewer')?.model || bindingMap.get('reviewer')?.profileName || 'active profile',
+        },
+    ]
 })
 
 const STATUS_DOT_COLORS: Record<string, string> = {
@@ -319,6 +353,22 @@ function toggleArtifact(id: string) {
 
 function handleDeleteArtifact(artifactId: string) {
     emit('delete-artifact', artifactId)
+}
+
+function deliveryMetadataEntries(metadata: Record<string, unknown> | undefined): Array<[string, unknown]> {
+    if (!metadata) return []
+    const keys = [
+        'deliveryMode',
+        'deliveryProfileName',
+        'deliveryRunId',
+        'provider',
+        'model',
+        'fallbackReason',
+        'trigger',
+    ]
+    return keys
+        .map((key) => [key, metadata[key]] as [string, unknown])
+        .filter(([, value]) => value !== undefined && value !== null && value !== '')
 }
 
 function clearExpandedArtifact(artifactId: string) {
@@ -446,9 +496,15 @@ defineExpose({
                     <span class="agent-status-label">{{ STATUS_DOT_LABELS[agent.status] }}</span>
                 </div>
             </div>
-            <div v-if="developerProfileName" class="developer-binding-hint">
-                <span class="binding-icon">🔗</span>
-                <span class="binding-text">Developer: <strong>{{ developerProfileName }}</strong></span>
+            <div class="role-binding-snapshot">
+                <div
+                    v-for="item in roleBindingSnapshot"
+                    :key="item.role"
+                    class="binding-snapshot-item"
+                >
+                    <span class="binding-snapshot-label">{{ item.label }}</span>
+                    <strong class="binding-snapshot-value">{{ item.value }}</strong>
+                </div>
             </div>
         </div>
 
@@ -479,6 +535,16 @@ defineExpose({
                     </div>
                     <div v-if="expandedArtifactId === artifact.id && artifact.content" class="artifact-content">
                         <pre>{{ artifact.content }}</pre>
+                        <div v-if="deliveryMetadataEntries(artifact.metadata).length" class="artifact-metadata">
+                            <div
+                                v-for="entry in deliveryMetadataEntries(artifact.metadata)"
+                                :key="entry[0]"
+                                class="artifact-meta-row"
+                            >
+                                <span class="artifact-meta-key">{{ entry[0] }}</span>
+                                <span class="artifact-meta-value">{{ String(entry[1]) }}</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -840,28 +906,34 @@ defineExpose({
     flex-shrink: 0;
 }
 
-.developer-binding-hint {
+.role-binding-snapshot {
+    margin-top: 6px;
+    display: grid;
+    gap: 6px;
+}
+
+.binding-snapshot-item {
     display: flex;
     align-items: center;
-    gap: 6px;
+    justify-content: space-between;
+    gap: 8px;
     padding: 6px 10px;
-    margin-top: 6px;
     background: #0f1729;
     border: 1px solid #1e293b;
     border-radius: 4px;
+}
+
+.binding-snapshot-label {
     font-size: 11px;
     color: #94a3b8;
+}
 
-    .binding-icon {
-        font-size: 12px;
-    }
-
-    .binding-text {
-        strong {
-            color: #22c55e;
-            font-weight: 600;
-        }
-    }
+.binding-snapshot-value {
+    font-size: 11px;
+    color: #22c55e;
+    font-weight: 600;
+    text-align: right;
+    word-break: break-word;
 }
 
 // ─── Section C: Artifacts ──────────────────────────────────────
@@ -970,6 +1042,29 @@ defineExpose({
         word-break: break-word;
         font-family: 'Courier New', monospace;
     }
+}
+
+.artifact-metadata {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #1e293b;
+}
+
+.artifact-meta-row {
+    display: flex;
+    gap: 8px;
+    padding: 2px 0;
+    font-size: 10px;
+}
+
+.artifact-meta-key {
+    min-width: 110px;
+    color: #64748b;
+}
+
+.artifact-meta-value {
+    color: #cbd5e1;
+    word-break: break-all;
 }
 
 .empty-artifacts {

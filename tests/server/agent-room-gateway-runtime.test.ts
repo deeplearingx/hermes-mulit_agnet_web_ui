@@ -63,14 +63,14 @@ describe('GatewayHermesRuntime', () => {
         const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
         await runtime.runTask(makeInput())
 
-        expect(runHermesGatewayTask).toHaveBeenCalledWith({
+        expect(runHermesGatewayTask).toHaveBeenCalledWith(expect.objectContaining({
             upstream: 'http://127.0.0.1:8642',
             apiKey: null,
             input: expect.stringContaining('Implement login page'),
             instructions: expect.stringContaining('AgentRoom'),
             sessionId: 'agent-room-sess-1-task-1',
             timeoutMs: 30000,
-        })
+        }))
     })
 
     it('input text contains taskTitle, taskDescription, currentStatus, revisionRound', async () => {
@@ -119,8 +119,8 @@ describe('GatewayHermesRuntime', () => {
             const result = await runtime.runTask(makeInput())
 
             const finalStep = result.steps[3]
-            expect(finalStep.events[0].payload).toEqual({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent', bindingSource: 'assigned-agent', transportSource: 'constructor-fallback' })
-            expect(finalStep.messages![0].metadata).toEqual({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent', bindingSource: 'assigned-agent', transportSource: 'constructor-fallback' })
+            expect(finalStep.events[0].payload).toEqual(expect.objectContaining({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent', bindingSource: 'assigned-agent', transportSource: 'constructor-fallback', model: expect.any(String), provider: expect.any(String) }))
+            expect(finalStep.messages![0].metadata).toEqual(expect.objectContaining({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent', bindingSource: 'assigned-agent', transportSource: 'constructor-fallback', model: expect.any(String), provider: expect.any(String) }))
         })
 
         it('artifact type is code_output with runId, profileName, bindingSource, and transportSource metadata', async () => {
@@ -136,7 +136,7 @@ describe('GatewayHermesRuntime', () => {
             expect(result.artifacts).toHaveLength(1)
             expect(result.artifacts![0].type).toBe('code_output')
             expect(result.artifacts![0].content).toBe('Login page implemented')
-            expect(result.artifacts![0].metadata).toEqual({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent', bindingSource: 'assigned-agent', transportSource: 'constructor-fallback' })
+            expect(result.artifacts![0].metadata).toEqual(expect.objectContaining({ runId: 'run-100', source: 'hermes-gateway', profileName: 'dev-agent', bindingSource: 'assigned-agent', transportSource: 'constructor-fallback', model: expect.any(String), provider: expect.any(String) }))
         })
 
         it('planned step has planner agentRole', async () => {
@@ -537,13 +537,13 @@ describe('GatewayHermesRuntime', () => {
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000)
             const result = await runtime.runTask(makeInput())
 
-            expect(result.artifacts![0].metadata).toEqual({
+            expect(result.artifacts![0].metadata).toEqual(expect.objectContaining({
                 runId: 'run-fb',
                 source: 'hermes-gateway',
                 profileName: 'dev-agent',
                 bindingSource: 'assigned-agent',
                 transportSource: 'constructor-fallback',
-            })
+            }))
         })
 
         it('resolver error propagates and produces no steps', async () => {
@@ -553,6 +553,22 @@ describe('GatewayHermesRuntime', () => {
 
             const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
             await expect(runtime.runTask(makeInput())).rejects.toThrow('profile not found')
+            expect(runHermesGatewayTask).not.toHaveBeenCalled()
+        })
+
+        it('fails fast before gateway call when provider cannot be resolved', async () => {
+            const resolver = vi.fn(() => ({
+                upstream: 'http://127.0.0.1:8642',
+                apiKey: null,
+                transportSource: 'constructor-fallback' as const,
+            }))
+
+            const runtime = new GatewayHermesRuntime('http://127.0.0.1:8642', null, 30000, resolver)
+            await expect(runtime.runTask(makeInput({
+                roleBindings: new Map([
+                    ['developer' as const, { role: 'developer' as const, profileName: 'glm', model: 'totally-unknown-model-xyz' }],
+                ]),
+            }))).rejects.toThrow(/Agent Room model resolution failed/)
             expect(runHermesGatewayTask).not.toHaveBeenCalled()
         })
 

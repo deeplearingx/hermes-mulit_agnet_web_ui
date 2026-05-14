@@ -87,4 +87,17 @@ describe('AgentClients.updateAgentOverride — dbAgentId fix', () => {
             }),
         )
     })
+
+    it('updateAgentOverride stores override model without requiring immediate provider inference', async () => {
+        const dbAgentId = 'override-agent'
+        const client = await clients.createAgent({
+            profile: 'glm', name: 'OverrideAgent', description: '', invited: 0, dbAgentId,
+        })
+        const setOverrideSpy = vi.spyOn(client, 'setOverride')
+        await clients.addAgentToRoom('room-1', client)
+
+        clients.updateAgentOverride('room-1', dbAgentId, { model: 'GLM-5.1' })
+
+        expect(setOverrideSpy).toHaveBeenCalledWith({ model: 'GLM-5.1' })
+    })
 })

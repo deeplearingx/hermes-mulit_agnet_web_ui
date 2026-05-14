@@ -9,6 +9,12 @@ import * as store from '../../../db/hermes/agent-room-store'
 import { activeRunner } from './runner'
 import type { AgentRoomRunnerContext, AgentRoomRunnerResult, AgentRoomRunnerStep, RunnerRoleBinding } from './runner'
 import type { HermesAgentRuntimeHooks } from './runner/runtime/types'
+import { runHermesGatewayTask } from '../gateway-run-client'
+import type { GatewayRuntimeTarget } from './runner/runtime/gateway-profile-resolver'
+import { assertResolvedProfileRunTarget, resolveProfileRunTarget } from '../profile-run-target-resolver'
+import type { ResolvedProfileRunTarget } from '../profile-run-target-resolver'
+import { config } from '../../../config'
+import { logger } from '../../logger'
 
 // ─── Types ─────────────────────────────────────────────────────
 import type { AgentRoomRole } from './role-types'
@@ -136,6 +142,124 @@ export interface AgentRoomArtifact {
 
 // ─── Constants ─────────────────────────────────────────────────
 const MAX_REVISION_ROUNDS = 3
+const DELIVERY_UPSTREAM = config.upstream.replace(/\/$/, '')
+
+export interface AgentRoomProfileRunTargetPreview {
+    profileName: string
+    upstream: string
+    hasApiKey: boolean
+    model?: string
+    provider?: string
+    transportSource?: string
+    modelSource: string
+    providerSource: string
+    providerInferred: boolean
+    diagnostics: ResolvedProfileRunTarget['diagnostics']
+}
+
+function toProfileRunTargetPreview(profileName: string, target: ResolvedProfileRunTarget): AgentRoomProfileRunTargetPreview {
+    return {
+        profileName,
+        upstream: target.upstream,
+        hasApiKey: !!target.apiKey,
+        model: target.model,
+        provider: target.provider,
+        transportSource: target.transportSource,
+        modelSource: target.modelSource,
+        providerSource: target.providerSource,
+        providerInferred: target.providerInferred,
+        diagnostics: target.diagnostics,
+    }
+}
+
+export async function previewProfileRunTarget(
+    profileName: string,
+    modelOverride?: string,
+    providerOverride?: string,
+): Promise<AgentRoomProfileRunTargetPreview> {
+    const normalized = normalizeProfileName(profileName)
+    const target = await resolveProfileRunTarget({
+        profileName: normalized,
+        fallbackUpstream: DELIVERY_UPSTREAM,
+        fallbackApiKey: null,
+        modelOverride,
+        providerOverride,
+    })
+    return toProfileRunTargetPreview(normalized, target)
+}
+
+function formatRoleBindingResolutionError(role: AgentRoomRole, profileName: string, target: ResolvedProfileRunTarget): string {
+    return `Agent Room role binding is not runnable [role=${role}, profile=${profileName}, model=${target.model ?? 'missing'}, provider=${target.provider ?? 'missing'}, modelSource=${target.modelSource}, providerSource=${target.providerSource}]. ` +
+        'Please configure the selected Hermes profile with model.default and model.provider, or set explicit provider/model overrides for this role.'
+}
+
+async function resolveRoleBindingForSave(
+    role: AgentRoomRole,
+    profileName: string,
+    provider?: string,
+    model?: string,
+): Promise<{ profileName: string; provider?: string; model?: string }> {
+    const normalized = normalizeProfileName(profileName)
+    const requestedProvider = provider?.trim() || undefined
+    const requestedModel = model?.trim() || undefined
+    const target = await resolveProfileRunTarget({
+        profileName: normalized,
+        fallbackUpstream: DELIVERY_UPSTREAM,
+        fallbackApiKey: null,
+        modelOverride: requestedModel,
+        providerOverride: requestedProvider,
+    })
+    if (!target.model || !target.provider) {
+        throw new Error(formatRoleBindingResolutionError(role, normalized, target))
+    }
+    return {
+        profileName: normalized,
+        provider: requestedProvider ?? target.provider,
+        model: requestedModel ?? target.model,
+    }
+}
+
+export type DeliveryTrigger = 'manual' | 'auto'
+export type DeliveryMode = 'system' | 'agent'
+
+interface DeliveryGatewayTarget extends GatewayRuntimeTarget {
+    providerInferred: boolean
+}
+
+interface DeliveryRevisionEntry {
+    round: number
+    status: 'passed' | 'rejected'
+    comment: string
+    createdAt: string
+}
+
+interface DeliveryContext {
+    plannerOutput?: string
+    developerOutput?: string
+    codeOutputArtifact?: string
+    reviewerDecision?: string
+    reviewerFeedback?: string
+    reviewReport?: string
+    revisionHistory: DeliveryRevisionEntry[]
+    plannerRunId?: string
+    developerRunId?: string
+    reviewerRunId?: string
+}
+
+interface DeliveryPhaseResult {
+    mode: DeliveryMode
+    content: string
+    metadata: Record<string, unknown>
+    deliveryRoleRunId?: string
+    deliveryRunId?: string
+    fallbackReason?: string
+}
+
+interface DeliveryExecutionContext {
+    run: store.AgentRoomRun
+    roleRun: store.AgentRoomRoleRun
+    standaloneRunCreated: boolean
+}
 
 // ─── Step Event Expectation ────────────────────────────────────
 // Maps target status → allowed event types for that transition.
@@ -355,21 +479,19 @@ export function listReviews(sessionId: string): AgentRoomReview[] {
  * revisionRound is incremented when entering revision_required.
  * When revisionRound would exceed maxRevisionRounds, transitions to need_user_decision instead.
  */
-export function submitReview(
+export async function submitReview(
     sessionId: string,
     taskId: string,
     reviewerAgentId: string,
     status: 'passed' | 'rejected',
     comment: string,
-): AgentRoomReview | null {
+): Promise<AgentRoomReview | null> {
     const task = assertTaskInSession(taskId, sessionId)
 
-    // Only allow review when task is in submitted_for_review
     if (task.status !== 'submitted_for_review') {
         throw new Error(`Cannot review task in status "${task.status}". Expected: submitted_for_review`)
     }
 
-    // 1. Record the review (comment can be empty)
     const review: AgentRoomReview = {
         id: randomUUID(),
         sessionId,
@@ -380,23 +502,18 @@ export function submitReview(
         createdAt: new Date().toISOString(),
     }
 
+    let shouldAutoDeliver = false
+
     store.runInTransaction(() => {
         store.createReview(review as store.AgentRoomReview)
 
         if (status === 'passed') {
-            // 2a. submitted_for_review → review_passed
             updateTaskStatus(taskId, 'review_passed')
             emitEventAndMessage(sessionId, taskId, 'review_passed', 'reviewer', task.title, { comment })
 
-            // Auto-delivery: if session has auto-delivery enabled, deliver immediately
-            // Uses deliverTaskCore to avoid nested runInTransaction()
             const session = store.getSession(sessionId)
-            if (session?.autoDeliveryEnabled) {
-                deliverTaskCore(sessionId, taskId, task, 'auto')
-            }
+            shouldAutoDeliver = !!session?.autoDeliveryEnabled
         } else {
-            // 2b. submitted_for_review → review_rejected (transient)
-            // Compute nextRevisionRound BEFORE any state mutation
             const nextRevisionRound = task.revisionRound + 1
             updateTaskStatus(taskId, 'review_rejected')
             emitEventAndMessage(sessionId, taskId, 'review_rejected', 'reviewer', task.title, {
@@ -404,13 +521,7 @@ export function submitReview(
                 revisionRound: nextRevisionRound,
             })
 
-            // 3. Check revision round limit
-            // maxRevisionRounds = max allowed revision rounds.
-            // If nextRevisionRound >= maxRevisionRounds, no more revisions allowed.
             if (nextRevisionRound >= task.maxRevisionRounds) {
-                // Exceeded max rounds → need_user_decision
-                // Re-read task from DB (updateTaskStatus wrote review_rejected),
-                // then explicitly persist nextRevisionRound before transitioning.
                 const freshTask = store.getTask(taskId)!
                 freshTask.revisionRound = nextRevisionRound
                 store.updateTask(freshTask)
@@ -420,7 +531,6 @@ export function submitReview(
                     maxRevisionRounds: task.maxRevisionRounds,
                 })
             } else {
-                // Within limit → revision_required (updateTaskStatus auto-increments revisionRound)
                 updateTaskStatus(taskId, 'revision_required')
                 emitEventAndMessage(sessionId, taskId, 'revision_started', 'developer', task.title, {
                     revisionRound: nextRevisionRound,
@@ -428,6 +538,10 @@ export function submitReview(
             }
         }
     })
+
+    if (shouldAutoDeliver) {
+        await deliverTask(sessionId, taskId, 'auto')
+    }
 
     store.updateSessionTimestamp(sessionId)
     return review
@@ -626,6 +740,10 @@ function applyRunnerResult(
 
         // Create artifacts (always after all steps complete)
         for (const art of result.artifacts ?? []) {
+            if (art.type === 'final_delivery') {
+                logger.warn({ taskId, name: art.name }, '[agent-room] Ignored final_delivery artifact from runner result')
+                continue
+            }
             const artifact: AgentRoomArtifact = {
                 id: randomUUID(),
                 sessionId,
@@ -1019,12 +1137,9 @@ async function executeRun(
         if (taskAfterRun?.status === 'review_passed') {
             const session = store.getSession(sessionId)
             if (session?.autoDeliveryEnabled) {
-                // Re-read task status to avoid race with runtime delivery
                 const currentTask = store.getTask(taskId) as AgentRoomTask | null
                 if (currentTask?.status === 'review_passed') {
-                    store.runInTransaction(() => {
-                        deliverTaskCore(sessionId, taskId, currentTask, 'auto')
-                    })
+                    await deliverTask(sessionId, taskId, 'auto')
                 }
             }
         }
@@ -1196,6 +1311,382 @@ function getLatestReviewFeedback(taskId: string): string | undefined {
     return rejected[rejected.length - 1].comment || undefined
 }
 
+async function resolveDeliveryGatewayTarget(binding: RunnerRoleBinding): Promise<DeliveryGatewayTarget> {
+    const target = await resolveProfileRunTarget({
+        profileName: binding.profileName,
+        fallbackUpstream: DELIVERY_UPSTREAM,
+        fallbackApiKey: null,
+        modelOverride: binding.model,
+        providerOverride: binding.provider,
+    })
+    assertResolvedProfileRunTarget(target, { role: 'delivery', profileName: binding.profileName })
+    return target
+}
+
+function getTaskScopedMessages(sessionId: string, taskId: string): AgentRoomMessage[] {
+    return (store.listMessagesBySession(sessionId) as AgentRoomMessage[])
+        .filter(message => message.metadata?.taskId === taskId)
+}
+
+function getLatestRoleMessage(sessionId: string, taskId: string, role: AgentRoomRole): AgentRoomMessage | undefined {
+    const messages = getTaskScopedMessages(sessionId, taskId)
+        .filter(message => message.senderRole === role)
+    return messages[messages.length - 1]
+}
+
+function buildDeliveryContext(task: AgentRoomTask): DeliveryContext {
+    const artifacts = store.listArtifactsByTask(task.id) as AgentRoomArtifact[]
+    const reviews = store.listReviewsByTask(task.id) as AgentRoomReview[]
+    const roleRuns = store.listRoleRunsByTask(task.id)
+
+    const latestCodeOutput = [...artifacts].reverse().find(artifact => artifact.type === 'code_output')
+    const latestReviewReport = [...artifacts].reverse().find(artifact => artifact.type === 'review_report')
+    const latestReview = reviews[reviews.length - 1]
+
+    return {
+        plannerOutput: getLatestRoleMessage(task.sessionId, task.id, 'planner')?.content,
+        developerOutput: getLatestRoleMessage(task.sessionId, task.id, 'developer')?.content,
+        codeOutputArtifact: latestCodeOutput?.content,
+        reviewerDecision: latestReview?.reviewDecision ?? latestReview?.status,
+        reviewerFeedback: latestReview?.reviewFeedback ?? latestReview?.comment,
+        reviewReport: latestReviewReport?.content,
+        revisionHistory: reviews.map((review, index) => ({
+            round: index + 1,
+            status: review.status,
+            comment: review.comment,
+            createdAt: review.createdAt,
+        })),
+        plannerRunId: roleRuns.find(run => run.role === 'planner')?.runId,
+        developerRunId: roleRuns.find(run => run.role === 'developer')?.runId,
+        reviewerRunId: roleRuns.find(run => run.role === 'reviewer')?.runId,
+    }
+}
+
+function buildDeliveryGatewayInput(task: AgentRoomTask, context: DeliveryContext): string {
+    const lines = [
+        `任务标题：${task.title}`,
+        `任务需求：${task.description}`,
+        `当前状态：${task.status}`,
+        `修订轮次：${task.revisionRound}/${task.maxRevisionRounds}`,
+        '',
+        '--- Planner 输出 ---',
+        context.plannerOutput ?? '(无)',
+        '--- Developer 输出 ---',
+        context.developerOutput ?? '(无)',
+        '--- code_output Artifact ---',
+        context.codeOutputArtifact ?? '(无)',
+        '--- Reviewer 审核结论 ---',
+        context.reviewerDecision ?? '(无)',
+        '--- Reviewer Feedback ---',
+        context.reviewerFeedback ?? context.reviewReport ?? '(无)',
+        '--- 历史修订信息 ---',
+    ]
+
+    if (context.revisionHistory.length === 0) {
+        lines.push('(无)')
+    } else {
+        for (const entry of context.revisionHistory) {
+            lines.push(`第 ${entry.round} 轮 | ${entry.status} | ${entry.createdAt} | ${entry.comment || '(空反馈)'}`)
+        }
+    }
+
+    lines.push('', '请基于以上完整上下文输出最终交付文档，包含结果摘要、关键实现、审核结论、剩余风险与建议。')
+    return lines.join('\n')
+}
+
+function buildDeliveryGatewayInstructions(task: AgentRoomTask): string {
+    return [
+        '你是 AgentRoom 中的交付 Agent。',
+        '你只负责生成最终交付文档，不要重复规划、开发或审核。',
+        '请整合规划、开发、审核与修订信息，给出面向用户的最终交付结果。',
+        '输出要简洁、清晰、可直接展示。',
+        `当前任务：${task.title}`,
+    ].join('\n')
+}
+
+function buildSystemDelivery(task: AgentRoomTask, trigger: DeliveryTrigger, context: DeliveryContext, fallbackReason?: string): DeliveryPhaseResult {
+    const lines = [
+        `任务「${task.title}」已完成交付。`,
+        '',
+        '交付模式: system',
+        `触发方式: ${trigger}`,
+        `修订轮次: ${task.revisionRound}/${task.maxRevisionRounds}`,
+    ]
+
+    if (context.plannerOutput) {
+        lines.push('', '规划摘要:', context.plannerOutput)
+    }
+    if (context.codeOutputArtifact || context.developerOutput) {
+        lines.push('', '开发结果:', context.codeOutputArtifact ?? context.developerOutput ?? '(无)')
+    }
+    if (context.reviewerFeedback || context.reviewReport) {
+        lines.push('', '审核结论:', context.reviewerFeedback ?? context.reviewReport ?? '(无)')
+    }
+    if (fallbackReason) {
+        lines.push('', `Fallback 原因: ${fallbackReason}`)
+    }
+
+    return {
+        mode: 'system',
+        content: lines.join('\n'),
+        fallbackReason,
+        metadata: {
+            source: trigger === 'auto' ? 'auto-delivery-system' : 'manual-delivery-system',
+            deliveryMode: 'system',
+            trigger,
+            revisionRound: task.revisionRound,
+            maxRevisionRounds: task.maxRevisionRounds,
+            reviewFeedback: context.reviewerFeedback ?? null,
+            plannerRunId: context.plannerRunId,
+            developerRunId: context.developerRunId,
+            reviewerRunId: context.reviewerRunId,
+            fallbackReason,
+        },
+    }
+}
+
+function getLatestRunForTask(taskId: string): store.AgentRoomRun | null {
+    return store.listRunsByTask(taskId)[0] ?? null
+}
+
+function ensureDeliveryExecutionContext(sessionId: string, taskId: string, binding: RunnerRoleBinding): DeliveryExecutionContext {
+    const now = new Date().toISOString()
+    let run = getLatestRunForTask(taskId)
+    let standaloneRunCreated = false
+
+    if (!run) {
+        standaloneRunCreated = true
+        run = {
+            id: randomUUID(),
+            sessionId,
+            taskId,
+            status: 'queued',
+            runnerName: 'delivery',
+            createdAt: now,
+            updatedAt: now,
+        }
+        store.createRun(run)
+    }
+
+    const roleRun: store.AgentRoomRoleRun = {
+        id: randomUUID(),
+        runId: run.id,
+        sessionId,
+        taskId,
+        role: 'delivery',
+        phase: 'delivery',
+        profileName: binding.profileName,
+        status: 'queued',
+        createdAt: now,
+        updatedAt: now,
+        metadata: {
+            source: 'delivery-agent',
+            deliveryMode: 'agent',
+            deliveryProfileName: binding.profileName,
+            provider: binding.provider,
+            model: binding.model,
+        },
+    }
+    store.createRoleRun(roleRun)
+
+    return { run, roleRun, standaloneRunCreated }
+}
+
+function finalizeDeliveryExecutionContext(
+    context: DeliveryExecutionContext,
+    status: 'completed' | 'failed',
+    errorMessage?: string,
+    metadata?: Record<string, unknown>,
+): void {
+    const now = new Date().toISOString()
+    context.roleRun.status = status
+    context.roleRun.finishedAt = now
+    context.roleRun.updatedAt = now
+    if (errorMessage) context.roleRun.errorMessage = errorMessage
+    if (metadata) {
+        context.roleRun.metadata = {
+            ...(context.roleRun.metadata ?? {}),
+            ...metadata,
+        }
+    }
+    store.updateRoleRun(context.roleRun)
+
+    if (context.standaloneRunCreated) {
+        context.run.status = status
+        context.run.finishedAt = now
+        context.run.updatedAt = now
+        if (errorMessage) context.run.errorMessage = errorMessage
+        store.updateRun(context.run)
+    }
+}
+
+async function runDeliveryGateway(
+    sessionId: string,
+    task: AgentRoomTask,
+    trigger: DeliveryTrigger,
+    binding: RunnerRoleBinding,
+    context: DeliveryContext,
+): Promise<DeliveryPhaseResult> {
+    const target = await resolveDeliveryGatewayTarget(binding)
+    const execution = ensureDeliveryExecutionContext(sessionId, task.id, binding)
+    const hooks = buildRunHooks(execution.run, [execution.roleRun])
+
+    if (execution.standaloneRunCreated) {
+        const startedAt = new Date().toISOString()
+        execution.run.status = 'running'
+        execution.run.startedAt = startedAt
+        execution.run.updatedAt = startedAt
+        store.updateRun(execution.run)
+    }
+
+    logger.info({
+        role: 'delivery',
+        profile: binding.profileName,
+        provider: target.provider,
+        model: target.model,
+        providerInferred: target.providerInferred,
+        taskId: task.id,
+    }, '[agent-room] Resolved delivery Gateway target')
+
+    try {
+        const deliveryResult = await runHermesGatewayTask({
+            upstream: target.upstream,
+            apiKey: target.apiKey,
+            input: buildDeliveryGatewayInput(task, context),
+            instructions: buildDeliveryGatewayInstructions(task),
+            sessionId: `agent-room-delivery-${sessionId}-${task.id}`,
+            timeoutMs: 300_000,
+            model: target.model,
+            provider: target.provider,
+            onUpstreamRunCreated: hooks.onUpstreamRunCreated,
+            onRawEvent: hooks.onRawEvent,
+        })
+
+        finalizeDeliveryExecutionContext(execution, 'completed', undefined, {
+            deliveryRunId: deliveryResult.runId,
+            provider: target.provider,
+            model: target.model,
+            trigger,
+        })
+
+        return {
+            mode: 'agent',
+            content: deliveryResult.output,
+            deliveryRoleRunId: execution.roleRun.id,
+            deliveryRunId: deliveryResult.runId,
+            metadata: {
+                source: trigger === 'auto' ? 'auto-delivery-agent' : 'manual-delivery-agent',
+                deliveryMode: 'agent',
+                trigger,
+                deliveryProfileName: binding.profileName,
+                deliveryRoleRunId: execution.roleRun.id,
+                deliveryRunId: deliveryResult.runId,
+                provider: target.provider,
+                model: target.model,
+                plannerRunId: context.plannerRunId,
+                developerRunId: context.developerRunId,
+                reviewerRunId: context.reviewerRunId,
+            },
+        }
+    } catch (err: any) {
+        const reason = err?.message ?? 'Unknown delivery agent error'
+        finalizeDeliveryExecutionContext(execution, 'failed', reason, {
+            trigger,
+            provider: target.provider,
+            model: target.model,
+        })
+        logger.error({ err, taskId: task.id, profile: binding.profileName }, '[agent-room] Delivery gateway failed')
+        throw err
+    }
+}
+
+async function runDeliveryPhase(sessionId: string, task: AgentRoomTask, trigger: DeliveryTrigger): Promise<DeliveryPhaseResult> {
+    const context = buildDeliveryContext(task)
+    const deliveryBinding = store.getRoleBindingBySessionAndRole(sessionId, 'delivery') as store.AgentRoomRoleBinding | null
+    if (!deliveryBinding) {
+        return buildSystemDelivery(task, trigger, context)
+    }
+
+    const binding: RunnerRoleBinding = {
+        role: 'delivery',
+        profileName: deliveryBinding.profileName,
+        provider: deliveryBinding.provider,
+        model: deliveryBinding.model,
+    }
+
+    try {
+        return await runDeliveryGateway(sessionId, task, trigger, binding, context)
+    } catch (err: any) {
+        return buildSystemDelivery(task, trigger, context, err?.message ?? 'delivery agent failed')
+    }
+}
+
+function assertDeliverableTask(sessionId: string, taskId: string): AgentRoomTask {
+    const task = assertTaskInSession(taskId, sessionId)
+    if (task.status !== 'review_passed') {
+        throw new Error(`Cannot deliver task in status "${task.status}". Expected: review_passed`)
+    }
+    const hasDeliveryArtifact = store.listArtifactsByTask(taskId).some(artifact => artifact.type === 'final_delivery')
+    if (hasDeliveryArtifact) {
+        throw new Error(`Task ${taskId} already has final_delivery artifact`)
+    }
+    return task
+}
+
+function persistDeliveryResult(
+    sessionId: string,
+    taskId: string,
+    task: AgentRoomTask,
+    trigger: DeliveryTrigger,
+    result: DeliveryPhaseResult,
+): void {
+    const deliveredAt = new Date().toISOString()
+    const payload: Record<string, unknown> = {
+        deliveryMode: result.mode,
+        trigger,
+        deliveryProfileName: result.metadata.deliveryProfileName,
+        deliveryRoleRunId: result.deliveryRoleRunId,
+        deliveryRunId: result.deliveryRunId,
+        fallbackReason: result.fallbackReason,
+    }
+
+    updateTaskStatus(taskId, 'delivering')
+    emitEventAndMessage(sessionId, taskId, 'delivery_started', 'delivery', task.title, payload)
+
+    addMessage({
+        sessionId,
+        senderId: 'delivery',
+        senderName: result.mode === 'agent' ? '交付 Agent' : '系统交付',
+        senderRole: 'delivery',
+        type: 'final_delivery',
+        content: result.content,
+        metadata: {
+            taskId,
+            status: 'completed',
+            ...result.metadata,
+        },
+    })
+
+    const artifact: AgentRoomArtifact = {
+        id: randomUUID(),
+        sessionId,
+        taskId,
+        name: `${task.title} — 交付结果`,
+        type: 'final_delivery',
+        content: result.content,
+        metadata: {
+            ...result.metadata,
+            deliveredAt,
+            fallbackReason: result.fallbackReason,
+        },
+        createdAt: deliveredAt,
+    }
+    store.createArtifact(artifact as store.AgentRoomArtifact)
+
+    updateTaskStatus(taskId, 'completed')
+    emitEventAndMessage(sessionId, taskId, 'delivery_completed', 'delivery', task.title, payload)
+}
+
 // ─── Retry / Deliver ───────────────────────────────────────────
 
 /**
@@ -1272,155 +1763,14 @@ export function deleteTask(sessionId: string, taskId: string): void {
 }
 
 /**
- * P7.1: Create a delivery role_run attached to the latest workflow run of the task.
- * Returns null when no workflow run exists (compatibility with legacy/manual status changes).
+ * Deliver a task through the unified delivery pipeline.
  */
-function createDeliveryRoleRunIfPossible(
-    sessionId: string,
-    taskId: string,
-    task: AgentRoomTask,
-    deliveryMode: 'manual' | 'auto',
-    deliveredAt: string,
-): store.AgentRoomRoleRun | null {
-    const latestRun = store.listRunsByTask(taskId)[0]
-    if (!latestRun) return null
-    const roleRun: store.AgentRoomRoleRun = {
-        id: randomUUID(),
-        runId: latestRun.id,
-        sessionId,
-        taskId,
-        role: 'delivery',
-        phase: 'delivery',
-        profileName: deliveryMode,
-        upstreamRunId: undefined,
-        status: 'completed',
-        startedAt: deliveredAt,
-        finishedAt: deliveredAt,
-        errorMessage: undefined,
-        metadata: {
-            source: deliveryMode === 'manual' ? 'manual-delivery-runtime' : 'auto-delivery-runtime',
-            deliveryMode,
-            taskStatusBeforeDelivery: task.status,
-        },
-        createdAt: deliveredAt,
-        updatedAt: deliveredAt,
-    }
-    store.createRoleRun(roleRun)
-    return roleRun
-}
-
-/**
- * Core delivery logic — does NOT open its own transaction.
- * Callers that are already inside runInTransaction() should call this directly.
- * External callers should use deliverTask() which wraps in a transaction.
- */
-function deliverTaskCore(sessionId: string, taskId: string, task: AgentRoomTask, deliveryMode: 'manual' | 'auto'): void {
-    // P2: Guard — ensure each task has at most one final_delivery artifact
-    // If the runtime (Delivery Agent mode) already produced a final_delivery artifact,
-    // skip the service-level delivery to avoid duplicate final_delivery.
-    const existingArtifacts = store.listArtifactsByTask(taskId)
-    const hasDeliveryArtifact = existingArtifacts.some(a => a.type === 'final_delivery')
-    if (hasDeliveryArtifact) {
-        // Delivery already produced by the runtime (Delivery Agent mode).
-        // Skip the service-level delivery to avoid duplicate final_delivery.
-        return
-    }
-
-    // Gather enrichment data
-    const reviewFeedback = getLatestReviewFeedback(taskId)
-    const deliveredAt = new Date().toISOString()
-
-    // P4.1: Resolve role run IDs for observability
-    const roleRuns = store.listRoleRunsByTask(taskId)
-    const plannerRunId = roleRuns.find(r => r.role === 'planner')?.runId
-    const developerRunId = roleRuns.find(r => r.role === 'developer')?.runId
-    const reviewerRunId = roleRuns.find(r => r.role === 'reviewer')?.runId
-
-    // P7.1: Create delivery role_run attached to the latest workflow run
-    const deliveryRoleRun = createDeliveryRoleRunIfPossible(sessionId, taskId, task, deliveryMode, deliveredAt)
-
-    // Build delivery event payload with role run linkage
-    const deliveryPayload: Record<string, unknown> = {
-        deliveryMode,
-    }
-    if (deliveryRoleRun) {
-        deliveryPayload.deliveryRoleRunId = deliveryRoleRun.id
-    }
-
-    // Transition to delivering via state machine
-    updateTaskStatus(taskId, 'delivering')
-    emitEventAndMessage(sessionId, taskId, 'delivery_started', 'delivery', task.title, deliveryPayload)
-
-    // Complete via state machine
-    updateTaskStatus(taskId, 'completed')
-    emitEventAndMessage(sessionId, taskId, 'delivery_completed', 'delivery', task.title, deliveryPayload)
-
-    // Build enriched delivery summary
-    const summaryLines = [
-        `任务「${task.title}」已完成交付。`,
-        '',
-        `交付模式: ${deliveryMode === 'auto' ? '自动' : '手动'}`,
-    ]
-    if (task.revisionRound > 0) {
-        summaryLines.push(`修改轮次: ${task.revisionRound}/${task.maxRevisionRounds}`)
-    }
-    if (reviewFeedback) {
-        summaryLines.push(`审核反馈: ${reviewFeedback}`)
-    }
-    summaryLines.push(`交付时间: ${deliveredAt}`)
-
-    // P4.1: Standardized final_delivery artifact metadata
-    const metadata: Record<string, unknown> = {
-        source: deliveryMode === 'auto' ? 'auto-delivery' : 'manual-delivery',
-        deliveryMode,
-        deliveryRole: 'delivery',
-        revisionRound: task.revisionRound,
-        maxRevisionRounds: task.maxRevisionRounds,
-        reviewFeedback: reviewFeedback ?? null,
-        deliveredAt,
-    }
-    if (plannerRunId) metadata.plannerRunId = plannerRunId
-    if (developerRunId) metadata.developerRunId = developerRunId
-    if (reviewerRunId) metadata.reviewerRunId = reviewerRunId
-
-    // P7.1: Link delivery role_run in artifact metadata
-    if (deliveryRoleRun) {
-        metadata.deliveryRoleRunId = deliveryRoleRun.id
-        metadata.deliveryRunId = deliveryRoleRun.runId
-    }
-
-    // Create final_delivery artifact with enriched metadata
-    const artifact: AgentRoomArtifact = {
-        id: randomUUID(),
-        sessionId,
-        taskId,
-        name: `${task.title} — 交付结果`,
-        type: 'final_delivery',
-        content: summaryLines.join('\n'),
-        metadata,
-        createdAt: deliveredAt,
-    }
-    store.createArtifact(artifact as store.AgentRoomArtifact)
-}
-
-/**
- * Deliver a task: review_passed → delivering → completed.
- * All messages produced via event adapter.
- *
- * @param sessionId  Session containing the task
- * @param taskId     Task to deliver
- * @param deliveryMode  'manual' (default) or 'auto' — recorded in artifact metadata
- */
-export function deliverTask(sessionId: string, taskId: string, deliveryMode: 'manual' | 'auto' = 'manual'): AgentRoomTask | null {
-    const task = assertTaskInSession(taskId, sessionId)
-
-    // Guard: only review_passed can be delivered
-    if (task.status !== 'review_passed') {
-        throw new Error(`Cannot deliver task in status "${task.status}". Expected: review_passed`)
-    }
+export async function deliverTask(sessionId: string, taskId: string, deliveryMode: DeliveryTrigger = 'manual'): Promise<AgentRoomTask | null> {
+    const task = assertDeliverableTask(sessionId, taskId)
+    const result = await runDeliveryPhase(sessionId, task, deliveryMode)
 
     store.runInTransaction(() => {
-        deliverTaskCore(sessionId, taskId, task, deliveryMode)
+        persistDeliveryResult(sessionId, taskId, task, deliveryMode, result)
     })
 
     store.updateSessionTimestamp(sessionId)
@@ -1524,6 +1874,11 @@ export function createRoleBinding(sessionId: string, role: AgentRoomRole, profil
     return binding
 }
 
+export async function createRoleBindingResolved(sessionId: string, role: AgentRoomRole, profileName: string, provider?: string, model?: string): Promise<AgentRoomRoleBinding> {
+    const resolved = await resolveRoleBindingForSave(role, profileName, provider, model)
+    return createRoleBinding(sessionId, role, resolved.profileName, resolved.provider, resolved.model)
+}
+
 /**
  * Upsert a role binding: create if not exists, update profileName if exists.
  * Preferred API for frontend/UI callers.
@@ -1548,6 +1903,11 @@ export function setRoleBinding(sessionId: string, role: AgentRoomRole, profileNa
         return updated
     }
     return createRoleBinding(sessionId, role, normalized, provider, model)
+}
+
+export async function setRoleBindingResolved(sessionId: string, role: AgentRoomRole, profileName: string, provider?: string, model?: string): Promise<AgentRoomRoleBinding> {
+    const resolved = await resolveRoleBindingForSave(role, profileName, provider, model)
+    return setRoleBinding(sessionId, role, resolved.profileName, resolved.provider, resolved.model)
 }
 
 export function listRoleBindings(sessionId: string): AgentRoomRoleBinding[] {
