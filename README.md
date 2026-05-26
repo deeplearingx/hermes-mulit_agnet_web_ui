@@ -1,303 +1,292 @@
-<p align="center">
-  <strong>Hermes Web UI</strong>
-  <a href="./README_zh.md">中文</a>
-</p>
+# Hermes Agent Room：多 Agent 协同开发平台
 
-<p align="center">
-  A full-featured web dashboard for <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>.<br/>
-  Manage AI chat sessions, monitor usage & costs, configure platform channels,<br/>
-  schedule cron jobs, browse skills — all from a clean, responsive web interface.
-</p>
+> 本仓库基于 Hermes Web UI 扩展了独立的 Agent Room 模块，面向复杂任务执行场景，将 Agent 从单轮问答升级为可规划、可执行、可审核、可修订、可交付、可追踪的多 Agent 工作流系统。
 
-<p align="center">
-  <code>npm install -g hermes-web-ui && hermes-web-ui start</code>
-</p>
-
-<p align="center">
-  <img src="https://github.com/EKKOLearnAI/hermes-web-ui/blob/main/packages/client/src/assets/image1.png" alt="Hermes Web UI Demo" width="680"/>
-</p>
-
-<p align="center">
-  <img src="https://github.com/EKKOLearnAI/hermes-web-ui/blob/main/packages/client/src/assets/image2.png" alt="Hermes Web UI Demo" width="680"/>
-</p>
-
-<p align="center">
-  <a href="https://www.npmjs.com/package/hermes-web-ui"><img src="https://img.shields.io/npm/v/hermes-web-ui?style=flat-square&color=blue" alt="npm version"/></a>
-  <a href="https://github.com/EKKOLearnAI/hermes-web-ui/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/hermes-web-ui?style=flat-square" alt="license"/></a>
-  <a href="https://github.com/EKKOLearnAI/hermes-web-ui/stargazers"><img src="https://img.shields.io/github/stars/EKKOLearnAI/hermes-web-ui?style=flat-square" alt="stars"/></a>
-</p>
+原项目 Hermes Web UI 是面向 Hermes Agent 的 Web Dashboard。本分支 `feature/agent-room` 在保留原有 Chat、Group Chat、Profile、Gateway、Model Management 等能力的基础上，重点实现了 **Agent Room 多 Agent 协同任务平台**。
 
 ---
 
-## Features
+## 面试官快速查看
 
-### AI Chat
+### 项目定位
 
-- Real-time streaming via SSE with async run support
-- Multi-session management — create, rename, delete, switch between sessions
-- **Self-built session database** — local SQLite storage with automatic sync from Hermes state.db on first startup
-- Session grouping by source (Telegram, Discord, Slack, etc.) with collapsible accordion
-- Active session indicator — live sessions pin to top with spinner icon
-- Sessions sorted by latest message time
-- Markdown rendering with syntax highlighting and code copy
-- Tool call detail expansion (arguments / result)
-- File upload support
-- File download support — download user-uploaded files and agent-generated files across local, Docker, SSH, and Singularity backends
-- Session search — Ctrl+K global search across all conversations
-- Global model selector — discovers models from `~/.hermes/auth.json` credential pool
-- Per-session model display badge and context token usage
+Hermes Agent Room 的核心不是聊天 UI，而是一个 **多 Agent 工作流执行引擎**。系统将用户任务抽象为 Session、Task、Review、Artifact、Run、RoleRun 等实体，支持 Planner、Developer、Reviewer、Delivery 多角色协作，并通过状态机约束任务生命周期。
 
-### Platform Channels
+### 核心价值
 
-Unified configuration for **8 platforms** in one page:
+- **可控性**：用确定性状态机管理 Agent 任务生命周期，避免 LLM 输出直接控制业务状态。
+- **可扩展性**：通过 Runtime Adapter 接入 Hermes Gateway，支持不同 profile、model、provider 和远端 Agent Runtime。
+- **可观测性**：记录 Run、RoleRun、SSE event、WorkflowEvent、Message 和 Artifact，方便追踪每个 Agent 的执行过程。
+- **闭环能力**：支持任务规划、执行、审核、修订、自动 / 手动交付和最终产物归档。
+- **工程化验证**：建立 Agent 工作流验证指标体系，覆盖任务完成、状态流转、SSE 事件、角色运行和最终交付等维度。
 
-| Platform      | Features                                                               |
-| ------------- | ---------------------------------------------------------------------- |
-| Telegram      | Bot token, mention control, reactions, free-response chats             |
-| Discord       | Bot token, mention, auto-thread, reactions, channel allow/ignore lists |
-| Slack         | Bot token, mention control, bot message handling                       |
-| WhatsApp      | Enable/disable, mention control, mention patterns                      |
-| Matrix        | Access token, homeserver, auto-thread, DM mention threads              |
-| Feishu (Lark) | App ID / Secret, mention control                                       |
-| WeChat        | QR code login (scan in browser, auto-save credentials)                 |
-| WeCom         | Bot ID / Secret                                                        |
+### 当前验证指标
 
-- Credential management writes to `~/.hermes/.env`
-- Channel behavior settings write to `~/.hermes/config.yaml`
-- Auto gateway restart on config change
-- Per-platform configured/unconfigured status detection
+| 指标 | 含义 | 当前结果 |
+| --- | --- | --- |
+| 关键事件断言通过率 | 基于核心事件断言验证工作流观测链路 | 94.44% |
+| SSE 事件完整率 | Gateway / Runtime SSE 关键事件是否完整回填 | 94.44% |
+| 角色运行成功率 | RoleRun 是否正确记录各角色执行状态 | 81.82% |
+| 最终交付成功率 | 应交付任务是否成功生成 final_delivery | 83.33% |
 
-### Usage Analytics
-
-- Total token usage breakdown (input / output)
-- Session count with daily average
-- Estimated cost tracking & cache hit rate
-- Model usage distribution chart
-- 30-day daily trend (bar chart + data table)
-
-### Scheduled Jobs
-
-- Create, edit, pause, resume, delete cron jobs
-- Trigger immediate execution
-- Cron expression quick presets
-
-### Model Management
-
-- Auto-discover models from credential pool (`~/.hermes/auth.json`)
-- Fetch available models from each provider endpoint (`/v1/models`)
-- Add, update, and delete providers (preset & custom OpenAI-compatible)
-- OpenAI Codex & Nous Portal OAuth login
-- Provider URL auto-detection for non-v1 API versions (e.g. `/v4`)
-- Provider-level model grouping with default model switching
-
-### Multi-Profile & Gateway
-
-- Create, rename, delete, and switch between Hermes profiles
-- Clone existing profile or import from archive (`.tar.gz`)
-- Export profile for backup or sharing
-- Multi-gateway management — start, stop, and monitor gateway per profile
-- Auto port conflict resolution
-- Profile-scoped configuration and cache isolation
-
-### File Browser
-
-- Browse files on remote backends (local, Docker, SSH, Singularity)
-- Upload, download, rename, copy, move, and delete files
-- Create directories
-- View file content with syntax highlighting
-
-### Group Chat
-
-- Multi-agent chat rooms with real-time messaging via Socket.IO
-- @mention routing — mention an agent to trigger a contextual reply
-- Context compression — automatic conversation summarization when history exceeds token threshold
-- Typing status and reply progress indicators
-- Room creation, deletion, and invite code management
-- Agent management — add/remove agents from rooms with per-agent profiles
-- SQLite message persistence
-- Mobile responsive with collapsible sidebar
-
-### Skills & Memory
-
-- Browse and search installed skills
-- View skill details and attached files
-- User notes and profile management
-
-### Logs
-
-- View agent / gateway / error logs
-- Filter by log level, log file, and keyword
-- Structured log parsing with HTTP access log highlighting
-
-### Authentication
-
-- Token-based auth (auto-generated on first run or set via `AUTH_TOKEN` env var)
-- Optional username/password login — set via settings page after initial token auth
-- Auth can be disabled with `AUTH_DISABLED=1`
-
-### Settings
-
-- Display (streaming, compact mode, reasoning, cost display)
-- Agent (max turns, timeout, tool enforcement)
-- Memory (enable/disable, char limits)
-- Session reset (idle timeout, scheduled reset)
-- Privacy (PII redaction)
-- Model settings (default model & provider)
-- API server configuration
-
-### Web Terminal
-
-- Integrated terminal powered by node-pty and @xterm/xterm
-- Multi-session support — create, switch between, and close terminal sessions
-- Real-time keyboard input and PTY output streaming via WebSocket
-- Window resize support
+> 说明：当前评测覆盖完整成功、workflow:* 回填、SSE 不完整、非法状态链、run 失败、review 通过但未交付、review 打回、交付产物缺失和多轮 run 等典型场景。指标用于回归验证和问题定位，不等价于简单产品成功率。
 
 ---
 
-## Quick Start
+## Agent Room 功能概览
 
-### npm (Recommended)
+### 1. 多 Agent 角色协作
 
-```bash
-npm install -g hermes-web-ui
-hermes-web-ui start
+Agent Room 当前围绕以下角色组织任务：
+
+| 角色 | 职责 |
+| --- | --- |
+| Planner | 任务规划与步骤拆解 |
+| Developer | 执行任务并提交结果 |
+| Reviewer | 审核执行结果，决定通过、打回或需要用户决策 |
+| Delivery | 汇总任务过程与产物，生成最终交付结果 |
+
+### 2. 任务状态机
+
+任务生命周期由后端状态机约束，避免非法流转：
+
+```text
+created
+  → planned
+  → assigned
+  → in_progress
+  → submitted_for_review
+  → review_passed
+  → delivering
+  → completed
 ```
 
-Open **http://localhost:8648**
+异常 / 分支状态包括：
 
-### One-line Setup (Auto-detect OS)
-
-Automatically installs Node.js (if missing) and hermes-web-ui on Debian/Ubuntu/macOS:
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/EKKOLearnAI/hermes-web-ui/main/scripts/setup.sh)
+```text
+review_rejected
+revision_required
+need_user_decision
+failed
 ```
 
-### WSL
+设计原则：
 
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/EKKOLearnAI/hermes-web-ui/main/scripts/setup.sh)
-hermes-web-ui start
+- LLM / Gateway Runtime 只返回执行内容；
+- 状态流转由 Agent Room 后端统一校验；
+- Task、Message、WorkflowEvent、Artifact、Run、RoleRun 通过事务化逻辑统一写入；
+- 非法状态链、缺失事件、失败 run 会被显式记录或拦截。
+
+### 3. Hermes Gateway Runtime Adapter
+
+Agent Room 通过 Gateway Runtime Adapter 接入远端 Hermes Agent：
+
+```text
+Agent Room Task
+  → build runtime input
+  → POST /v1/runs
+  → GET /v1/runs/:run_id/events
+  → collect SSE events
+  → map run.completed.output to ordered steps
+  → persist workflow event / message / run record / artifact
 ```
 
-> WSL auto-detects and uses `hermes gateway run` for background startup (no launchd/systemd).
+这个设计让 Agent Room 与具体模型或执行后端解耦，后续可以接入不同 provider、不同模型或不同 profile。
 
-### Docker Compose
+### 4. 角色绑定与运行追踪
 
-Run Web UI together with Hermes Agent:
+支持不同 Agent 角色绑定不同运行 profile：
 
-```bash
-# Use pre-built image (Recommended)
-WEBUI_IMAGE=ekkoye8888/hermes-web-ui:latest docker compose up -d hermes-agent hermes-webui
-
-# Or build from source
-docker compose up -d --build hermes-agent hermes-webui
-
-docker compose logs -f hermes-webui
+```text
+Planner  → profile/model/provider A
+Developer → profile/model/provider B
+Reviewer → profile/model/provider C
+Delivery → profile/model/provider D
 ```
 
-Open **http://localhost:6060**
+系统会记录：
 
-- Persistent Hermes data is stored in `./hermes_data`
-- Web UI auth token is stored in `./hermes_data/hermes-web-ui/.token`
-- On first run with auth enabled, the token is printed to container logs
-- All runtime settings are environment-variable driven in `docker-compose.yml`
+- role run status
+- upstream run id
+- SSE event
+- workflow event
+- model / provider / profileName
+- task status transition
+- artifact metadata
 
-For detailed notes and troubleshooting, see [`docs/docker.md`](./docs/docker.md).
+### 5. 最终交付与 Artifact 管理
 
-### CLI Commands
+任务审核通过后可进入 Delivery 阶段，系统汇总：
 
-| Command                           | Description                        |
-| --------------------------------- | ---------------------------------- |
-| `hermes-web-ui start`             | Start in background (daemon mode)  |
-| `hermes-web-ui start --port 9000` | Start on custom port               |
-| `hermes-web-ui stop`              | Stop background process            |
-| `hermes-web-ui restart`           | Restart background process         |
-| `hermes-web-ui status`            | Check if running                   |
-| `hermes-web-ui update`            | Update to latest version & restart |
-| `hermes-web-ui -v`                | Show version number                |
-| `hermes-web-ui -h`                | Show help message                  |
+- 用户任务描述
+- Planner 规划结果
+- Developer 执行输出
+- Reviewer 审核反馈
+- 修订轮次
+- 过程消息和中间产物
 
-### Auto Configuration
-
-On startup the BFF server automatically:
-
-- Validates `~/.hermes/config.yaml` and fills missing `api_server` fields
-- Backs up original config to `config.yaml.bak` if modified
-- Detects and starts the gateway if needed
-- Resolves port conflicts (kills stale processes)
-- Opens browser on successful startup
+最终生成 `final_delivery` artifact，形成从任务执行到结果交付的闭环。
 
 ---
 
-## Development
+## 技术栈
+
+| 模块 | 技术 |
+| --- | --- |
+| Frontend | Vue 3, TypeScript, Vite, Pinia, SCSS, Phaser |
+| Backend | Koa 2, TypeScript, SQLite |
+| Runtime Integration | Hermes Gateway, `/v1/runs`, SSE |
+| Agent Workflow | Task state machine, RunnerResult, Runtime Adapter, RoleRun |
+| Test / Smoke | Vitest, workflow smoke test, gateway smoke test, runtime matrix test |
+| Existing Web UI | Hermes profiles, gateway management, group chat, logs, model management |
+
+---
+
+## 目录重点
+
+```text
+packages/
+├── client/src/components/hermes/agent-room/
+│   ├── AgentRoomPanel.vue              # Agent Room 主工作区
+│   ├── AgentRoomTaskPanel.vue          # 任务面板
+│   ├── AgentRoomTimelineView.vue       # 工作流事件时间线
+│   ├── AgentRoomArtifactsView.vue      # 产物视图
+│   ├── AgentRoomRunsView.vue           # Run / RoleRun 观测视图
+│   └── AgentRoomRoleBindingModal.vue   # 角色 Profile 绑定
+│
+├── client/src/stores/hermes/agent-room.ts
+│   └── Agent Room 前端状态管理
+│
+└── server/src/services/hermes/
+    ├── agent-room/
+    │   ├── index.ts                    # Agent Room 领域服务与状态机
+    │   ├── facade.ts                   # RunnerResult 应用与持久化入口
+    │   ├── runner/
+    │   │   ├── types.ts                # Runner / Runtime 协议定义
+    │   │   └── runtime/
+    │   │       └── gateway-hermes-runtime.ts
+    │   └── event-adapter.ts            # WorkflowEvent → Message 适配
+    └── gateway-run-client.ts           # /v1/runs + SSE 客户端
+
+scripts/
+├── smoke-agent-room-workflow.ts
+├── smoke-agent-room-gateway.ts
+├── smoke-agent-room-runtime-matrix.ts
+├── smoke-agent-room-full-chain.ts
+└── smoke-agent-room-matrix.ts
+```
+
+---
+
+## 快速启动 Agent Room 开发环境
+
+安装依赖：
 
 ```bash
-git clone https://github.com/EKKOLearnAI/hermes-web-ui.git
-cd hermes-web-ui
 npm install
-npm run dev
 ```
 
-- Frontend: http://localhost:5173
-- BFF Server: http://localhost:18648 (proxies to Hermes gateways)
-
-For Agent Room real orchestrated development (planner → developer → reviewer), use the dedicated startup script:
+启动 Agent Room 开发环境：
 
 ```bash
 npm run dev:agent-room
 ```
 
-This starts both the frontend and the BFF server with:
+该命令会启动前端和 BFF server，并设置：
 
-- `HERMES_AGENT_RUNTIME=orchestrated`
-- `AGENT_ROOM_RUNNER=real`
-- `AUTH_DISABLED=1`
-- `PORT=18648`
+```env
+HERMES_AGENT_RUNTIME=orchestrated
+AGENT_ROOM_RUNNER=real
+AUTH_DISABLED=1
+PORT=18648
+```
 
-If you only need the BFF server for an already running frontend, use:
+如果只需要启动后端：
 
 ```bash
 npm run dev:server:agent-room
 ```
 
+---
+
+## 构建与测试
+
 ```bash
-npm run build   # outputs to dist/
+npm run build
+npm run test
 ```
 
-## Architecture
+Agent Room 相关 smoke 测试：
 
+```bash
+npm run smoke:agent-room-workflow
+npm run smoke:agent-room-gateway
+npm run smoke:agent-room-runtime-matrix
+npm run smoke:orchestrated-dual-role
+npm run smoke:full-chain
+npm run smoke:matrix
 ```
-Browser → BFF (Koa, :8648) → Hermes Gateway (:8642)
-                ↓
-           Hermes CLI (sessions, logs, version)
-                ↓
-           ~/.hermes/config.yaml  (channel behavior)
-           ~/.hermes/auth.json    (credential pool)
-           Tencent iLink API      (WeChat QR login)
+
+---
+
+## API / 运行链路概览
+
+```text
+Browser Agent Room UI
+    │
+    ▼
+Koa BFF Server
+    │
+    ├── Agent Room routes
+    │   ├── sessions
+    │   ├── tasks
+    │   ├── reviews
+    │   ├── artifacts
+    │   ├── runs
+    │   └── role-runs
+    │
+    ▼
+Agent Room Service
+    ├── task state machine
+    ├── run / role-run persistence
+    ├── workflow event + message adapter
+    ├── artifact management
+    └── delivery pipeline
+    │
+    ▼
+Gateway Runtime Adapter
+    ├── POST /v1/runs
+    ├── GET /v1/runs/:run_id/events
+    ├── SSE event collection
+    └── output → ordered workflow steps
 ```
 
-The frontend is designed with **multi-agent extensibility** — all Hermes-specific code is namespaced under `hermes/` directories (API, components, views, stores), making it straightforward to add new agent integrations alongside.
+---
 
-The BFF layer handles API proxy (with path rewriting), SSE streaming, file upload and download (multi-backend: local/Docker/SSH/Singularity), session CRUD via CLI, config/credential management, WeChat QR login, model discovery, skills/memory management, log reading, and static file serving.
+## 可向面试官说明的项目亮点
 
-## Tech Stack
+- 将 Agent 执行过程抽象为可持久化、可追踪、可恢复的任务工作流，而不是一次性聊天输出。
+- 使用状态机约束任务生命周期，把不稳定的 LLM 输出限制在确定性业务流程之内。
+- 使用 Gateway Runtime Adapter 解耦业务工作流和具体模型 / Agent Runtime，便于替换模型和扩展 provider。
+- 通过 Run、RoleRun、SSE event、WorkflowEvent 和 Artifact 形成完整观测链路，方便定位失败阶段。
+- 通过 Reviewer 和 Delivery 阶段支持审核、修订和最终交付，更接近真实 Agent 应用落地场景。
 
-**Frontend:** Vue 3 + TypeScript + Vite + Naive UI + Pinia + Vue Router + vue-i18n + SCSS + markdown-it + highlight.js
+---
 
-**Backend:** Koa 2 (BFF server) + node-pty (web terminal)
+## 原 Hermes Web UI 能力
 
-## Star History
+除 Agent Room 外，本仓库仍保留 Hermes Web UI 原有能力：
 
-[![Star History Chart](https://api.star-history.com/svg?repos=EKKOLearnAI/hermes-web-ui&type=Date)](https://star-history.com/#EKKOLearnAI/hermes-web-ui&Date)
+- AI Chat：多会话聊天、SSE 流式输出、Markdown 渲染、工具调用详情展示；
+- Group Chat：多 Agent 聊天房间、@mention 路由、上下文压缩、消息持久化；
+- Multi-Profile & Gateway：Hermes profile 管理、多 gateway 启停、端口冲突处理；
+- Model Management：OpenAI-compatible provider 管理、模型发现、默认模型切换；
+- Usage Analytics：token、成本、模型分布和趋势统计；
+- File Browser：本地 / Docker / SSH / Singularity 文件浏览与操作；
+- Logs：gateway、agent、error log 查看与过滤；
+- Web Terminal：基于 node-pty 与 xterm 的 Web 终端。
 
-<!-- If the chart above doesn't load, visit https://star-history.com/#EKKOLearnAI/hermes-web-ui -->
-
-## Sponsor
-
-如果你觉得这个项目对你有帮助，欢迎支持我：
-
-<a href="https://ifdian.net/a/ekko8888"><img src="https://img.shields.io/badge/Sponsor-%E7%88%B1%E5%8F%91%E7%94%B5-orange?style=flat-square" alt="Sponsor"/></a>
+---
 
 ## License
 
